@@ -85,7 +85,7 @@ uv run --with 'mcp>=2,<3' scripts/kiro_workflow.py resume \
   --assessment /path/to/exported-findings
 ```
 
-If a create response is lost, NEEDS_RECONCILIATION blocks another creation. A stored receipt is recovered automatically. Without a receipt, find the job named by this run in AWS and use `attach-job --run ... --job-id ...`. The adapter verifies that the service record references the run before attaching. It does not guess a job ID or silently retry a non-idempotent mutation.
+If a create response is lost, NEEDS_RECONCILIATION blocks another creation. The receipt is written before the remote call. A receipt that already contains the job is recovered without another create. A receipt with no successful response points at `attach-job`. Without a receipt, find the job named by this run in AWS and use `attach-job --run ... --job-id ...`. The adapter verifies that the service record references the run before attaching. It does not guess a job ID or silently retry a non-idempotent mutation.
 
 ## Handshake and checkpoints
 

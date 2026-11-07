@@ -626,6 +626,41 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(result['status'], 'AWAITING_ASSESSMENT_APPROVAL')
         self.assertNotIn('pipeline', self.project)
 
+    def test_lost_create_receipt_blocks_a_second_entry_point(self):
+        self.project['setup']['connector_approved_by'] = 'Fixture admin'
+        self.project['setup']['connector_id'] = 'fixture-connector'
+        self.project['settings']['transform'] = {'workspace_id':'fixture-workspace','upload_prefix':'s3://fixture-private/source','orchestrator_agent':'fixture-mainframe'}
+        self.project['settings']['allow_new_assessments'] = True
+        app.persist(self.work, self.project)
+        created = []
+        class First:
+            def calls(self, requests):
+                for name, _arguments in requests:
+                    if name == 'create_job':
+                        created.append(name)
+                        receipt = next(self_work.glob('**/create-job-receipt.json'))
+                        if json.loads(receipt.read_text()).get('accepted') is not False:
+                            raise AssertionError('receipt must be written before the provider call')
+                        raise OSError('lost response')
+                return [{}]
+        self_work = self.work
+        completed = type('Result', (), {'returncode': 0})()
+        with patch.object(kw.subprocess, 'run', return_value=completed):
+            with self.assertRaises(OSError):
+                app.assessment(self.work, self.project, self.args('assess', '--label', 'a', '--allow-new-assessment'), First())
+        self.assertEqual(created, ['create_job'])
+        directory = Path(self.project['assessments']['a']['directory'])
+        class Second:
+            def calls(self, requests):
+                self.fail('provider create or resume call')
+        older = kw.drive(directory, transform=Second())
+        self.assertEqual(older['status'], 'NEEDS_RECONCILIATION')
+        self.assertIn('Attach', older['reason'])
+        resumed = app.assessment(self.work, self.project, self.args('resume', '--label', 'a'), Second())
+        self.assertEqual(resumed['status'], 'NEEDS_RECONCILIATION')
+        self.assertIn('Attach', resumed['reason'])
+        self.assertFalse(app.read(directory / 'run.json').get('job_id'))
+
     def test_source_archive_is_identical_despite_mtime_changes(self):
         self.project['setup']['connector_approved_by'] = 'Fixture admin'
         self.project['setup']['connector_id'] = 'fixture-connector'
