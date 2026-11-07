@@ -1064,6 +1064,25 @@ def feedback(work, project, args):
     return {'status': project['stage']}
 
 
+SECRET_PATTERNS = (
+    ('private key', re.compile(br'-----BEGIN (?:RSA |OPENSSH |EC |DSA |ENCRYPTED )?PRIVATE KEY-----')),
+    ('cloud access key', re.compile(br'\bAKIA[0-9A-Z]{16}\b')),
+    ('cloud secret', re.compile(br'(?i)\baws_secret_access_key\b\s*[:=]\s*\S')),
+    ('connection string', re.compile(br'(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@')),
+    ('customer identifier', re.compile(br'\b\d{3}-\d{2}-\d{4}\b')),
+)
+
+
+def refuse_packaged_secrets(destination):
+    """Reject a package whose staged files look like credentials or customer identifiers."""
+    for path in sorted(item for item in destination.iterdir() if item.is_file()):
+        data = path.read_bytes()
+        for kind, pattern in SECRET_PATTERNS:
+            if pattern.search(data):
+                shutil.rmtree(destination)
+                raise Blocked('Refusing package; ' + path.name + ' matches ' + kind)
+
+
 def package(work, project):
     verify_source(project)
     verified_assessment(project, project['selected'])
@@ -1127,6 +1146,7 @@ def package(work, project):
         'Keep private; inspect all contents before sharing.\n')
     manifest = {p.name: sha(p) for p in destination.iterdir() if p.is_file()}
     write(destination / 'checksums.json', manifest)
+    refuse_packaged_secrets(destination)
     archive = destination.parent / (destination.name + '.zip')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
         for path in sorted(destination.iterdir()):

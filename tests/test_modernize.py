@@ -206,6 +206,23 @@ class PreparationTests(unittest.TestCase):
             self.assertEqual(json.loads(archive.read('traceability.json'))['tests'][0]['status'], 'NOT RUN')
         self.assertEqual(self.project['stage'], 'PACKAGED')
 
+    def test_package_refuses_secret_and_writes_no_zip(self):
+        self.baseline()
+        replies = self.replies()
+        replies[2]['specification']['sections']['ui']['implementation_prompt'] += '\nAKIAIOSFODNN7EXAMPLE\n'
+        app.legacy_pipeline(self.work, self.project, self.args('validate'), self.runtime(replies))
+        self.approve('validation')
+        app.review_site(self.work, self.project, self.args('review-site'), self.runtime([self.screens()]))
+        self.approve('specifications')
+        with self.assertRaises(pilot.Blocked) as caught:
+            app.package(self.work, self.project)
+        message = str(caught.exception)
+        self.assertIn('ui-prompt.md', message)
+        self.assertIn('cloud access key', message)
+        self.assertNotIn('AKIA', message)
+        self.assertNotEqual(self.project['stage'], 'PACKAGED')
+        self.assertFalse(list((self.work / 'packages').glob('*.zip')))
+
     def test_invalid_candidate_gets_correction_without_bypassing_review(self):
         self.baseline()
         replies = self.replies()
