@@ -28,3 +28,10 @@ __pycache__/
 build/
 dist/
 .venv/
+
+# Terraform state and local variable files stay on the machine that applied them.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example

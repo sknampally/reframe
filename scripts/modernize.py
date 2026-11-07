@@ -428,6 +428,14 @@ def upgrade_framework(work, project, args):
     return {'status':'FRAMEWORK_UPDATED', 'revision':current, 'next_step':'reframe resume'}
 
 
+def require_sandbox(project):
+    """A new AWS assessment needs the sandbox workspace, prefix, and role before any network call."""
+    config = project.get('settings', {}).get('transform') or {}
+    missing = [key for key in ('workspace_id', 'upload_prefix', 'sandbox_role')
+               if not isinstance(config.get(key), str) or not config.get(key).strip()]
+    require(not missing, 'Sandbox configuration is empty: ' + ', '.join(missing))
+
+
 def assessment(work, project, args, client=None):
     if getattr(args, 'command', None) == 'resume':
         require_run_pins(project)
@@ -440,6 +448,7 @@ def assessment(work, project, args, client=None):
             require(args.allow_new_assessment, 'Use --allow-new-assessment to authorize this new job and source upload')
             require(project['setup'].get('connector_approved_by'), 'Complete setup and confirm connector activation first')
             require(project['setup'].get('connector_id'), 'Complete connector setup before starting an assessment')
+            require_sandbox(project)
             project['settings']['transform']['connector_id'] = project['setup']['connector_id']
         settings_file = work / 'run-settings.json'
         write(settings_file, project['settings'])
