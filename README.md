@@ -24,10 +24,10 @@ No custom prompt writing or manual agent handoffs are required for normal operat
 
 ## Run the guided workflow
 
-Install Git and uv, AWS CLI and your chosen design provider (Claude Code or Codex)
-using the [engineer setup guide](docs/engineer-setup.md). Authenticate your AWS profile
-and provider. AWS Transform application access is also required; terminal AWS login
-alone is insufficient. Setup checks the configured runtimes and offers resource setup.
+Install Git, uv, the AWS CLI, Terraform 1.5 or newer, and your chosen design provider
+(Claude Code or Codex) using the [engineer setup guide](docs/engineer-setup.md).
+Authenticate an AWS profile. AWS Transform application access is also required;
+terminal AWS login alone is insufficient.
 
 On macOS/Linux, or inside Ubuntu/WSL2 on Windows:
 
@@ -41,12 +41,8 @@ reframe
 Choose **1 — Guided start / continue**, or launch it directly with `reframe flow`.
 No custom prompts or manual command sequence are needed for the direct draft route.
 
-1. **Set up or continue.** Supply your source, private output directory, AWS profile,
-   region, bucket and provider. AWS profile has **no default**: enter it explicitly
-   (use `aws configure list-profiles` to find configured names). The CLI verifies
-   access and offers SSO login when required. Continuing a saved run reuses its
-   explicitly selected profile. For an existing project, choose **continue** or
-   **fresh**. Fresh uses a separate output parent; it never deletes the previous run.
+1. **Set up or continue.** Supply the source, a private output directory, the AWS
+   profile, the region, and the provider. The profile has **no default**; `aws configure list-profiles` lists the names. The CLI verifies access and offers SSO login when required. If setup is not finished, guided start creates the sandbox bucket and role, asks for a production bucket, and continues only when that read is denied. It stores `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`, then creates and activates the connector. You do not name the sandbox bucket or edit `project.json`. No assessment starts in this step. Answer **no** to the continuation question to pause before anything is created. A saved project offers **continue** or **fresh**. Fresh uses a separate output parent and does not delete the previous run.
 2. **Assess.** Confirm source upload and the new AWS assessment. The flow waits for
    a bounded interval and resumes the saved job on your next `/flow`. Authentication,
    connector activation or service blockers can still require action; this is not a
@@ -65,7 +61,7 @@ No custom prompts or manual command sequence are needed for the direct draft rou
 **Skipping verification does not approve the design.** Draft findings are marked
 AWS-assumed, independent verification is skipped, stakeholder decisions remain pending,
 and acceptance tests are NOT RUN. A design-generation Claude call is distinct from
-executor/reviewer verification. No application or infrastructure is built.
+executor/reviewer verification. No target application is built.
 
 All outputs stay in a private `<repository>_assessment` folder under your chosen parent:
 

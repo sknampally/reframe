@@ -127,6 +127,77 @@ def installation_hint(tool):
     return tool + ': ' + urls.get(tool, 'Install your configured launcher through its approved vendor distribution')
 
 
+def halt(message, hint):
+    error = Blocked(message)
+    error.hint = hint
+    raise error
+
+
+def require_terraform():
+    require(shutil.which('terraform'), 'Install Terraform 1.5 or newer, then choose guided start again.')
+    result = subprocess.run(['terraform', 'version', '-json'], capture_output=True, text=True)
+    version = ''
+    if result.returncode == 0 and result.stdout.strip().startswith('{'):
+        version = json.loads(result.stdout).get('terraform_version', '')
+    parts = []
+    for piece in version.split('.'):
+        if piece.isdigit():
+            parts.append(int(piece))
+        else:
+            break
+    require(len(parts) >= 2 and parts[:2] >= [1, 5],
+            'Install Terraform 1.5 or newer, then choose guided start again. An older terraform is first on PATH.')
+
+
+def sandbox_outputs(profile, region, apply):
+    """Create or read the sandbox. The role ARN stays in memory for connector activation."""
+    import modernize as app
+    require_terraform()
+    require(re.fullmatch(r'[A-Za-z0-9_.=,@-]+', profile or ''), 'Enter the AWS profile name only.')
+    require(re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d+', region or ''), 'Enter an AWS region name.')
+    directory = app.FRAMEWORK / 'infrastructure'
+    require((directory / 'main.tf').is_file(), 'The sandbox stack is not in this framework checkout.')
+    env = os.environ.copy()
+    env.update(AWS_PROFILE=profile, AWS_DEFAULT_REGION=region, TF_IN_AUTOMATION='1', TF_INPUT='0')
+    def run(args, capture=False):
+        print('Running terraform ' + args[0] + '...')
+        result = subprocess.run(['terraform', '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
+        if result.returncode != 0:
+            halt('Terraform ' + args[0] + ' did not finish. Setup stopped before an assessment.',
+                 'Check Terraform 1.5 or newer and the selected AWS profile, then choose 1 again. /privacy shows the local detail.')
+        return result
+    if apply:
+        run(['init', '-input=false'])
+        run(['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile])
+    result = subprocess.run(['terraform', '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
+    if result.returncode != 0:
+        require(not apply, 'Terraform outputs were not available. Setup stopped before an assessment.')
+        return sandbox_outputs(profile, region, True)
+    outputs = json.loads(result.stdout)
+    prefix = outputs['upload_prefix']['value']
+    role = outputs['sandbox_role']['value']
+    role_arn = outputs['sandbox_role_arn']['value']
+    require(isinstance(prefix, str) and prefix.startswith('s3://') and prefix.endswith('/reframe'),
+            'The sandbox upload prefix is not the reframe prefix.')
+    bucket = prefix.removeprefix('s3://').removesuffix('/reframe')
+    require(bucket and '/' not in bucket and isinstance(role, str) and role and isinstance(role_arn, str) and role_arn,
+            'Terraform outputs were incomplete. Setup stopped before an assessment.')
+    return bucket, prefix, role, role_arn
+
+
+def confirm_production_deny(bucket):
+    import modernize as app
+    require(re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', bucket or ''),
+            'Enter the production bucket name only. Setup stopped before an assessment.')
+    script = app.FRAMEWORK / 'infrastructure' / 'deny-check.sh'
+    print('Checking that the sandbox role cannot read the production bucket...')
+    result = subprocess.run([str(script), bucket], capture_output=True, text=True)
+    if result.returncode != 0:
+        halt('The sandbox role was not denied for that production bucket. Setup stopped before a Transform workspace was created.',
+             'Name a production bucket this role must not read, then choose 1 again. /privacy shows the local detail.')
+    print('Production read was denied.')
+
+
 def choose_aws_profile():
     """A new setup must never select an AWS account implicitly."""
     print('Enter your AWS profile name explicitly (no default). To list profiles, run aws configure list-profiles in another terminal.')
@@ -201,8 +272,8 @@ def checks(project, work=None):
 def guided_init(args):
     import modernize as app
     require(sys.stdin.isatty(), 'Interactive setup needs a terminal; supply --workspace, --source and --scope for scripted init')
-    print('Modernization setup — source, environment, AWS assessment access and model roles.')
-    print('Workstation installation and login instructions: ' + str(app.FRAMEWORK / 'docs/engineer-setup.md'))
+    print('Reframe setup. A new project creates the sandbox, checks the production deny, and connects Transform.')
+    print('No assessment starts until you confirm an upload. Workstation guide: ' + str(app.FRAMEWORK / 'docs/engineer-setup.md'))
     from modernize_workspace import default_parent, output_directory
     default = args.workspace
     parent = getattr(args, 'output_parent', None)
@@ -215,8 +286,8 @@ def guided_init(args):
     work = Path(ask('Assessment output directory', default)).expanduser().resolve()
     require(not work.is_relative_to(app.FRAMEWORK), 'Choose a private workspace outside the framework checkout')
     args.workspace = str(work)
+    sandbox_arn = None
     if (work / 'project.json').exists():
-        project = app.read(work / 'project.json')
         print('Resuming setup for the saved source and configuration; existing evidence will be preserved.')
     else:
         args.source = args.source or ask('Local Git checkout or GitHub repository URL', 'https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git')
@@ -228,15 +299,26 @@ def guided_init(args):
         args.aws_profile = (args.aws_profile or '').strip() or choose_aws_profile()
         args.region = args.region or ask('AWS region', 'us-east-1')
         ensure_aws_login({'aws': {'profile': args.aws_profile, 'region': args.region}})
-        args.bucket = args.bucket or ask('Private S3 bucket name')
         args.executor = ask('Executor runtime: claude, kiro or codex', args.executor)
         require(args.executor in {'claude', 'kiro', 'codex'}, 'Unsupported executor runtime')
         args.ui_provider = ask('HTML content provider: claude or codex', args.ui_provider)
         require(args.ui_provider in {'claude', 'codex'}, 'Unsupported HTML provider')
         print('Claude defaults: Sonnet 5.5 executor / Opus 5.5 reviewer. Kiro is optional.')
-        require(yes('Save these choices and pin the source?'), 'Setup cancelled before initialization')
+        print('Reframe will save this source pin, create the private sandbox, and store its role. You do not name the bucket.')
+        if not yes('Continue and finish setup?', default=True):
+            print('Setup paused before anything was created. Choose 1 again to continue.')
+            return {'status': 'SETUP_INCOMPLETE', 'next_step': 'Choose 1 again. Nothing was created.'}
+        bucket, prefix, role, sandbox_arn = sandbox_outputs(args.aws_profile, args.region, True)
+        confirm_production_deny(ask('Production bucket the sandbox role must not read'))
+        args.bucket = bucket
         app.initialize(args, work)
         project = app.read(work / 'project.json')
+        project['settings'].setdefault('transform', {})
+        project['settings']['transform']['upload_prefix'] = prefix
+        project['settings']['transform']['sandbox_role'] = role
+        project['aws']['bucket'] = bucket
+        project.setdefault('setup', {})['production_deny_checked'] = True
+        app.persist(work, project)
     select_workspace(work)
     # From here all writes and remote setup share the regular project lock.
     with app.locked(work) as project:
@@ -247,30 +329,32 @@ def guided_init(args):
         if project.get('assessments') or project['setup'].get('connector_approved_by'):
             print('Existing assessment setup retained.')
             return {'workspace': str(work), 'status': project['stage'], 'next_step': next_step(project)}
-        print('AWS Transform needs its own connection in addition to terminal AWS credentials.')
-        print('Choose existing resources or authorize creation. No assessment job starts during init.')
-        if not yes('Configure/check Transform resources now?'):
-            return {'workspace': str(work), 'status': 'SETUP_INCOMPLETE', 'next_step': 'reframe init'}
+        print('Connecting Transform and activating the sandbox connector. No assessment job starts.')
+        transform = project.setdefault('settings', {}).setdefault('transform', {})
+        ready = bool(transform.get('upload_prefix') and transform.get('sandbox_role') and project.get('setup', {}).get('production_deny_checked'))
+        if not sandbox_arn:
+            bucket, prefix, role, sandbox_arn = sandbox_outputs(project['aws']['profile'], project['aws']['region'], not ready)
+            if not project.get('setup', {}).get('production_deny_checked'):
+                confirm_production_deny(ask('Production bucket the sandbox role must not read'))
+                project.setdefault('setup', {})['production_deny_checked'] = True
+            transform['upload_prefix'] = prefix
+            transform['sandbox_role'] = role
+            project['aws']['bucket'] = bucket
+            app.persist(work, project)
         client = connect_transform(work, project)
-        config = project['settings']['transform']
-        wid = config.get('workspace_id') or optional('Existing Transform workspace ID (Enter creates one)')
-        cid = project['setup'].get('connector_id') or optional('Existing S3 connector ID (Enter creates one)')
-        create_bucket = yes('Create the chosen bucket? Choose no to use an existing bucket.')
+        wid = transform.get('workspace_id') or None
+        cid = project['setup'].get('connector_id') or None
         setup = app.parser().parse_args(['setup'])
         setup.connect = None
-        setup.create_bucket = create_bucket
+        setup.create_bucket = False
         setup.attach_workspace = wid or None
         setup.attach_connector = cid or None
-        setup.create_workspace = None if wid else ask('New Transform workspace name', 'modernization-poc')
-        setup.create_connector = None if cid else ask('New connector name', 'mainframe-source')
-        require(yes('Proceed with these AWS setup operations?'), 'AWS setup cancelled; rerun reframe init to continue')
+        setup.create_workspace = None if wid else 'reframe-sandbox'
+        setup.create_connector = None if cid else 'reframe-source'
+        setup.role_arn = sandbox_arn
+        setup.connector_approved = ask('Your name, recorded on the connector confirmation')
         try:
             result = app.setup(work, project, setup, client)
-            if result.get('verification_link'): print('Connector approval: ' + result['verification_link'])
-            if yes('Has an authorized administrator activated this connector?'):
-                setup.create_bucket = False
-                setup.connector_approved = ask('Name of approving administrator')
-                result = app.setup(work, project, setup, client)
             return {'workspace': str(work), 'status': result['status'], 'next_step': next_step(project)}
         finally:
             app.persist(work, project)

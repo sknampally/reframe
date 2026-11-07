@@ -70,18 +70,55 @@ class GuidedTests(unittest.TestCase):
             result=guide.guided_init(self.args('init'))
         checks.assert_called_once()
         self.assertEqual(result['next_step'],'reframe assess')
-    def test_new_wizard_saves_choices_and_exposes_incomplete_setup(self):
-        project=dict(self.project,setup={},settings={'transform':{}})
-        def initialize(args,work):
-            self.assertEqual(args.source,'/fixture/source')
-            self.assertEqual(args.bucket,'fixture-bucket')
-            app.write(work/'project.json',project)
-        answers=['/fixture/source',str(self.work),str(self.work),'Fixture scope','fixture','us-east-1','fixture-bucket','claude','codex','yes','no']
-        with patch.object(sys.stdin,'isatty',return_value=True),patch('builtins.input',side_effect=answers),patch.object(app,'initialize',side_effect=initialize),patch.object(guide,'checks'),patch.object(guide,'ensure_aws_login'):
+    def test_declined_setup_creates_nothing(self):
+        answers=['/fixture/source',str(self.work),str(self.work),'Fixture scope','fixture','us-east-1','claude','codex','no']
+        with patch.object(sys.stdin,'isatty',return_value=True),patch('builtins.input',side_effect=answers),patch.object(guide,'ensure_aws_login'),patch.object(guide,'sandbox_outputs',side_effect=AssertionError('terraform')):
             result=guide.guided_init(self.args('init'))
         self.assertEqual(result['status'],'SETUP_INCOMPLETE')
-        self.assertEqual(result['next_step'],'reframe init')
-        self.assertEqual(guide.workspace(),self.work.resolve())
+        self.assertIn('Nothing was created', result['next_step'])
+        self.assertFalse((self.work/'project.json').exists())
+
+    def test_guided_start_finishes_sandbox_without_a_typed_bucket(self):
+        project=dict(self.project,setup={},settings={'transform':{}},aws={'profile':'fixture','region':'us-east-1'})
+        def initialize(args,work):
+            self.assertEqual(args.bucket,'fixture-bucket')
+            app.write(work/'project.json',project)
+        def setup(work,project,args,client):
+            self.assertFalse(args.create_bucket)
+            self.assertEqual(args.role_arn,'fixture-role-arn')
+            self.assertEqual(args.create_workspace,'reframe-sandbox')
+            self.assertEqual(args.connector_approved,'Fixture admin')
+            self.assertEqual(project['settings']['transform']['sandbox_role'],'fixture-sandbox-role')
+            self.assertEqual(project['settings']['transform']['upload_prefix'],'s3://fixture-bucket/reframe')
+            project['setup']['connector_approved_by']=args.connector_approved
+            project['stage']='READY_TO_ASSESS'
+            return {'status':'READY_TO_ASSESS'}
+        answers=['/fixture/source',str(self.work),str(self.work),'Fixture scope','fixture','us-east-1','claude','codex','yes','fixture-production','Fixture admin']
+        with patch.object(sys.stdin,'isatty',return_value=True),patch('builtins.input',side_effect=answers), \
+             patch.object(app,'initialize',side_effect=initialize),patch.object(guide,'checks'),patch.object(guide,'ensure_aws_login'), \
+             patch.object(guide,'sandbox_outputs',return_value=('fixture-bucket','s3://fixture-bucket/reframe','fixture-sandbox-role','fixture-role-arn')) as outputs, \
+             patch.object(guide,'confirm_production_deny') as deny,patch.object(guide,'connect_transform',return_value=object()), \
+             patch.object(app,'setup',side_effect=setup):
+            result=guide.guided_init(self.args('init'))
+        outputs.assert_called_once_with('fixture','us-east-1',True)
+        deny.assert_called_once_with('fixture-production')
+        self.assertEqual(result['status'],'READY_TO_ASSESS')
+        self.assertEqual(result['next_step'],'reframe assess')
+
+    def test_old_terraform_stops_before_apply(self):
+        def run(command, **kwargs):
+            self.assertEqual(command[:2], ['terraform','version'])
+            return argparse.Namespace(returncode=0, stdout='{"terraform_version":"0.11.13"}', stderr='')
+        with patch.object(guide.shutil,'which',return_value='/terraform'),patch.object(guide.subprocess,'run',side_effect=run):
+            with self.assertRaisesRegex(Blocked,'1.5'):
+                guide.sandbox_outputs('fixture','us-east-1',True)
+
+    def test_denied_production_read_is_required(self):
+        with patch.object(guide.subprocess,'run',return_value=argparse.Namespace(returncode=1,stdout='listed',stderr='')):
+            with self.assertRaisesRegex(Blocked,'not denied') as caught:
+                guide.confirm_production_deny('fixture-production')
+        self.assertFalse(hasattr(caught.exception,'hint') and 'fixture-production' in caught.exception.hint)
+        self.assertNotIn('listed', str(caught.exception))
 
     def test_resume_routes_interrupted_model_work_without_aws_calls(self):
         project=dict(self.project,active_assessment='run-1',pending_action={'command':'validate'})
