@@ -180,6 +180,8 @@ def run(work, project, args, app, runtime=None):
         if state.get('validation_error'): context['validation_error']=state['validation_error']
         message=json.dumps(context)
         require(len(message.encode())<=project['settings']['max_context_bytes'],'Preview context too large')
+        app.require_dollar_cap(project, 'wireframes')
+        app.persist(work, project)
         state['calls']+=1;app.write(state_path,state)
         provider_run={'settings':project['settings'],'model_calls':state['calls']}
         value=(runtime or app.model_call)(args.provider,provider_run,destination,'wireframes',message)

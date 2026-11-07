@@ -269,6 +269,7 @@ def run(work, project, args, runtime, app):
                 context['candidate'] = app.read(work / record['candidate_path'])
             message = json.dumps(context)
             require(len(message.encode()) <= project['settings']['max_context_bytes'], 'Evidence unit exceeds context limit; replan before spending calls')
+            app.require_dollar_cap(project, role)
             state['calls'] += 1; state.update(role=role, status='RUNNING')
             project['stage'] = 'RUNNING_' + role.upper()
             app.persist(work, project)

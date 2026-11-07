@@ -50,9 +50,12 @@ class PreviewTests(unittest.TestCase):
         recorded=self.project.pop('verification_skip')
         self.assertEqual(recorded['owner'],'Fixture owner')
         self.assertEqual(recorded['reason'],'Preview AWS findings')
+        self.assertGreater(self.project['settings'].pop('model_dollars_spent'), 0)
+        before['settings'].pop('model_dollars_spent', None)
         self.assertEqual(self.project,before)
         saved=app.read(self.work/'project.json')
         self.assertEqual(saved.pop('verification_skip')['owner'],'Fixture owner')
+        self.assertGreater(saved['settings'].pop('model_dollars_spent'), 0)
         self.assertEqual(saved,before)
         with zipfile.ZipFile(result['archive']) as z:
             manifest=json.loads(z.read('ai-dlc.json'))

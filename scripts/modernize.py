@@ -99,6 +99,9 @@ def initialize(args, work):
     if not config['reviewer_model']:
         config['reviewer_model'] = 'claude-opus-5-5'
     validate_model_pair(args.executor, config)
+    config.setdefault('max_model_dollars', 0)
+    config.setdefault('model_dollars_spent', 0)
+    config.setdefault('model_rates', {'executor': 0.02, 'reviewer': 0.05, 'wireframes': 0.02})
     config['transform'].update({k: v for k, v in {'workspace_id': args.transform_workspace,
         'upload_prefix': ('s3://' + args.bucket + '/modernize') if args.bucket else None}.items() if v})
     project = {'version': 2, 'scope': args.scope, 'source': source_record or {'root': str(source),
@@ -375,6 +378,18 @@ def require_run_pins(project, job_id=None):
         raise Blocked('Run pin changed: aws_job_id')
     if job_id and not pinned_job:
         recorded['aws_job_id'] = job_id
+
+
+def require_dollar_cap(project, role):
+    settings = project['settings']
+    rates = settings.get('model_rates') or {}
+    price = rates.get(role, 0.02)
+    require(isinstance(price, (int, float)) and not isinstance(price, bool) and price > 0, 'Model rate missing for ' + role)
+    spent = settings.get('model_dollars_spent', 0)
+    cap = settings.get('max_model_dollars', 0)
+    require(isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap >= 0, 'Dollar cap is invalid')
+    require(spent + price <= cap, 'Model call would exceed the dollar cap')
+    settings['model_dollars_spent'] = round(spent + price, 6)
 
 
 def upgrade_framework(work, project, args):
@@ -935,6 +950,7 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         if state.get('previous_review'):
             context['previous_review'] = state['previous_review']
         message = bounded_preparation_context(context, project['settings']['max_context_bytes'])
+        require_dollar_cap(project, role)
         state['calls'] += 1
         run['model_calls'] = state['calls']
         project['stage'] = 'RUNNING_' + role.upper()
@@ -1052,6 +1068,8 @@ def review_site(work, project, args, runtime=model_call):
     message = json.dumps({'protocol': (FRAMEWORK / 'prompts/pipeline/wireframes.md').read_text(),
                           'specification': spec, 'decisions': project['decisions']})
     require(len(message.encode()) <= project['settings']['max_context_bytes'], 'UI context exceeds budget')
+    require_dollar_cap(project, 'wireframes')
+    persist(work, project)
     run = {'settings': project['settings'], 'model_calls': project['ui_calls']}
     screens = runtime(provider, run, directory, 'wireframes', message)
     verify_source(project)
@@ -1260,6 +1278,8 @@ def semantic_compare(work, project, args, runtime=model_call):
             'source_files': kw.inventory(left), 'left_files': left['assessment_index'], 'right_files': right['assessment_index'],
             'scope': project['scope'], 'history': state['history']})
         require(len(message.encode()) <= project['settings']['max_context_bytes'], 'Comparison context limit reached; no silent truncation')
+        require_dollar_cap(project, 'reviewer')
+        persist(work, project)
         state['calls'] += 1
         write(state_path, state)
         run = dict(left, settings=project['settings'], model_calls=state['calls'])

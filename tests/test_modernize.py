@@ -130,6 +130,8 @@ class PreparationTests(unittest.TestCase):
         args = app.parser().parse_args(['--workspace', str(self.work), 'init', '--source', str(self.source), '--scope', 'Zero-amount journey'])
         app.initialize(args, self.work)
         self.project = app.read(self.work / 'project.json')
+        self.project['settings']['max_model_dollars'] = 100
+        app.persist(self.work, self.project)
         self.messages = []
 
     def args(self, *values):
@@ -221,6 +223,24 @@ class PreparationTests(unittest.TestCase):
         self.project['pins']['executor_model'] = 'other-model'
         with self.assertRaisesRegex(pilot.Blocked, 'executor_model'):
             app.pipeline(self.work, self.project, self.args('resume'), lambda *a: self.fail('no model'))
+
+    def test_dollar_cap_stops_the_next_model_call(self):
+        self.baseline()
+        self.project['settings']['max_model_dollars'] = 0
+        self.project['settings']['model_dollars_spent'] = 0
+        calls = []
+        def runtime(*args):
+            calls.append(args[3])
+            return self.replies()[len(calls) - 1]
+        with self.assertRaisesRegex(pilot.Blocked, 'dollar cap'):
+            app.legacy_pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.project['settings'].get('model_dollars_spent', 0), 0)
+        self.project['settings']['max_model_dollars'] = 0.02
+        with self.assertRaisesRegex(pilot.Blocked, 'dollar cap'):
+            app.legacy_pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(calls, ['executor'])
+        self.assertEqual(self.project['pipeline']['calls'], 1)
 
     def test_package_refuses_secret_and_writes_no_zip(self):
         self.baseline()

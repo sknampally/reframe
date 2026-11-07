@@ -26,6 +26,8 @@ DEFAULTS = {
     'max_context_bytes': 180000, 'max_read_bytes': 50000,
     'max_assessment_bytes': 10000000, 'max_source_upload_bytes': 100000000,
     'poll_seconds': 60, 'max_polls_per_resume': 120, 'allow_new_assessments': False, 'transform': {},
+    'max_model_dollars': 0, 'model_dollars_spent': 0,
+    'model_rates': {'executor': 0.02, 'reviewer': 0.05, 'wireframes': 0.02},
 }
 DENIED_NAMES = {'.env', 'credentials', 'config.json', 'id_rsa', 'id_ed25519'}
 TEXT_SUFFIXES = {'.json', '.md', '.txt', '.csv', '.yaml', '.yml'}
@@ -72,6 +74,11 @@ def settings(path):
             all(isinstance(x, str) and x for x in config['kiro_command']), 'Kiro command must be an argv array')
     require(isinstance(config['transform'], dict), 'Transform settings must be an object')
     require(type(config['allow_new_assessments']) is bool, 'allow_new_assessments must be a boolean')
+    require(isinstance(config['max_model_dollars'], (int, float)) and not isinstance(config['max_model_dollars'], bool)
+            and config['max_model_dollars'] >= 0, 'Dollar cap is invalid')
+    require(isinstance(config['model_dollars_spent'], (int, float)) and not isinstance(config['model_dollars_spent'], bool)
+            and config['model_dollars_spent'] >= 0, 'Recorded model spend is invalid')
+    require(isinstance(config['model_rates'], dict), 'Model rates must be an object')
     return config
 
 
