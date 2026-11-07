@@ -20,6 +20,7 @@ import kiro_workflow as kw
 from pilot import Blocked, git, require, sha
 from modernize_artifacts import digest, validate_spec, validate_screens, render_site, render_assessment_facts, SECTIONS
 from modernize_models import call as model_call, ProviderSafetyRefusal, check_provider_refusals, preparation_protocol_hash
+from modernize_contracts import require_stage_contract
 
 FRAMEWORK = Path(__file__).resolve().parent.parent
 
@@ -430,6 +431,7 @@ def upgrade_framework(work, project, args):
 def assessment(work, project, args, client=None):
     if getattr(args, 'command', None) == 'resume':
         require_run_pins(project)
+    require_stage_contract(work, 'task')
     label = name(args.label)
     if label not in project['assessments']:
         require(args.command == 'assess', 'Unknown assessment label; resume never creates a new run')
@@ -669,6 +671,7 @@ def verified_preparation_report(work, project):
 
 
 def approve(work, project, args):
+    require_stage_contract(work, 'approval')
     verify_source(project)
     require(args.by.strip() and args.note.strip(), 'Named human owner and approval rationale required')
     if args.phase == 'assessment':
@@ -883,6 +886,7 @@ def preparation_plan(work, project, args):
 def pipeline(work, project, args, runtime=model_call):
     if getattr(args, 'command', None) == 'resume':
         require_run_pins(project)
+    require_stage_contract(work, 'task')
     import modernize_checkpoints as cp
     # Existing legacy runs retain their pinned behavior until explicitly migrated.
     if not project.get('pipeline'):
@@ -950,6 +954,9 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         if state.get('previous_review'):
             context['previous_review'] = state['previous_review']
         message = bounded_preparation_context(context, project['settings']['max_context_bytes'])
+        require_stage_contract(work, 'task')
+        if role == 'reviewer':
+            require_stage_contract(work, 'review')
         require_dollar_cap(project, role)
         state['calls'] += 1
         run['model_calls'] = state['calls']
@@ -1068,6 +1075,7 @@ def review_site(work, project, args, runtime=model_call):
     message = json.dumps({'protocol': (FRAMEWORK / 'prompts/pipeline/wireframes.md').read_text(),
                           'specification': spec, 'decisions': project['decisions']})
     require(len(message.encode()) <= project['settings']['max_context_bytes'], 'UI context exceeds budget')
+    require_stage_contract(work, 'task')
     require_dollar_cap(project, 'wireframes')
     persist(work, project)
     run = {'settings': project['settings'], 'model_calls': project['ui_calls']}
@@ -1149,6 +1157,7 @@ def require_skip_acceptance(project):
 
 
 def package(work, project):
+    require_stage_contract(work, 'approval')
     verify_source(project)
     require_skip_acceptance(project)
     verified_assessment(project, project['selected'])
@@ -1278,6 +1287,8 @@ def semantic_compare(work, project, args, runtime=model_call):
             'source_files': kw.inventory(left), 'left_files': left['assessment_index'], 'right_files': right['assessment_index'],
             'scope': project['scope'], 'history': state['history']})
         require(len(message.encode()) <= project['settings']['max_context_bytes'], 'Comparison context limit reached; no silent truncation')
+        require_stage_contract(work, 'task')
+        require_stage_contract(work, 'review')
         require_dollar_cap(project, 'reviewer')
         persist(work, project)
         state['calls'] += 1
