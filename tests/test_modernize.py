@@ -341,6 +341,19 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(pilot.Blocked, 'setup'):
             app.assessment(self.work, self.project, self.args('assess', '--label', 'new', '--allow-new-assessment'))
 
+    def test_empty_sandbox_stops_before_network(self):
+        self.project['setup']['connector_approved_by'] = 'Fixture admin'
+        self.project['setup']['connector_id'] = 'fixture-connector'
+        self.project['settings']['transform'] = {}
+        class Client:
+            def calls(self, requests):
+                raise AssertionError('network')
+        with patch.object(app, 'aws', side_effect=AssertionError('network')), \
+             patch.object(kw.subprocess, 'run', side_effect=AssertionError('network')):
+            with self.assertRaisesRegex(pilot.Blocked, 'workspace_id, upload_prefix, sandbox_role') as caught:
+                app.assessment(self.work, self.project, self.args('assess', '--label', 'new', '--allow-new-assessment'), Client())
+        self.assertIn('Sandbox configuration is empty', str(caught.exception))
+
     def test_resume_unknown_label_never_creates(self):
         with self.assertRaisesRegex(pilot.Blocked, 'never creates'):
             app.assessment(self.work, self.project, self.args('resume', '--label', 'missing'))
@@ -667,7 +680,7 @@ class PreparationTests(unittest.TestCase):
     def test_lost_create_receipt_blocks_a_second_entry_point(self):
         self.project['setup']['connector_approved_by'] = 'Fixture admin'
         self.project['setup']['connector_id'] = 'fixture-connector'
-        self.project['settings']['transform'] = {'workspace_id':'fixture-workspace','upload_prefix':'s3://fixture-private/source','orchestrator_agent':'fixture-mainframe'}
+        self.project['settings']['transform'] = {'workspace_id':'fixture-workspace','upload_prefix':'s3://fixture-private/source','sandbox_role':'fixture-sandbox-role','orchestrator_agent':'fixture-mainframe'}
         self.project['settings']['allow_new_assessments'] = True
         app.persist(self.work, self.project)
         created = []
@@ -702,7 +715,7 @@ class PreparationTests(unittest.TestCase):
     def test_source_archive_is_identical_despite_mtime_changes(self):
         self.project['setup']['connector_approved_by'] = 'Fixture admin'
         self.project['setup']['connector_id'] = 'fixture-connector'
-        self.project['settings']['transform'] = {'workspace_id':'fixture-workspace','upload_prefix':'s3://fixture-private/source','orchestrator_agent':'fixture-mainframe'}
+        self.project['settings']['transform'] = {'workspace_id':'fixture-workspace','upload_prefix':'s3://fixture-private/source','sandbox_role':'fixture-sandbox-role','orchestrator_agent':'fixture-mainframe'}
         class Client:
             def calls(self, requests):
                 return [{'job':{'jobId':'fixture-job','status':'RUNNING'}} if key in {'create_job','get_job_status'} else {}
