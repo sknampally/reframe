@@ -405,6 +405,17 @@ def export_findings(run, directory, client, identity):
     run['assessment_provenance']['baseline_match'] = 'Job requested for this recorded source archive; ingestion and semantic content remain unverified'
 
 
+def recorded_job_id(receipt):
+    """A receipt written before the call has no job. Only a successful response does."""
+    if not isinstance(receipt, dict) or receipt.get('accepted') is False:
+        return None
+    try:
+        job_id = nested_job(receipt).get('jobId')
+    except Blocked:
+        return None
+    return job_id if isinstance(job_id, str) and job_id else None
+
+
 def nested_job(value):
     for _ in range(5):
         if isinstance(value, dict) and ('jobId' in value or 'status' in value and 'job' not in value):
@@ -627,9 +638,17 @@ def assessment_step(run, directory, client=None):
     require(config.get('workspace_id'), 'Configure an existing AWS Transform workspace once in local settings')
     client = client or Transform(config, directory)
     if not run['job_id']:
-        if run['create_pending'] and (directory / 'create-job-receipt.json').is_file():
-            run['job_id'] = nested_job(json.loads((directory / 'create-job-receipt.json').read_text()))['jobId']
-            run['create_pending'] = False
+        receipt_path = directory / 'create-job-receipt.json'
+        if receipt_path.is_file():
+            job_id = recorded_job_id(json.loads(receipt_path.read_text()))
+            if job_id:
+                run['job_id'] = job_id
+                run['create_pending'] = False
+            else:
+                run['create_pending'] = True
+                run['status'] = 'NEEDS_RECONCILIATION'
+                run['reason'] = 'Job creation receipt has no successful response. Attach the existing job; do not create another.'
+                return
         if run['create_pending']:
             run['status'] = 'NEEDS_RECONCILIATION'
             run['reason'] = 'Job creation outcome uncertain. Reconcile and attach the existing job; never auto-create a duplicate.'
@@ -683,8 +702,9 @@ def assessment_step(run, directory, client=None):
         run['create_pending'] = True
         run['status'] = 'CREATING_ASSESSMENT'
         private_save(directory / 'run.json', run)  # Persist before the non-idempotent MCP mutation.
+        private_save(receipt_path, {'accepted': False, 'run_id': run['run_id']})
         response = client.calls([('create_job', arguments)])[0]
-        private_save(directory / 'create-job-receipt.json', response)
+        private_save(receipt_path, response)
         run['job_id'] = nested_job(response)['jobId']
         run['create_pending'] = False
         private_save(directory / 'run.json', run)
