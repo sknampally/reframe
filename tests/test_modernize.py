@@ -223,6 +223,27 @@ class PreparationTests(unittest.TestCase):
         self.assertNotEqual(self.project['stage'], 'PACKAGED')
         self.assertFalse(list((self.work / 'packages').glob('*.zip')))
 
+    def test_skipped_verification_needs_a_second_acceptance_before_package(self):
+        self.site()
+        self.approve('specifications')
+        self.project['verification_skip'] = {
+            'owner': 'Fixture owner', 'reason': 'Preview AWS findings',
+            'assessment_sha256': self.project['assessments']['a']['sha256'], 'at': 0}
+        app.persist(self.work, self.project)
+        with self.assertRaisesRegex(pilot.Blocked, 'second acceptance'):
+            app.package(self.work, self.project)
+        self.assertNotEqual(self.project['stage'], 'PACKAGED')
+        with self.assertRaisesRegex(pilot.Blocked, 'different person'):
+            app.approve(self.work, self.project, self.args(
+                'approve', 'verification-skip', '--by', 'Fixture owner', '--note', 'Same person'))
+        app.approve(self.work, self.project, self.args(
+            'approve', 'verification-skip', '--by', 'Second owner', '--note', 'Verification was skipped'))
+        result = app.package(self.work, self.project)
+        self.assertEqual(result['status'], 'PACKAGED')
+        with zipfile.ZipFile(result['archive']) as archive:
+            self.assertEqual(json.loads(archive.read('provenance.json'))['verification'], 'SKIPPED_BY_OWNER')
+            self.assertEqual(json.loads(archive.read('ai-dlc.json'))['verification'], 'SKIPPED_BY_OWNER')
+
     def test_invalid_candidate_gets_correction_without_bypassing_review(self):
         self.baseline()
         replies = self.replies()

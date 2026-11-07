@@ -129,6 +129,14 @@ def run(work, project, args, app, runtime=None):
     directory, assessment=app.verified_assessment(project,project['selected'])
     fingerprint=project['assessments'][project['selected']]['sha256']
     app.approved(project,'assessment',fingerprint)
+    recorded=project.get('verification_skip')
+    if recorded:
+        require(recorded.get('owner')==args.by.strip() and recorded.get('reason')==args.note.strip()
+                and recorded.get('assessment_sha256')==fingerprint, 'Skip decision differs from the recorded preview')
+    else:
+        project['verification_skip']={'owner':args.by.strip(),'reason':args.note.strip(),
+                                      'assessment_sha256':fingerprint,'at':time.time()}
+        app.persist(work, project)
     from modernize_workspace import preview_directory
     destination=preview_directory(work,app.name(args.name))
     destination.mkdir(exist_ok=True,mode=0o700)

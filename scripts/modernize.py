@@ -644,6 +644,11 @@ def approve(work, project, args):
         verified_preparation_report(work, project)
         fingerprint = digest({'specification': project['specification']['sha256'], 'decisions': project['decisions']})
         project['stage'] = 'VALIDATION_APPROVED'
+    elif args.phase == 'verification-skip':
+        skip = project.get('verification_skip')
+        require(skip, 'No skipped verification is recorded')
+        require(args.by.strip() != skip['owner'].strip(), 'Second acceptance must name a different person')
+        fingerprint = digest({k: skip[k] for k in ('owner', 'reason', 'assessment_sha256')})
     else:
         require(project.get('site'), 'Generate the review site first')
         fingerprint = site_fingerprint(work, project)
@@ -1083,8 +1088,20 @@ def refuse_packaged_secrets(destination):
                 raise Blocked('Refusing package; ' + path.name + ' matches ' + kind)
 
 
+def require_skip_acceptance(project):
+    skip = project.get('verification_skip')
+    if not skip:
+        return
+    acceptance = project['approvals'].get('verification-skip')
+    require(acceptance, 'Record a second acceptance that verification was skipped')
+    require(acceptance.get('by', '').strip() != skip['owner'].strip(), 'Second acceptance must name a different person')
+    require(acceptance.get('sha256') == digest({k: skip[k] for k in ('owner', 'reason', 'assessment_sha256')}),
+            'Skip acceptance is stale')
+
+
 def package(work, project):
     verify_source(project)
+    require_skip_acceptance(project)
     verified_assessment(project, project['selected'])
     spec = read(spec_path(work, project))
     approved(project, 'validation', digest({'specification': project['specification']['sha256'], 'decisions': project['decisions']}))
@@ -1104,6 +1121,7 @@ def package(work, project):
     (destination / 'monorepo-layout.txt').write_text('\n'.join(spec['monorepo_layout']) + '\n')
     write(destination / 'ai-dlc.json', {
         'version': 1, 'phase': 'ENGINEERING_HANDOFF',
+        'verification': 'SKIPPED_BY_OWNER' if project.get('verification_skip') else 'INDEPENDENTLY_REVIEWED',
         'tools': ['kiro', 'claude-code', 'codex', 'cursor'],
         'boundaries': {'scope': spec['scope'], 'excluded': spec['excluded_scope']},
         'entry_points': {'specifications': 'specification.json', 'backlog': 'implementation-backlog.json',
@@ -1135,6 +1153,7 @@ def package(work, project):
         'providers': project['providers'],
         'role_models': {role: project['settings'].get(role + '_model') for role in ('executor', 'reviewer', 'wireframes')},
         'assessment_sha256': project['assessments'][project['selected']]['sha256'],
+        'verification': 'SKIPPED_BY_OWNER' if project.get('verification_skip') else 'INDEPENDENTLY_REVIEWED',
         'specification_sha256': project['specification']['sha256'],
         'limitations': ['No application built or deployed', 'No runtime equivalence established',
                         'Private package: review for confidential content before sharing'],
@@ -1313,7 +1332,7 @@ def parser():
     t.add_argument('--continue-code-analysis', action='store_true', help='Keep current file classifications and acknowledge the code-analysis checkpoint; does not approve assessment findings')
     t.add_argument('--configure-documentation', action='store_true', help='Select all eligible uploaded files for detailed documentation under a recorded full-upload scope')
     a = commands.add_parser('approve')
-    a.add_argument('phase', choices=['assessment', 'validation', 'specifications'])
+    a.add_argument('phase', choices=['assessment', 'validation', 'specifications', 'verification-skip'])
     a.add_argument('--label')
     a.add_argument('--by')
     a.add_argument('--note')
