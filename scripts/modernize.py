@@ -107,6 +107,7 @@ def initialize(args, work):
         'aws': {'profile': args.aws_profile, 'region': args.region, 'bucket': args.bucket},
         'providers': {'executor': args.executor, 'reviewer': 'claude', 'wireframes': args.ui_provider},
         'assessments': {}, 'approvals': {}, 'decisions': {}, 'setup': {}, 'events': [], 'stage': 'INITIALIZED'}
+    bind_run_pins(project)
     for folder in ('previews', 'packages', 'reports'):
         (work / folder).mkdir(exist_ok=True, mode=0o700)
     from modernize_workspace import report_index
@@ -352,6 +353,30 @@ def verify_source(project):
     kw.source_ok(project)
 
 
+def bind_run_pins(project):
+    project['pins'] = {
+        'framework_commit': project['framework_commit'],
+        'executor_model': project['settings'].get('executor_model'),
+        'reviewer_model': project['settings'].get('reviewer_model'),
+        'prompt_hash': preparation_protocol_hash(),
+        'aws_job_id': None,
+    }
+
+
+def require_run_pins(project, job_id=None):
+    recorded = project.get('pins')
+    require(recorded, 'Run pins are missing')
+    require(recorded.get('framework_commit') == git(FRAMEWORK, 'rev-parse', 'HEAD'), 'Run pin changed: framework_commit')
+    require(recorded.get('executor_model') == project['settings'].get('executor_model'), 'Run pin changed: executor_model')
+    require(recorded.get('reviewer_model') == project['settings'].get('reviewer_model'), 'Run pin changed: reviewer_model')
+    require(recorded.get('prompt_hash') == preparation_protocol_hash(), 'Run pin changed: prompt_hash')
+    pinned_job = recorded.get('aws_job_id')
+    if job_id and pinned_job and pinned_job != job_id:
+        raise Blocked('Run pin changed: aws_job_id')
+    if job_id and not pinned_job:
+        recorded['aws_job_id'] = job_id
+
+
 def upgrade_framework(work, project, args):
     """Record a reviewed controller fix without replacing source, jobs or evidence."""
     require(not (set(project.get('approvals', {})) - {'assessment'}) and not project.get('specification')
@@ -388,6 +413,8 @@ def upgrade_framework(work, project, args):
 
 
 def assessment(work, project, args, client=None):
+    if getattr(args, 'command', None) == 'resume':
+        require_run_pins(project)
     label = name(args.label)
     if label not in project['assessments']:
         require(args.command == 'assess', 'Unknown assessment label; resume never creates a new run')
@@ -406,6 +433,8 @@ def assessment(work, project, args, client=None):
         persist(work, project)
     directory = Path(project['assessments'][label]['directory'])
     run = read(directory / 'run.json')
+    if getattr(args, 'command', None) == 'resume':
+        require_run_pins(project, run.get('job_id'))
     if getattr(args, 'max_assessment_bytes', None) is not None:
         limit = args.max_assessment_bytes
         require(0 < limit <= 250000000, 'Assessment byte limit must be between 1 and 250000000')
@@ -837,6 +866,8 @@ def preparation_plan(work, project, args):
 
 
 def pipeline(work, project, args, runtime=model_call):
+    if getattr(args, 'command', None) == 'resume':
+        require_run_pins(project)
     import modernize_checkpoints as cp
     # Existing legacy runs retain their pinned behavior until explicitly migrated.
     if not project.get('pipeline'):
@@ -1154,6 +1185,7 @@ def package(work, project):
         'role_models': {role: project['settings'].get(role + '_model') for role in ('executor', 'reviewer', 'wireframes')},
         'assessment_sha256': project['assessments'][project['selected']]['sha256'],
         'verification': 'SKIPPED_BY_OWNER' if project.get('verification_skip') else 'INDEPENDENTLY_REVIEWED',
+        'pins': project.get('pins'),
         'specification_sha256': project['specification']['sha256'],
         'limitations': ['No application built or deployed', 'No runtime equivalence established',
                         'Private package: review for confidential content before sharing'],

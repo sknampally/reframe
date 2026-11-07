@@ -205,6 +205,22 @@ class PreparationTests(unittest.TestCase):
             self.assertTrue(all(not x.endswith(('.cs', '.tf')) for x in archive.namelist()))
             self.assertEqual(json.loads(archive.read('traceability.json'))['tests'][0]['status'], 'NOT RUN')
         self.assertEqual(self.project['stage'], 'PACKAGED')
+        with zipfile.ZipFile(result['archive']) as archive:
+            self.assertEqual(json.loads(archive.read('provenance.json'))['pins']['prompt_hash'], app.preparation_protocol_hash())
+
+    def test_resume_rejects_a_changed_pin_before_aws_or_model(self):
+        self.assess()
+        self.assertEqual(self.project['pins']['aws_job_id'], None)
+        self.assertEqual(self.project['pins']['executor_model'], 'claude-sonnet-5-5')
+        app.require_run_pins(self.project)
+        self.project['pins']['prompt_hash'] = 'changed'
+        with patch.object(kw, 'assessment_step', side_effect=AssertionError('no aws')):
+            with self.assertRaisesRegex(pilot.Blocked, 'prompt_hash'):
+                app.assessment(self.work, self.project, self.args('resume', '--label', 'a'))
+        self.project['pins']['prompt_hash'] = app.preparation_protocol_hash()
+        self.project['pins']['executor_model'] = 'other-model'
+        with self.assertRaisesRegex(pilot.Blocked, 'executor_model'):
+            app.pipeline(self.work, self.project, self.args('resume'), lambda *a: self.fail('no model'))
 
     def test_package_refuses_secret_and_writes_no_zip(self):
         self.baseline()
