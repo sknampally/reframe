@@ -111,9 +111,13 @@ def make_plan(project, assessment_dir, run, catalog):
         if record['area']=='source' and record['focus'] not in linked: record['focus']='@source-support'
     records.sort(key=lambda r:(r['focus']=='@assessment', r['focus'], r['area'] != 'source', r['path'], r['start']))
     units, batch, size = [], [], 0
+    def same_rule(existing, record):
+        if existing['focus'] != record['focus']:
+            return False
+        return not (existing['area'] == 'source' and record['area'] == 'source' and existing['path'] != record['path'])
     for record in records:
         weight = min(record['bytes'], UNIT_BYTES // 2) + len(json.dumps(record).encode())
-        if batch and (size + weight > unit_limit or batch[0]['focus'] != record['focus']):
+        if batch and (size + weight > unit_limit or not same_rule(batch[0], record)):
             units.append({'id': f'U{len(units)+1:04d}', 'focus':batch[0]['focus'], 'segments': batch})
             batch, size = [], 0
         batch.append(record); size += weight
@@ -261,7 +265,8 @@ def run(work, project, args, runtime, app):
                     supplied.append(part); seen_ranges.add(identity)
             context = {'protocol': (app.FRAMEWORK / 'prompts/checkpoints' / (role + '.md')).read_text(),
                        'unit_id': unit['id'], 'scope': project['scope'], 'evidence': supplied,
-                       'source_files': app.kw.inventory(assessment_run),
+                       'source_files': sorted({part['path'] for part in unit['segments'] if part['area'] == 'source'}),
+                       'assessment_files': sorted({part['path'] for part in unit['segments'] if part['area'] == 'assessment'}),
                        'previous_review': record.get('previous_review'), 'validation_error':record.get('validation_error'),
                        'human_feedback':record.get('human_feedback', [])}
             if role == 'reviewer':
@@ -278,6 +283,8 @@ def run(work, project, args, runtime, app):
             app.persist(work, project)
             call_run = dict(assessment_run, settings=project['settings'], model_calls=state['calls'], round=record['attempt'])
             reply = runtime(project['providers'][role], call_run, area, role, message)
+            if role == 'reviewer':
+                require(sha(work / record['candidate_path']) == record['candidate_sha256'], 'Reviewer cannot write the candidate')
             app.verify_source(project)
             evidence(unit, project, assessment_dir)
             receipt = area / f'reply-{state["calls"]}.json'

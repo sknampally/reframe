@@ -670,6 +670,69 @@ def verified_preparation_report(work, project):
     return record['sha256']
 
 
+def _finding_records(value):
+    if not isinstance(value, dict):
+        return []
+    for key in ('findings', 'all_rules', 'rules'):
+        items = value.get(key)
+        if isinstance(items, list) and any(isinstance(item, dict) for item in items):
+            return [item for item in items if isinstance(item, dict)]
+    return []
+
+
+def _in_scope_finding(finding):
+    if finding.get('in_scope') is False or finding.get('out_of_scope') is True:
+        return False
+    scope = finding.get('scope')
+    return not (isinstance(scope, str) and scope.strip().upper() in {'OUT', 'OUT_OF_SCOPE', 'EXCLUDED'})
+
+
+def _source_file(finding):
+    for key in ('source_file', 'source_path', 'Source_File', 'file'):
+        value = finding.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ''
+
+
+def _source_line(finding):
+    for key in ('source_line', 'line', 'start_line', 'Source_Line'):
+        value = finding.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return str(value)
+        if isinstance(value, str) and value.strip() and any(character.isdigit() for character in value):
+            return value.strip()
+    anchor = finding.get('source_anchor')
+    if isinstance(anchor, str) and any(character.isdigit() for character in anchor):
+        return anchor.strip()
+    return ''
+
+
+def require_anchored_export(work, project):
+    """In-scope findings need a source file and line. A completed AWS status does not replace that."""
+    label = project.get('selected')
+    require(label, 'Select an assessment before validation')
+    directory, run = verified_assessment(project, label)
+    missing = []
+    for item in run['assessment_index']:
+        path = directory / 'assessment' / item['path']
+        if path.suffix.lower() != '.json':
+            continue
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        for index, finding in enumerate(_finding_records(value)):
+            if not _in_scope_finding(finding):
+                continue
+            if _source_file(finding) and _source_line(finding):
+                continue
+            identity = finding.get('id') or finding.get('Rule_Id') or (item['path'] + '#' + str(index))
+            missing.append(str(identity))
+    require(not missing, 'Validation blocked: in-scope finding has no source file and line: '
+            + ', '.join(missing) + '. A completed AWS status is not enough.')
+
+
 def approve(work, project, args):
     require_stage_contract(work, 'approval')
     verify_source(project)
@@ -683,6 +746,7 @@ def approve(work, project, args):
         fingerprint = project['assessments'][args.label]['sha256']
         project['stage'] = 'ASSESSMENT_APPROVED'
     elif args.phase == 'validation':
+        require_anchored_export(work, project)
         require(project.get('specification'), 'Complete independent validation first')
         require(not project.get('site'), 'Review site already generated; use feedback to revise')
         spec = read(spec_path(work, project))
@@ -717,6 +781,7 @@ def decision(work, project, args):
     project['approvals'].pop('validation', None)
     project['approvals'].pop('specifications', None)
     project.pop('site', None)
+    require_anchored_export(work, project)
     project['stage'] = 'AWAITING_VALIDATION_APPROVAL'
     preparation_report(work, project)
     persist(work, project)
@@ -963,6 +1028,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         project['stage'] = 'RUNNING_' + role.upper()
         persist(work, project)
         reply = runtime(project['providers'][role], run, area, role, message)
+        if role == 'reviewer':
+            require(sha(candidate_path) == state['candidate_sha256'], 'Reviewer cannot write the candidate')
         verify_source(project)
         write(area / f'reply-{state["calls"]}.json', reply)
         if 'evidence_notes' in reply:
@@ -1023,6 +1090,7 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                 require({rule['source_path'] for rule in context['candidate']['rules']} <= read_paths,
                         'Reviewer must inspect every rule source file')
                 require(not reply['findings'], 'PASS cannot have unresolved reviewer findings; SME questions remain separate')
+                require_anchored_export(work, project)
                 project['specification'] = {'path': f'preparation/{artifact_prefix}candidate-{number}.json', 'sha256': state['candidate_sha256'],
                                             'review_sha256': sha(area / f'{artifact_prefix}review-{number}.json'), 'review_path': f'preparation/{artifact_prefix}review-{number}.json'}
                 if capsules:

@@ -114,6 +114,7 @@ class PreparationTests(unittest.TestCase):
         self.source = self.root / 'source'
         self.source.mkdir()
         (self.source / 'rule.cbl').write_text('IF AMOUNT = ZERO\n MOVE 1 TO ERROR-FLAG\nEND-IF\n')
+        self.source_files = ['rule.cbl']
         self.findings = self.root / 'findings'
         self.findings.mkdir()
         (self.findings / 'rules.json').write_text('{"rules":["reject zero amount"]}')
@@ -122,7 +123,11 @@ class PreparationTests(unittest.TestCase):
             if args == ('rev-parse', 'HEAD'): return 'a' * 40
             if args == ('remote', 'get-url', 'origin'): return 'https://example.invalid/source.git'
             if args == ('status', '--porcelain'): return 'dirty' if self.dirty else ''
-            if args[0] == 'ls-files': return 'rule.cbl' if len(args) == 1 or args[-1] == 'rule.cbl' else ''
+            if args[0] == 'ls-files':
+                names = self.source_files
+                if len(args) == 1:
+                    return '\n'.join(names)
+                return args[-1] if args[-1] in names else ''
             raise AssertionError(args)
         for module in (app, kw, pilot):
             mock = patch.object(module, 'git', side_effect=git)
@@ -590,6 +595,34 @@ class PreparationTests(unittest.TestCase):
         result = app.mutation(self.work, self.project, 'workspace', lambda: self.fail('Duplicate creation'))
         self.assertEqual(result['workspaceId'], 'fixture')
 
+    def test_unanchored_in_scope_finding_blocks_validation(self):
+        (self.findings / 'rules.json').write_text(json.dumps({
+            'status': 'COMPLETED',
+            'findings': [
+                {'id': 'F-in', 'statement': 'Reject zero', 'in_scope': True},
+                {'id': 'F-out', 'statement': 'Other journey', 'in_scope': False},
+            ],
+        }))
+        self.baseline()
+        with self.assertRaisesRegex(pilot.Blocked, 'source file and line') as caught:
+            app.legacy_pipeline(self.work, self.project, self.args('validate'), self.runtime(self.replies()))
+        self.assertIn('F-in', str(caught.exception))
+        self.assertNotIn('F-out', str(caught.exception))
+        self.assertNotEqual(self.project.get('stage'), 'AWAITING_VALIDATION_APPROVAL')
+        self.assertNotIn('validation', self.project['approvals'])
+
+    def test_anchored_findings_reach_validation_approval(self):
+        (self.findings / 'rules.json').write_text(json.dumps({
+            'status': 'COMPLETED',
+            'findings': [
+                {'id': 'F-in', 'statement': 'Reject zero', 'in_scope': True, 'source_file': 'rule.cbl', 'source_line': 1},
+                {'id': 'F-out', 'statement': 'Other journey', 'in_scope': False},
+            ],
+        }))
+        self.validated()
+        result = self.approve('validation')
+        self.assertEqual(result['status'], 'VALIDATION_APPROVED')
+
     def test_source_change_blocks_any_validation(self):
         self.baseline(); self.dirty = True
         with self.assertRaisesRegex(pilot.Blocked, 'not clean'):
@@ -611,6 +644,11 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn('--bare', command)
         self.assertIn('--strict-mcp-config', command)
         self.assertIn('mcp__*', command)
+        self.assertIn('--disallowedTools', command)
+        cwd = Path(process.call_args.kwargs['cwd'])
+        candidate = self.work / 'candidate.json'
+        candidate.write_text('sealed')
+        self.assertFalse(candidate.resolve().is_relative_to(cwd.resolve()))
 
     def test_completed_aws_job_stops_before_agents(self):
         self.assess()
