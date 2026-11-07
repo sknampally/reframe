@@ -595,6 +595,34 @@ class PreparationTests(unittest.TestCase):
         result = app.mutation(self.work, self.project, 'workspace', lambda: self.fail('Duplicate creation'))
         self.assertEqual(result['workspaceId'], 'fixture')
 
+    def test_unanchored_in_scope_finding_blocks_validation(self):
+        (self.findings / 'rules.json').write_text(json.dumps({
+            'status': 'COMPLETED',
+            'findings': [
+                {'id': 'F-in', 'statement': 'Reject zero', 'in_scope': True},
+                {'id': 'F-out', 'statement': 'Other journey', 'in_scope': False},
+            ],
+        }))
+        self.baseline()
+        with self.assertRaisesRegex(pilot.Blocked, 'source file and line') as caught:
+            app.legacy_pipeline(self.work, self.project, self.args('validate'), self.runtime(self.replies()))
+        self.assertIn('F-in', str(caught.exception))
+        self.assertNotIn('F-out', str(caught.exception))
+        self.assertNotEqual(self.project.get('stage'), 'AWAITING_VALIDATION_APPROVAL')
+        self.assertNotIn('validation', self.project['approvals'])
+
+    def test_anchored_findings_reach_validation_approval(self):
+        (self.findings / 'rules.json').write_text(json.dumps({
+            'status': 'COMPLETED',
+            'findings': [
+                {'id': 'F-in', 'statement': 'Reject zero', 'in_scope': True, 'source_file': 'rule.cbl', 'source_line': 1},
+                {'id': 'F-out', 'statement': 'Other journey', 'in_scope': False},
+            ],
+        }))
+        self.validated()
+        result = self.approve('validation')
+        self.assertEqual(result['status'], 'VALIDATION_APPROVED')
+
     def test_source_change_blocks_any_validation(self):
         self.baseline(); self.dirty = True
         with self.assertRaisesRegex(pilot.Blocked, 'not clean'):
