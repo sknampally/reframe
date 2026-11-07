@@ -104,7 +104,7 @@ def initialize(args, work):
     config.setdefault('model_dollars_spent', 0)
     config.setdefault('model_rates', {'executor': 0.02, 'reviewer': 0.05, 'wireframes': 0.02})
     config['transform'].update({k: v for k, v in {'workspace_id': args.transform_workspace,
-        'upload_prefix': ('s3://' + args.bucket + '/modernize') if args.bucket else None}.items() if v})
+        'upload_prefix': ('s3://' + args.bucket + '/reframe') if args.bucket else None}.items() if v})
     project = {'version': 2, 'scope': args.scope, 'source': source_record or {'root': str(source),
         'repository': git(source, 'remote', 'get-url', 'origin'), 'commit': git(source, 'rev-parse', 'HEAD')},
         'framework_commit': git(FRAMEWORK, 'rev-parse', 'HEAD'), 'settings': config,

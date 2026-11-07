@@ -1,6 +1,6 @@
 # Sandbox
 
-This stack creates one private S3 bucket and one IAM role for fixture AWS Transform runs. The role can use the `modernize/` prefix in that bucket. It denies object and bucket reads everywhere else, including production mainframe data in the same account.
+This stack creates one private S3 bucket and one IAM role for fixture AWS Transform runs. The role can use the `reframe/` prefix in that bucket. It denies object and bucket reads everywhere else, including production mainframe data in the same account.
 
 Terraform does not create the Transform workspace. After apply, create or attach that workspace with `reframe setup` and keep its id in the private run settings.
 
