@@ -20,6 +20,7 @@ import kiro_workflow as kw
 from pilot import Blocked, git, require, sha
 from modernize_artifacts import digest, validate_spec, validate_screens, render_site, render_assessment_facts, SECTIONS
 from modernize_models import call as model_call, ProviderSafetyRefusal, check_provider_refusals, preparation_protocol_hash
+from modernize_contracts import require_stage_contract
 
 FRAMEWORK = Path(__file__).resolve().parent.parent
 
@@ -99,6 +100,9 @@ def initialize(args, work):
     if not config['reviewer_model']:
         config['reviewer_model'] = 'claude-opus-5-5'
     validate_model_pair(args.executor, config)
+    config.setdefault('max_model_dollars', 0)
+    config.setdefault('model_dollars_spent', 0)
+    config.setdefault('model_rates', {'executor': 0.02, 'reviewer': 0.05, 'wireframes': 0.02})
     config['transform'].update({k: v for k, v in {'workspace_id': args.transform_workspace,
         'upload_prefix': ('s3://' + args.bucket + '/modernize') if args.bucket else None}.items() if v})
     project = {'version': 2, 'scope': args.scope, 'source': source_record or {'root': str(source),
@@ -107,6 +111,7 @@ def initialize(args, work):
         'aws': {'profile': args.aws_profile, 'region': args.region, 'bucket': args.bucket},
         'providers': {'executor': args.executor, 'reviewer': 'claude', 'wireframes': args.ui_provider},
         'assessments': {}, 'approvals': {}, 'decisions': {}, 'setup': {}, 'events': [], 'stage': 'INITIALIZED'}
+    bind_run_pins(project)
     for folder in ('previews', 'packages', 'reports'):
         (work / folder).mkdir(exist_ok=True, mode=0o700)
     from modernize_workspace import report_index
@@ -352,6 +357,42 @@ def verify_source(project):
     kw.source_ok(project)
 
 
+def bind_run_pins(project):
+    project['pins'] = {
+        'framework_commit': project['framework_commit'],
+        'executor_model': project['settings'].get('executor_model'),
+        'reviewer_model': project['settings'].get('reviewer_model'),
+        'prompt_hash': preparation_protocol_hash(),
+        'aws_job_id': None,
+    }
+
+
+def require_run_pins(project, job_id=None):
+    recorded = project.get('pins')
+    require(recorded, 'Run pins are missing')
+    require(recorded.get('framework_commit') == git(FRAMEWORK, 'rev-parse', 'HEAD'), 'Run pin changed: framework_commit')
+    require(recorded.get('executor_model') == project['settings'].get('executor_model'), 'Run pin changed: executor_model')
+    require(recorded.get('reviewer_model') == project['settings'].get('reviewer_model'), 'Run pin changed: reviewer_model')
+    require(recorded.get('prompt_hash') == preparation_protocol_hash(), 'Run pin changed: prompt_hash')
+    pinned_job = recorded.get('aws_job_id')
+    if job_id and pinned_job and pinned_job != job_id:
+        raise Blocked('Run pin changed: aws_job_id')
+    if job_id and not pinned_job:
+        recorded['aws_job_id'] = job_id
+
+
+def require_dollar_cap(project, role):
+    settings = project['settings']
+    rates = settings.get('model_rates') or {}
+    price = rates.get(role, 0.02)
+    require(isinstance(price, (int, float)) and not isinstance(price, bool) and price > 0, 'Model rate missing for ' + role)
+    spent = settings.get('model_dollars_spent', 0)
+    cap = settings.get('max_model_dollars', 0)
+    require(isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap >= 0, 'Dollar cap is invalid')
+    require(spent + price <= cap, 'Model call would exceed the dollar cap')
+    settings['model_dollars_spent'] = round(spent + price, 6)
+
+
 def upgrade_framework(work, project, args):
     """Record a reviewed controller fix without replacing source, jobs or evidence."""
     require(not (set(project.get('approvals', {})) - {'assessment'}) and not project.get('specification')
@@ -388,6 +429,9 @@ def upgrade_framework(work, project, args):
 
 
 def assessment(work, project, args, client=None):
+    if getattr(args, 'command', None) == 'resume':
+        require_run_pins(project)
+    require_stage_contract(work, 'task')
     label = name(args.label)
     if label not in project['assessments']:
         require(args.command == 'assess', 'Unknown assessment label; resume never creates a new run')
@@ -406,6 +450,8 @@ def assessment(work, project, args, client=None):
         persist(work, project)
     directory = Path(project['assessments'][label]['directory'])
     run = read(directory / 'run.json')
+    if getattr(args, 'command', None) == 'resume':
+        require_run_pins(project, run.get('job_id'))
     if getattr(args, 'max_assessment_bytes', None) is not None:
         limit = args.max_assessment_bytes
         require(0 < limit <= 250000000, 'Assessment byte limit must be between 1 and 250000000')
@@ -625,6 +671,7 @@ def verified_preparation_report(work, project):
 
 
 def approve(work, project, args):
+    require_stage_contract(work, 'approval')
     verify_source(project)
     require(args.by.strip() and args.note.strip(), 'Named human owner and approval rationale required')
     if args.phase == 'assessment':
@@ -644,6 +691,11 @@ def approve(work, project, args):
         verified_preparation_report(work, project)
         fingerprint = digest({'specification': project['specification']['sha256'], 'decisions': project['decisions']})
         project['stage'] = 'VALIDATION_APPROVED'
+    elif args.phase == 'verification-skip':
+        skip = project.get('verification_skip')
+        require(skip, 'No skipped verification is recorded')
+        require(args.by.strip() != skip['owner'].strip(), 'Second acceptance must name a different person')
+        fingerprint = digest({k: skip[k] for k in ('owner', 'reason', 'assessment_sha256')})
     else:
         require(project.get('site'), 'Generate the review site first')
         fingerprint = site_fingerprint(work, project)
@@ -832,6 +884,9 @@ def preparation_plan(work, project, args):
 
 
 def pipeline(work, project, args, runtime=model_call):
+    if getattr(args, 'command', None) == 'resume':
+        require_run_pins(project)
+    require_stage_contract(work, 'task')
     import modernize_checkpoints as cp
     # Existing legacy runs retain their pinned behavior until explicitly migrated.
     if not project.get('pipeline'):
@@ -899,6 +954,10 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         if state.get('previous_review'):
             context['previous_review'] = state['previous_review']
         message = bounded_preparation_context(context, project['settings']['max_context_bytes'])
+        require_stage_contract(work, 'task')
+        if role == 'reviewer':
+            require_stage_contract(work, 'review')
+        require_dollar_cap(project, role)
         state['calls'] += 1
         run['model_calls'] = state['calls']
         project['stage'] = 'RUNNING_' + role.upper()
@@ -1016,6 +1075,9 @@ def review_site(work, project, args, runtime=model_call):
     message = json.dumps({'protocol': (FRAMEWORK / 'prompts/pipeline/wireframes.md').read_text(),
                           'specification': spec, 'decisions': project['decisions']})
     require(len(message.encode()) <= project['settings']['max_context_bytes'], 'UI context exceeds budget')
+    require_stage_contract(work, 'task')
+    require_dollar_cap(project, 'wireframes')
+    persist(work, project)
     run = {'settings': project['settings'], 'model_calls': project['ui_calls']}
     screens = runtime(provider, run, directory, 'wireframes', message)
     verify_source(project)
@@ -1064,8 +1126,40 @@ def feedback(work, project, args):
     return {'status': project['stage']}
 
 
+SECRET_PATTERNS = (
+    ('private key', re.compile(br'-----BEGIN (?:RSA |OPENSSH |EC |DSA |ENCRYPTED )?PRIVATE KEY-----')),
+    ('cloud access key', re.compile(br'\bAKIA[0-9A-Z]{16}\b')),
+    ('cloud secret', re.compile(br'(?i)\baws_secret_access_key\b\s*[:=]\s*\S')),
+    ('connection string', re.compile(br'(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@')),
+    ('customer identifier', re.compile(br'\b\d{3}-\d{2}-\d{4}\b')),
+)
+
+
+def refuse_packaged_secrets(destination):
+    """Reject a package whose staged files look like credentials or customer identifiers."""
+    for path in sorted(item for item in destination.iterdir() if item.is_file()):
+        data = path.read_bytes()
+        for kind, pattern in SECRET_PATTERNS:
+            if pattern.search(data):
+                shutil.rmtree(destination)
+                raise Blocked('Refusing package; ' + path.name + ' matches ' + kind)
+
+
+def require_skip_acceptance(project):
+    skip = project.get('verification_skip')
+    if not skip:
+        return
+    acceptance = project['approvals'].get('verification-skip')
+    require(acceptance, 'Record a second acceptance that verification was skipped')
+    require(acceptance.get('by', '').strip() != skip['owner'].strip(), 'Second acceptance must name a different person')
+    require(acceptance.get('sha256') == digest({k: skip[k] for k in ('owner', 'reason', 'assessment_sha256')}),
+            'Skip acceptance is stale')
+
+
 def package(work, project):
+    require_stage_contract(work, 'approval')
     verify_source(project)
+    require_skip_acceptance(project)
     verified_assessment(project, project['selected'])
     spec = read(spec_path(work, project))
     approved(project, 'validation', digest({'specification': project['specification']['sha256'], 'decisions': project['decisions']}))
@@ -1085,6 +1179,7 @@ def package(work, project):
     (destination / 'monorepo-layout.txt').write_text('\n'.join(spec['monorepo_layout']) + '\n')
     write(destination / 'ai-dlc.json', {
         'version': 1, 'phase': 'ENGINEERING_HANDOFF',
+        'verification': 'SKIPPED_BY_OWNER' if project.get('verification_skip') else 'INDEPENDENTLY_REVIEWED',
         'tools': ['kiro', 'claude-code', 'codex', 'cursor'],
         'boundaries': {'scope': spec['scope'], 'excluded': spec['excluded_scope']},
         'entry_points': {'specifications': 'specification.json', 'backlog': 'implementation-backlog.json',
@@ -1116,6 +1211,8 @@ def package(work, project):
         'providers': project['providers'],
         'role_models': {role: project['settings'].get(role + '_model') for role in ('executor', 'reviewer', 'wireframes')},
         'assessment_sha256': project['assessments'][project['selected']]['sha256'],
+        'verification': 'SKIPPED_BY_OWNER' if project.get('verification_skip') else 'INDEPENDENTLY_REVIEWED',
+        'pins': project.get('pins'),
         'specification_sha256': project['specification']['sha256'],
         'limitations': ['No application built or deployed', 'No runtime equivalence established',
                         'Private package: review for confidential content before sharing'],
@@ -1127,6 +1224,7 @@ def package(work, project):
         'Keep private; inspect all contents before sharing.\n')
     manifest = {p.name: sha(p) for p in destination.iterdir() if p.is_file()}
     write(destination / 'checksums.json', manifest)
+    refuse_packaged_secrets(destination)
     archive = destination.parent / (destination.name + '.zip')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
         for path in sorted(destination.iterdir()):
@@ -1189,6 +1287,10 @@ def semantic_compare(work, project, args, runtime=model_call):
             'source_files': kw.inventory(left), 'left_files': left['assessment_index'], 'right_files': right['assessment_index'],
             'scope': project['scope'], 'history': state['history']})
         require(len(message.encode()) <= project['settings']['max_context_bytes'], 'Comparison context limit reached; no silent truncation')
+        require_stage_contract(work, 'task')
+        require_stage_contract(work, 'review')
+        require_dollar_cap(project, 'reviewer')
+        persist(work, project)
         state['calls'] += 1
         write(state_path, state)
         run = dict(left, settings=project['settings'], model_calls=state['calls'])
@@ -1293,7 +1395,7 @@ def parser():
     t.add_argument('--continue-code-analysis', action='store_true', help='Keep current file classifications and acknowledge the code-analysis checkpoint; does not approve assessment findings')
     t.add_argument('--configure-documentation', action='store_true', help='Select all eligible uploaded files for detailed documentation under a recorded full-upload scope')
     a = commands.add_parser('approve')
-    a.add_argument('phase', choices=['assessment', 'validation', 'specifications'])
+    a.add_argument('phase', choices=['assessment', 'validation', 'specifications', 'verification-skip'])
     a.add_argument('--label')
     a.add_argument('--by')
     a.add_argument('--note')

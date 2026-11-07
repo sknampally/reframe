@@ -130,6 +130,8 @@ class PreparationTests(unittest.TestCase):
         args = app.parser().parse_args(['--workspace', str(self.work), 'init', '--source', str(self.source), '--scope', 'Zero-amount journey'])
         app.initialize(args, self.work)
         self.project = app.read(self.work / 'project.json')
+        self.project['settings']['max_model_dollars'] = 100
+        app.persist(self.work, self.project)
         self.messages = []
 
     def args(self, *values):
@@ -205,6 +207,78 @@ class PreparationTests(unittest.TestCase):
             self.assertTrue(all(not x.endswith(('.cs', '.tf')) for x in archive.namelist()))
             self.assertEqual(json.loads(archive.read('traceability.json'))['tests'][0]['status'], 'NOT RUN')
         self.assertEqual(self.project['stage'], 'PACKAGED')
+        with zipfile.ZipFile(result['archive']) as archive:
+            self.assertEqual(json.loads(archive.read('provenance.json'))['pins']['prompt_hash'], app.preparation_protocol_hash())
+
+    def test_resume_rejects_a_changed_pin_before_aws_or_model(self):
+        self.assess()
+        self.assertEqual(self.project['pins']['aws_job_id'], None)
+        self.assertEqual(self.project['pins']['executor_model'], 'claude-sonnet-5-5')
+        app.require_run_pins(self.project)
+        self.project['pins']['prompt_hash'] = 'changed'
+        with patch.object(kw, 'assessment_step', side_effect=AssertionError('no aws')):
+            with self.assertRaisesRegex(pilot.Blocked, 'prompt_hash'):
+                app.assessment(self.work, self.project, self.args('resume', '--label', 'a'))
+        self.project['pins']['prompt_hash'] = app.preparation_protocol_hash()
+        self.project['pins']['executor_model'] = 'other-model'
+        with self.assertRaisesRegex(pilot.Blocked, 'executor_model'):
+            app.pipeline(self.work, self.project, self.args('resume'), lambda *a: self.fail('no model'))
+
+    def test_dollar_cap_stops_the_next_model_call(self):
+        self.baseline()
+        self.project['settings']['max_model_dollars'] = 0
+        self.project['settings']['model_dollars_spent'] = 0
+        calls = []
+        def runtime(*args):
+            calls.append(args[3])
+            return self.replies()[len(calls) - 1]
+        with self.assertRaisesRegex(pilot.Blocked, 'dollar cap'):
+            app.legacy_pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.project['settings'].get('model_dollars_spent', 0), 0)
+        self.project['settings']['max_model_dollars'] = 0.02
+        with self.assertRaisesRegex(pilot.Blocked, 'dollar cap'):
+            app.legacy_pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(calls, ['executor'])
+        self.assertEqual(self.project['pipeline']['calls'], 1)
+
+    def test_package_refuses_secret_and_writes_no_zip(self):
+        self.baseline()
+        replies = self.replies()
+        replies[2]['specification']['sections']['ui']['implementation_prompt'] += '\nAKIAIOSFODNN7EXAMPLE\n'
+        app.legacy_pipeline(self.work, self.project, self.args('validate'), self.runtime(replies))
+        self.approve('validation')
+        app.review_site(self.work, self.project, self.args('review-site'), self.runtime([self.screens()]))
+        self.approve('specifications')
+        with self.assertRaises(pilot.Blocked) as caught:
+            app.package(self.work, self.project)
+        message = str(caught.exception)
+        self.assertIn('ui-prompt.md', message)
+        self.assertIn('cloud access key', message)
+        self.assertNotIn('AKIA', message)
+        self.assertNotEqual(self.project['stage'], 'PACKAGED')
+        self.assertFalse(list((self.work / 'packages').glob('*.zip')))
+
+    def test_skipped_verification_needs_a_second_acceptance_before_package(self):
+        self.site()
+        self.approve('specifications')
+        self.project['verification_skip'] = {
+            'owner': 'Fixture owner', 'reason': 'Preview AWS findings',
+            'assessment_sha256': self.project['assessments']['a']['sha256'], 'at': 0}
+        app.persist(self.work, self.project)
+        with self.assertRaisesRegex(pilot.Blocked, 'second acceptance'):
+            app.package(self.work, self.project)
+        self.assertNotEqual(self.project['stage'], 'PACKAGED')
+        with self.assertRaisesRegex(pilot.Blocked, 'different person'):
+            app.approve(self.work, self.project, self.args(
+                'approve', 'verification-skip', '--by', 'Fixture owner', '--note', 'Same person'))
+        app.approve(self.work, self.project, self.args(
+            'approve', 'verification-skip', '--by', 'Second owner', '--note', 'Verification was skipped'))
+        result = app.package(self.work, self.project)
+        self.assertEqual(result['status'], 'PACKAGED')
+        with zipfile.ZipFile(result['archive']) as archive:
+            self.assertEqual(json.loads(archive.read('provenance.json'))['verification'], 'SKIPPED_BY_OWNER')
+            self.assertEqual(json.loads(archive.read('ai-dlc.json'))['verification'], 'SKIPPED_BY_OWNER')
 
     def test_invalid_candidate_gets_correction_without_bypassing_review(self):
         self.baseline()
@@ -551,6 +625,41 @@ class PreparationTests(unittest.TestCase):
         result = app.assessment(self.work, self.project, self.args('resume','--label','a'), Client())
         self.assertEqual(result['status'], 'AWAITING_ASSESSMENT_APPROVAL')
         self.assertNotIn('pipeline', self.project)
+
+    def test_lost_create_receipt_blocks_a_second_entry_point(self):
+        self.project['setup']['connector_approved_by'] = 'Fixture admin'
+        self.project['setup']['connector_id'] = 'fixture-connector'
+        self.project['settings']['transform'] = {'workspace_id':'fixture-workspace','upload_prefix':'s3://fixture-private/source','orchestrator_agent':'fixture-mainframe'}
+        self.project['settings']['allow_new_assessments'] = True
+        app.persist(self.work, self.project)
+        created = []
+        class First:
+            def calls(self, requests):
+                for name, _arguments in requests:
+                    if name == 'create_job':
+                        created.append(name)
+                        receipt = next(self_work.glob('**/create-job-receipt.json'))
+                        if json.loads(receipt.read_text()).get('accepted') is not False:
+                            raise AssertionError('receipt must be written before the provider call')
+                        raise OSError('lost response')
+                return [{}]
+        self_work = self.work
+        completed = type('Result', (), {'returncode': 0})()
+        with patch.object(kw.subprocess, 'run', return_value=completed):
+            with self.assertRaises(OSError):
+                app.assessment(self.work, self.project, self.args('assess', '--label', 'a', '--allow-new-assessment'), First())
+        self.assertEqual(created, ['create_job'])
+        directory = Path(self.project['assessments']['a']['directory'])
+        class Second:
+            def calls(self, requests):
+                self.fail('provider create or resume call')
+        older = kw.drive(directory, transform=Second())
+        self.assertEqual(older['status'], 'NEEDS_RECONCILIATION')
+        self.assertIn('Attach', older['reason'])
+        resumed = app.assessment(self.work, self.project, self.args('resume', '--label', 'a'), Second())
+        self.assertEqual(resumed['status'], 'NEEDS_RECONCILIATION')
+        self.assertIn('Attach', resumed['reason'])
+        self.assertFalse(app.read(directory / 'run.json').get('job_id'))
 
     def test_source_archive_is_identical_despite_mtime_changes(self):
         self.project['setup']['connector_approved_by'] = 'Fixture admin'

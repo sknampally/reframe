@@ -19,6 +19,6 @@ The private assessment history is reported context, not reproducible public evid
 
 A second model can repeat the first model's mistakes. Independence requires primary-source checks, explicit acceptance criteria, controlled test results, and accountable domain review. No agent may approve itself or claim a human decision.
 
-The diagrams describe intended workflows. The general YAML contracts do not enforce their own requirements. The pilot runner enforces its own narrower record and operation checks, not semantic correctness or human approval. GitHub protections and secret-scanning services are not configured by this documentation. The CardDemo skeleton is not a migration result; its synthetic example is not a source-derived business rule.
+The diagrams describe intended workflows. When a workspace contains a task, review, or approval record, the CLI enforces the required fields and evidence links named by the YAML templates. The pilot runner enforces its own narrower record and operation checks, not semantic correctness or human approval. GitHub protections and secret-scanning services are not configured by this documentation. The CardDemo skeleton is not a migration result; its synthetic example is not a source-derived business rule.
 
 The first meaningful implementation milestone is one independently verified rule and one reproducible vertical slice. More generated pages, extracted rules, or passing agent reviews are not substitutes for that evidence.
