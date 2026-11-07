@@ -1,10 +1,6 @@
 # Reframe
 
-*From legacy source to a reviewed modernization plan.*
-
-A CLI for taking pinned mainframe source through assessment, independent validation,
-business review, and an approved implementation preparation package. C#/.NET on AWS
-is an intended target; target design remains an explicit architecture decision.
+A CLI that assesses pinned mainframe source, builds wireframes, and packages an AI-DLC handoff for forward deployment. It does not build the target application, deploy it, or prove runtime equivalence. C#/.NET on AWS is an intended later target; that design remains an explicit architecture decision.
 
 **Status: four-phase POC tested with offline fixtures. One repaired CardDemo AWS
 assessment reached the human review gate; uninterrupted release acceptance and
@@ -24,48 +20,56 @@ No custom prompt writing or manual agent handoffs are required for normal operat
 
 ## Run the guided workflow
 
-Install Git and uv, AWS CLI and your chosen design provider (Claude Code or Codex)
-using the [engineer setup guide](docs/engineer-setup.md). Authenticate your AWS profile
-and provider. AWS Transform application access is also required; terminal AWS login
-alone is insufficient. Setup checks the configured runtimes and offers resource setup.
+Install Git, uv, the AWS CLI, Terraform 1.5 or newer, and your chosen design provider (Claude Code or Codex) using the [engineer setup guide](docs/engineer-setup.md). Authenticate an AWS profile. AWS Transform application access is also required; terminal AWS login alone is insufficient.
 
-On macOS/Linux, or inside Ubuntu/WSL2 on Windows:
+On macOS/Linux, or inside Ubuntu/WSL2 on Windows, start from a clean `main` checkout:
 
 ```bash
 git clone https://github.com/sknampally/reframe.git
 cd reframe
+git switch main
+git pull --ff-only
+export AWS_PROFILE=your-sandbox-profile
+terraform -chdir=infrastructure init
+terraform -chdir=infrastructure apply
+infrastructure/deny-check.sh YOUR_PRODUCTION_BUCKET
 uv tool install --force --managed-python --python 3.12 --editable .
-reframe
+reframe init
 ```
 
-Choose **1 — Guided start / continue**, or launch it directly with `reframe flow`.
-No custom prompts or manual command sequence are needed for the direct draft route.
+`terraform version` must be 1.5 or newer. Apply creates one private bucket and one IAM role. The role can use the `reframe/` prefix in that bucket and denies object and bucket reads everywhere else. Terraform does not create the Transform workspace. Keep `sandbox_role`, `upload_prefix`, and `sandbox_role_arn` on this machine. Do not commit them, and do not paste an account ID, role ARN, or bucket name into an issue. The deny-check script exits 0 when a read of a production bucket you already use is denied. Comment on [story 40](https://github.com/sknampally/reframe/issues/40) that the check passed.
 
-1. **Set up or continue.** Supply your source, private output directory, AWS profile,
-   region, bucket and provider. AWS profile has **no default**: enter it explicitly
-   (use `aws configure list-profiles` to find configured names). The CLI verifies
-   access and offers SSO login when required. Continuing a saved run reuses its
-   explicitly selected profile. For an existing project, choose **continue** or
-   **fresh**. Fresh uses a separate output parent; it never deletes the previous run.
-2. **Assess.** Confirm source upload and the new AWS assessment. The flow waits for
-   a bounded interval and resumes the saved job on your next `/flow`. Authentication,
-   connector activation or service blockers can still require action; this is not a
-   guarantee of unattended AWS completion.
-3. **Review assessment.** Inspect the saved assessment report, then explicitly record
-   approval and confirm that the findings match your source. Answer **no** to pause.
-4. **Choose preparation.** Select **draft** to skip independent Claude verification,
-   record the accountable owner and reason, and choose Claude or Codex for design
-   generation. Or select **verify** to run the executor/reviewer within the saved
-   budget; unresolved decisions and review gates remain enforced.
-5. **Collect outputs.** The draft route generates HTML wireframes, proposed API and
-   design specifications, and an AI-DLC draft ZIP in one operation. Use `/privacy`
-   then `/artifacts` to see local report and package paths. Review the draft with
-   the SME, architect, business owner and technical lead before engineering use.
+`reframe init` then asks for the private workspace, source, profile, region, and bucket:
 
-**Skipping verification does not approve the design.** Draft findings are marked
-AWS-assumed, independent verification is skipped, stakeholder decisions remain pending,
-and acceptance tests are NOT RUN. A design-generation Claude call is distinct from
-executor/reviewer verification. No application or infrastructure is built.
+- Put the workspace outside this repository.
+- Use the same profile and region as the Terraform apply. The profile has no default; `aws configure list-profiles` lists the names.
+- Give the bucket name from `upload_prefix`, and answer **no** when asked to create the bucket.
+- Leave the workspace and connector IDs empty to create them.
+- Answer **no** when asked whether an administrator has already activated the connector.
+
+Init sets `transform.upload_prefix` to `s3://<bucket>/reframe` and can store `transform.workspace_id`. It does not start an assessment. In the private workspace `project.json`, set `settings.transform.sandbox_role` to the `sandbox_role` output. That value is the role name. Then activate the connector:
+
+```bash
+reframe --workspace /path/to/private-workspace setup \
+  --role-arn "$(terraform -chdir=infrastructure output -raw sandbox_role_arn)" \
+  --connector-approved "Your name"
+```
+
+The workspace path is the folder `init` printed. `~/.config/mainframe-modernize/active.json` also points at it.
+
+A new assessment reads `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`. It stops before any AWS call when one of them is empty.
+
+```bash
+reframe assess
+```
+
+Confirm the upload when asked. That is the first time a job starts. `reframe status` and `reframe resume` continue it. `reframe`, then **1 — Guided start / continue** or `/flow`, continues a saved run. Fresh uses a separate output parent and does not delete the previous run. Authentication, connector activation, or a service task can still require action. The flow does not promise an unattended AWS completion. The [sandbox notes](infrastructure/README.md) and the [CLI guide](docs/cli-guide.md) are the detailed references.
+
+1. **Review the assessment.** Inspect the saved assessment report, then explicitly record approval and confirm that the findings match the source. Answer **no** to pause.
+2. **Choose preparation.** Select **draft** to skip independent Claude verification, record the accountable owner and reason, and choose Claude or Codex for design generation. Or select **verify** to run the executor and reviewer within the saved budget. Unresolved decisions and review gates remain enforced.
+3. **Collect the handoff.** The draft route generates HTML wireframes, proposed API and design specifications, and an AI-DLC draft ZIP. Use `/privacy` and then `/artifacts` to see the local report and package paths. Review the draft with the SME, architect, business owner, and technical lead before engineering use.
+
+**Skipping verification does not approve the design.** Draft findings are marked AWS-assumed, independent verification is skipped, stakeholder decisions remain pending, and acceptance tests are NOT RUN. A design-generation model call is distinct from executor and reviewer verification. No target application is built.
 
 All outputs stay in a private `<repository>_assessment` folder under your chosen parent:
 
@@ -99,7 +103,7 @@ available for scripts. See the [terminal guide](docs/terminal-console.md).
 
 ## Why this framework exists
 
-Generated documentation is useful input, but it does not prove business behavior. A credible modernization must connect source evidence to validated requirements, implementation, and measured equivalence. This framework defines that chain and the decisions people must retain.
+Generated documentation is useful input, but it does not prove business behavior. Reframe connects pinned source to an assessment, reviewed wireframes, and an AI-DLC package a later team can deploy. People keep the approval decisions.
 
 ## Evidence and capability status
 
@@ -133,7 +137,7 @@ implementation/equivalence stages beyond this preparation POC.
 
 ## Next: prove the CardDemo journey
 
-1. Configure private AWS/Transform access and confirm the selected S3 bucket, workspace and connector. The CLI setup must pass before starting assessment jobs.
+1. Apply the sandbox in [infrastructure](infrastructure/README.md), confirm the production deny check, and run `reframe init` against that bucket. A new assessment stops until `workspace_id`, `upload_prefix`, and `sandbox_role` are set.
 2. Pin one CardDemo commit and the sign-on scope. Run two independent assessments with matching inputs and recorded human task choices; preserve both snapshots.
 3. Compare run A and run B, inspect material differences against source, and approve the baseline for validation. More findings do not automatically mean better findings.
 4. Run the Sonnet executor and Opus reviewer. Resolve or explicitly defer SME questions and approve the validated specifications.
@@ -226,12 +230,25 @@ reframe/
 │   └── carddemo/
 │       ├── README.md
 │       └── synthetic-example.md
+├── infrastructure/                 # Sandbox bucket and deny-scoped role
+│   ├── README.md
+│   ├── main.tf
+│   ├── outputs.tf
+│   ├── variables.tf
+│   ├── versions.tf
+│   └── deny-check.sh
 ├── scripts/
 │   ├── pilot.py
 │   ├── kiro_workflow.py
-│   ├── modernize_terminal.py
+│   ├── modernize.py                  # reframe command implementation
 │   ├── modernize_setup.py
-│   ├── modernize.py
+│   ├── modernize_flow.py
+│   ├── modernize_terminal.py
+│   ├── modernize_workspace.py
+│   ├── modernize_checkpoints.py
+│   ├── modernize_preview.py
+│   ├── modernize_contracts.py
+│   ├── modernize_source.py
 │   ├── modernize_models.py
 │   └── modernize_artifacts.py
 ├── tests/
@@ -252,6 +269,8 @@ reframe/
     ├── terminal-console.md
     ├── engineer-setup.md
     ├── cli-guide.md
+    ├── four-phase-workflow.md
+    ├── live-assessment-readiness.md
     ├── assessment-comparison.md
     ├── kiro-automation.md
     ├── limitations.md
@@ -267,6 +286,7 @@ Installed `skills/` and `docs/lessons-learned.md` remain future additions; they 
 | [agents](agents/orchestrator.md) | Bounded role instructions |
 | [prompts](prompts/README.md) | Stable role instructions consuming one task manifest |
 | [reframe CLI](docs/cli-guide.md) | Four-phase setup, assessment, validation, HTML and packaging |
+| [sandbox](infrastructure/README.md) | Private bucket, `reframe/` prefix, and the role that denies other reads |
 | [assessment comparison](docs/assessment-comparison.md) | Controlled two-run experiment and its limits |
 | [Kiro automation](docs/kiro-automation.md) | Legacy single-rule adapter diagnostics |
 | [pilot runner](docs/running-a-pilot.md) | Manual diagnostic operations and record-integrity checks |
