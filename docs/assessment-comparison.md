@@ -17,7 +17,7 @@ one run is correct because it produced more rules.
    service receipts and the exact downloaded findings. AWS may change its underlying
    implementation; record timestamps and available version metadata rather than
    claiming the service version is controlled.
-4. Use `modernize compare` for the content diff. JSON key order and trailing text
+4. Use `reframe compare` for the content diff. JSON key order and trailing text
    whitespace are normalized; meaningful values, IDs and source anchors are not
    silently removed. Generated names/IDs may still produce noise. Recorded settings
    mismatches are surfaced. Equality is equality of collected outputs only.

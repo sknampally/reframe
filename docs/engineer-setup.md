@@ -3,7 +3,7 @@
 For first installation, updates and troubleshooting on Mac or Windows/WSL2, follow
 [the platform installation guide](platform-install.md). Every install command includes the required trailing dot.
 
-Prepare this workstation once, then use `modernize init` for project setup. The POC
+Prepare this workstation once, then use `reframe init` for project setup. The POC
 currently supports macOS and Linux; native Windows execution is not supported.
 Use your organization's approved software distribution and authentication methods.
 The commands below are alternatives when direct vendor installation is permitted.
@@ -61,8 +61,8 @@ and [Python installation](https://docs.astral.sh/uv/guides/install-python/).
 On macOS, download and install the vendor package:
 
 ```bash
-curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "/tmp/modernize-AWSCLIV2.pkg"
-sudo installer -pkg /tmp/modernize-AWSCLIV2.pkg -target /
+curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "/tmp/reframe-AWSCLIV2.pkg"
+sudo installer -pkg /tmp/reframe-AWSCLIV2.pkg -target /
 aws --version
 ```
 
@@ -73,7 +73,7 @@ The same guide covers macOS installation without administrator privileges. Confi
 
 ## 3. Configure an AWS profile and sign in
 
-Guided `modernize init` can perform this step with you. After you select the profile
+Guided `reframe init` can perform this step with you. After you select the profile
 and region, it checks access. For an expired/missing SSO session it offers to run
 `aws sso login` for that exact profile, waits for the AWS browser flow and verifies
 identity access again before continuing. If no SSO configuration is detected, it
@@ -94,7 +94,7 @@ aws sts get-caller-identity --profile modernization-poc
 ```
 
 Choose a permitted AWS workload region and enter the profile name `modernization-poc`
-when `modernize init` asks. The profile name is illustrative; reuse an existing
+when `reframe init` asks. The profile name is illustrative; reuse an existing
 approved profile if available. After a session expires, rerun `aws sso login`.
 
 Keep identity output private. Do not paste access keys into the framework, commit
@@ -141,7 +141,7 @@ codex login status
 ```
 
 Do not install a second copy if your managed installation already exposes `codex`.
-Alternatively select Claude for HTML in `modernize init`; that path needs no Codex CLI.
+Alternatively select Claude for HTML in `reframe init`; that path needs no Codex CLI.
 
 ### Kiro — optional executor
 
@@ -189,18 +189,18 @@ command -v codex kiro-cli
 Clone the framework, then install its CLI in an isolated uv tool environment:
 
 ```bash
-git clone https://github.com/sknampally/mainframe-modernization-agentic-framework.git
-cd mainframe-modernization-agentic-framework
+git clone https://github.com/sknampally/reframe.git
+cd reframe
 uv tool install --force --python 3.12 --editable .
-modernize --help
-modernize
+reframe --help
+reframe
 ```
 
 Keep this editable checkout available and clean. The [terminal console](terminal-console.md) opens a menu; choose setup or type `/init`. `init` asks for source location,
 scope, private output workspace, AWS profile/region/bucket and runtime choices. It
 checks the relevant CLIs and logins, offers AWS resource setup and suggests the next
 command. If a prerequisite is missing, follow the reported installation/login hint
-and rerun `modernize init`; saved evidence is retained.
+and rerun `reframe init`; saved evidence is retained.
 
 For new AWS assessments, the framework starts the official Transform MCP server
 through uvx. First use may download the server; approved network/proxy access is
@@ -214,8 +214,8 @@ for its supported authentication flow. It does not automatically create company 
 or bypass connector administrator activation.
 
 Do not create a dummy configuration file or paste tokens into the public repo when
-connection setup is incomplete. Resolve that connection, rerun `modernize init`, and
-continue only when its next step is `modernize assess`.
+connection setup is incomplete. Resolve that connection, rerun `reframe init`, and
+continue only when its next step is `reframe assess`.
 
 See the [execution guide](cli-guide.md) for assessment, comparison, approval,
 validation, HTML review and packaging. Installing tools is not a live workflow

@@ -3,14 +3,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mainframe-modernize-poc"
+name = "reframe"
 version = "0.3.0"
 description = "Evidence-driven modernization preparation CLI"
 requires-python = ">=3.10"
 dependencies = ["mcp>=2,<3", "rich>=13,<15", "prompt-toolkit>=3.0,<4"]
 
 [project.scripts]
-modernize = "modernize:main"
+reframe = "modernize:main"
 
 [tool.setuptools]
 py-modules = ["modernize_flow", "modernize_workspace", "modernize_checkpoints", "modernize_preview", "modernize_terminal", "modernize", "modernize_setup", "modernize_models", "modernize_artifacts", "modernize_source", "kiro_workflow", "pilot"]

@@ -1,6 +1,6 @@
 # Kiro automation: start once, return and resume
 
-> Legacy diagnostic interface. For the four-phase POC with explicit assessment approval, Claude Code review and HTML packaging, use the [modernize CLI](cli-guide.md).
+> Legacy diagnostic interface. For the four-phase POC with explicit assessment approval, Claude Code review and HTML packaging, use the [reframe CLI](cli-guide.md).
 
 **Implemented controller; live Kiro/AWS integration not yet verified.** Offline tests exercise separate roles, automatic handoff/rework, local/S3 import boundaries, and AWS create/wait/resume behavior with fixtures. They do not establish that a real Kiro session or AWS job succeeded.
 

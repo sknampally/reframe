@@ -1,6 +1,6 @@
 # Run one manifest-driven pilot
 
-> Legacy diagnostic interface. For the four-phase POC with explicit assessment approval, Claude Code review and HTML packaging, use the [modernize CLI](cli-guide.md).
+> Legacy diagnostic interface. For the four-phase POC with explicit assessment approval, Claude Code review and HTML packaging, use the [reframe CLI](cli-guide.md).
 
 Python 3.10+ and Git on macOS/Linux are required. The runner uses only the standard library. There is no model API, subscription integration, cloud adapter, or background service.
 

@@ -32,13 +32,13 @@ alone is insufficient. Setup checks the configured runtimes and offers resource 
 On macOS/Linux, or inside Ubuntu/WSL2 on Windows:
 
 ```bash
-git clone https://github.com/sknampally/mainframe-modernization-agentic-framework.git
-cd mainframe-modernization-agentic-framework
+git clone https://github.com/sknampally/reframe.git
+cd reframe
 uv tool install --force --managed-python --python 3.12 --editable .
-modernize
+reframe
 ```
 
-Choose **1 — Guided start / continue**, or launch it directly with `modernize flow`.
+Choose **1 — Guided start / continue**, or launch it directly with `reframe flow`.
 No custom prompts or manual command sequence are needed for the direct draft route.
 
 1. **Set up or continue.** Supply your source, private output directory, AWS profile,
@@ -79,7 +79,7 @@ All outputs stay in a private `<repository>_assessment` folder under your chosen
   reports/index.html            # report and package links
 ```
 
-Return with `modernize` → **1** or `/flow`. Reuse the same draft name to resume or
+Return with `reframe` → **1** or `/flow`. Reuse the same draft name to resume or
 verify/reuse an existing export; provider failures do not become approvals. Ctrl+C
 cancels the local wait, not an already-started AWS job. Saved evidence is preserved.
 The verified route may pause for SME decisions or budget changes; `/help` and
@@ -91,10 +91,10 @@ After pulling a merged update, reinstall dependencies from the repository direct
 git switch main
 git pull --ff-only
 uv tool install --force --managed-python --python 3.12 --editable .
-modernize
+reframe
 ```
 
-`modernize demo` is a simulated preview with no service calls. Existing commands remain
+`reframe demo` is a simulated preview with no service calls. Existing commands remain
 available for scripts. See the [terminal guide](docs/terminal-console.md).
 
 ## Why this framework exists
@@ -173,10 +173,10 @@ they are not the new four-phase interface.
 The current foundation contains the following files. The tree includes documentation and the initial controllers; code presence does not establish live-service acceptance.
 
 ```text
-mainframe-modernization-agentic-framework/
+reframe/
 ├── README.md
-├── modernize                         # Repository-local entry point
-├── pyproject.toml                    # Installable modernize command
+├── reframe                         # Repository-local entry point
+├── pyproject.toml                    # Installable reframe command
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -266,7 +266,7 @@ Installed `skills/` and `docs/lessons-learned.md` remain future additions; they 
 | [methodology](methodology/modernization.md) | Discovery through cutover and rollback |
 | [agents](agents/orchestrator.md) | Bounded role instructions |
 | [prompts](prompts/README.md) | Stable role instructions consuming one task manifest |
-| [modernize CLI](docs/cli-guide.md) | Four-phase setup, assessment, validation, HTML and packaging |
+| [reframe CLI](docs/cli-guide.md) | Four-phase setup, assessment, validation, HTML and packaging |
 | [assessment comparison](docs/assessment-comparison.md) | Controlled two-run experiment and its limits |
 | [Kiro automation](docs/kiro-automation.md) | Legacy single-rule adapter diagnostics |
 | [pilot runner](docs/running-a-pilot.md) | Manual diagnostic operations and record-integrity checks |

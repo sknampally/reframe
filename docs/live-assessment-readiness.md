@@ -43,7 +43,7 @@ subsequent preparation phase and its SME/architect review.
 
 The CLI can create the selected private bucket, workspace and connector after
 authorization. An administrator must provide or activate the connector's IAM role.
-For scripted activation, use `modernize setup --role-arn <approved-role-arn>` and
+For scripted activation, use `reframe setup --role-arn <approved-role-arn>` and
 `--connector-approved <administrator-name>` for the selected private workspace.
 The CLI verifies AWS readiness rather than trusting the administrator's name alone.
 It does not manufacture a trust policy by copying another customer's role.

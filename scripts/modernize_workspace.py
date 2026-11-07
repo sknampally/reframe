@@ -137,4 +137,4 @@ def relocate(work, project, parent, app):
     try: shutil.rmtree(work)
     except OSError as error: cleanup_error = str(error)
     return {'cleanup_pending':str(work) if cleanup_error else None, 'status':'WORKSPACE_RELOCATED','workspace':str(target),'reports':str(target/'reports/index.html'),
-            'verified_files':len(files),'next_step':'Use modernize status; the existing run and approvals are preserved.'}
+            'verified_files':len(files),'next_step':'Use reframe status; the existing run and approvals are preserved.'}
