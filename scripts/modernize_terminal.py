@@ -245,7 +245,7 @@ class Terminal:
         while True:
             try:
                 mode='preview' if self.demo else 'workspace'
-                line=self.session.prompt([('ansicyan bold','modernize'),('',' · '+mode+' › ')])
+                line=self.session.prompt([('ansicyan bold','reframe'),('',' · '+mode+' › ')])
                 if not self.dispatch(line):break
             except KeyboardInterrupt:
                 self.say('Action cancelled. Saved work remains available; /flow can continue interrupted work.','yellow')
@@ -260,6 +260,6 @@ class Terminal:
 
 def launch(demo=False, initial=None):
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        print('The terminal console needs an interactive terminal. Use modernize --help for scriptable commands.',file=sys.stderr)
+        print('The terminal console needs an interactive terminal. Use reframe --help for scriptable commands.',file=sys.stderr)
         return 2
     return Terminal(demo=demo).run(initial)

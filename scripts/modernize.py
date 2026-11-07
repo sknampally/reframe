@@ -244,7 +244,7 @@ def assessment_scope(work, project, args):
     project['scope'] = scope
     persist(work, project)
     return {'status': 'SCOPE_RECORDED', 'label': label, 'scope': scope,
-            'next_step': 'modernize tasks; existing AWS task selections still require reconciliation with this recorded scope.'}
+            'next_step': 'reframe tasks; existing AWS task selections still require reconciliation with this recorded scope.'}
 
 
 def assessment_tasks(work, project, args, client=None):
@@ -344,7 +344,7 @@ def assessment_tasks(work, project, args, client=None):
                 record['continuation'] = 'SUBMITTED_UNCHANGED'
         records.append(record)
     return {'label': label, 'status': 'TASKS_INSPECTED', 'tasks': records,
-            'next_step': 'modernize resume; final assessment approval is still required before validation.' if (getattr(args, 'continue_code_analysis', False) or getattr(args, 'configure_documentation', False))
+            'next_step': 'reframe resume; final assessment approval is still required before validation.' if (getattr(args, 'continue_code_analysis', False) or getattr(args, 'configure_documentation', False))
                          else 'Assessment task inspection is read-only; no task or phase approval was submitted.'}
 
 
@@ -384,7 +384,7 @@ def upgrade_framework(work, project, args):
         write(path, run)
     update(project)
     persist(work, project)
-    return {'status':'FRAMEWORK_UPDATED', 'revision':current, 'next_step':'modernize resume'}
+    return {'status':'FRAMEWORK_UPDATED', 'revision':current, 'next_step':'reframe resume'}
 
 
 def assessment(work, project, args, client=None):
@@ -579,7 +579,7 @@ def assessment_report(work, project, args):
     target = directory / 'assessment-review.html'
     target.write_text(page); target.chmod(0o600)
     return {'status':'ASSESSMENT_REVIEW_READY', 'report':str(target), 'label':label,
-            'next_step':'Review the evidence, then modernize approve assessment; this report grants no approval.'}
+            'next_step':'Review the evidence, then reframe approve assessment; this report grants no approval.'}
 
 
 def approved(project, phase, fingerprint):
@@ -705,7 +705,7 @@ def recover_provider_request(work, project, args):
     project['stage'] = 'RUNNING_' + project['pipeline']['role'].upper()
     persist(work,project)
     return {'status':'REVISED_REQUEST_READY','calls_consumed':project['pipeline']['calls'],
-            'next_step':'modernize resume; new provider refusals still stop automatically'}
+            'next_step':'reframe resume; new provider refusals still stop automatically'}
 
 
 def set_model_budget(work, project, args):
@@ -724,7 +724,7 @@ def set_model_budget(work, project, args):
         project['stage']='RUNNING_' + state['role'].upper()
     persist(work,project)
     return {'status':'MODEL_BUDGET_RECORDED','total_cap':args.max_calls,'calls_consumed':consumed,
-            'next_step':'modernize resume'}
+            'next_step':'reframe resume'}
 
 
 def assessment_catalog(run):
@@ -828,7 +828,7 @@ def preparation_plan(work, project, args):
             'calls_remaining':max(0, project['settings']['max_model_calls']-consumed),
             'reviewed_units':len(capsules), 'opaque_segments':sum(bool(p.get('opaque')) for u in plan['units'] for p in u['segments']),
             'plan':str(path), 'html':str(report), 'note':plan['estimate_note'],
-            'next_step':'Review the plan and budget before modernize validate; no model calls were made.'}
+            'next_step':'Review the plan and budget before reframe validate; no model calls were made.'}
 
 
 def pipeline(work, project, args, runtime=model_call):
@@ -1229,7 +1229,7 @@ def semantic_compare(work, project, args, runtime=model_call):
 
 
 def parser():
-    p = argparse.ArgumentParser(description=__doc__, epilog='Terminal application: modernize | modernize ui | modernize demo')
+    p = argparse.ArgumentParser(prog='reframe', description=__doc__, epilog='Terminal application: reframe | reframe ui | reframe demo')
     p.add_argument('--workspace', help='Private workspace outside the framework and source checkout')
     commands = p.add_subparsers(dest='command', required=True)
     init = commands.add_parser('init', help='Pin GitHub/local source and save private settings')
@@ -1457,7 +1457,7 @@ def main(argv=None, reporter=None):
         return 2 if result.get('status') in {'BLOCKED', 'REWORK_LIMIT', 'ASSESSMENT_FAILED', 'NEEDS_RECONCILIATION'} else 0
     except KeyboardInterrupt:
         result = {'status': 'CANCELLED', 'reason': 'Cancelled by user. Saved work is retained.',
-                  'next_step': 'modernize init' if args.command == 'init' else 'modernize status'}
+                  'next_step': 'reframe init' if args.command == 'init' else 'reframe status'}
         if args.command in {'assess', 'resume'}:
             result['reason'] += ' An existing AWS job may continue; check status before resuming.'
         emit(result)

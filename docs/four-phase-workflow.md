@@ -19,11 +19,11 @@ remain unapproved. Unknown task contracts and execution failures stop with priva
 diagnostics rather than silently inventing a response.
 
 ```sh
-modernize init --workspace /private/project --source s3://your-private-bucket/source.zip \
+reframe init --workspace /private/project --source s3://your-private-bucket/source.zip \
   --scope 'Assess the entire uploaded repository' --aws-profile your-profile --region us-east-1
-modernize setup --attach-workspace YOUR_WORKSPACE --attach-connector YOUR_CONNECTOR \
+reframe setup --attach-workspace YOUR_WORKSPACE --attach-connector YOUR_CONNECTOR \
   --connector-approved 'Assessment owner'
-modernize assess --allow-new-assessment --wait
+reframe assess --allow-new-assessment --wait
 ```
 
 AWS access and connector activation must be configured before starting the job.
@@ -33,8 +33,8 @@ limit is 100 MB. ZIP traversal, symlinks, hidden metadata and encrypted members 
 rejected. The owner reviews completed findings and provenance before:
 
 ```sh
-modernize approve assessment --by 'Assessment owner' --note 'Reviewed findings and scope' --confirm-source-match
-modernize resume
+reframe approve assessment --by 'Assessment owner' --note 'Reviewed findings and scope' --confirm-source-match
+reframe resume
 ```
 
 ## 2. Prepare and challenge
@@ -46,9 +46,9 @@ open questions and the independent review. SME decisions regenerate the report.
 Approval binds to the specification, decisions and exact report bytes.
 
 ```sh
-modernize decide --question QUESTION_ID --by 'SME' --answer 'Recorded decision' --disposition resolved
-modernize approve validation --by 'SME and architect owner' --note 'Reviewed report and decisions'
-modernize resume
+reframe decide --question QUESTION_ID --by 'SME' --answer 'Recorded decision' --disposition resolved
+reframe approve validation --by 'SME and architect owner' --note 'Reviewed report and decisions'
+reframe resume
 ```
 
 ## 3. Business review
@@ -60,8 +60,8 @@ Business, architecture and technical-lead decisions belong in the approval recor
 feedback invalidates downstream approvals and starts a revision.
 
 ```sh
-modernize approve specifications --by 'Business review owner' --note 'Business, architect and technical lead review recorded'
-modernize resume
+reframe approve specifications --by 'Business review owner' --note 'Business, architect and technical lead review recorded'
+reframe resume
 ```
 
 ## 4. Engineering handoff

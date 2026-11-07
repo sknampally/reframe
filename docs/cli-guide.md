@@ -3,7 +3,7 @@
 For first installation, updates and troubleshooting on Mac or Windows/WSL2, follow
 [the platform installation guide](platform-install.md). Every install command includes the required trailing dot.
 
-The `modernize` entry point prepares a reviewed implementation package. It does not
+The `reframe` entry point prepares a reviewed implementation package. It does not
 build a target application, deploy infrastructure for that application, migrate data,
 or prove behavioral equivalence. AWS assessment resources are the only cloud
 resources this CLI can create.
@@ -19,8 +19,8 @@ checks. A manually recovered cloud run is not a CLI-only acceptance result.
 
 ## Start here: guided CLI
 
-Prefer a menu interface? Launch `modernize` for the [Reframe terminal console](terminal-console.md).
-Use `modernize demo` for a clearly labeled, service-free presentation preview.
+Prefer a menu interface? Launch `reframe` for the [Reframe terminal console](terminal-console.md).
+Use `reframe demo` for a clearly labeled, service-free presentation preview.
 
 First install the required tools and configure your AWS profile using the
 [engineer workstation guide](engineer-setup.md). It includes uv/Python, AWS CLI v2,
@@ -30,7 +30,7 @@ Install once from a clean checkout with Python 3.10+ and uv available:
 
 ```bash
 uv tool install --force --python 3.12 --editable .
-modernize init
+reframe init
 ```
 
 If the command is not found, ensure uv's tool executable directory is on PATH
@@ -59,9 +59,9 @@ normal setup. An advanced file option accepts only a path to authentication argu
 never an `mcpServers` client configuration. The guide then offers existing or new AWS resources. It asks for confirmation before creating resources.
 It presents the connector activation link, requires the operator's confirmation
 and verifies that AWS reports the connector ACTIVE in the selected account,
-and suggests `modernize assess` only when setup is ready. Administrator activation
+and suggests `reframe assess` only when setup is ready. Administrator activation
 and Transform application authentication remain real boundaries. No assessment job
-starts during `init`. Rerun `modernize init` to continue incomplete setup without
+starts during `init`. Rerun `reframe init` to continue incomplete setup without
 recloning source or deleting evidence. If the framework was updated before any
 assessment/approval exists, setup can explicitly confirm a new framework baseline
 while keeping the pinned source unchanged. Existing assessment baselines are never
@@ -70,15 +70,15 @@ repinned.
 Normal commands now reuse the saved active workspace:
 
 ```bash
-modernize assess --source <same-github-url-or-local-path>
-modernize status
-modernize resume
-modernize approve assessment
-modernize validate --reviewer claude-code
-modernize approve validation
-modernize review-site --provider codex
-modernize approve specifications
-modernize package
+reframe assess --source <same-github-url-or-local-path>
+reframe status
+reframe resume
+reframe approve assessment
+reframe validate --reviewer claude-code
+reframe approve validation
+reframe review-site --provider codex
+reframe approve specifications
+reframe package
 ```
 
 The `--source` on assess is optional and must match the pinned setup; a different
@@ -101,8 +101,8 @@ no generated findings. Source submissions retain intent and receipts; uncertain
 outcomes require reconciliation. Non-blocking collaborator invitations remain
 untouched and do not prevent polling. Other blocking tasks require human input.
 
-For the experiment, use `modernize assess` twice after the first completes, then
-`modernize compare --left run-1 --right run-2`. Optional `--label` still selects names.
+For the experiment, use `reframe assess` twice after the first completes, then
+`reframe compare --left run-1 --right run-2`. Optional `--label` still selects names.
 `--workspace /private/path` overrides the active selection. A private pointer is stored
 at `~/.config/mainframe-modernize/active.json`; project settings remain in the chosen
 workspace. The CLI outputs the next recommended step, while missing access or evidence
@@ -115,7 +115,7 @@ For unattended use, supply the explicit flags below: new assessments require
 ## Advanced and scripted usage
 
 The examples below expose the underlying settings and phase commands for diagnostics
-and automation. Installed `modernize` already includes the MCP dependency; repeating
+and automation. Installed `reframe` already includes the MCP dependency; repeating
 `uv run --with ...` is unnecessary for normal use.
 
 ## Four phases
@@ -153,7 +153,7 @@ terminal, for example `aws sso login --profile <your-profile>` for a previously
 configured SSO profile. The framework does not collect passwords or store AWS keys.
 
 ```bash
-./modernize --workspace /path/to/private-poc init \
+./reframe --workspace /path/to/private-poc init \
   --source https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git \
   --ref <full-reviewed-source-commit> \
   --scope "CardDemo sign-on journey; exclude other application journeys" \
@@ -220,7 +220,7 @@ An administrator can approve there; alternatively `setup --role-arn <existing-ap
 calls the supported activation operation. Confirm readiness explicitly:
 
 ```bash
-./modernize --workspace /path/to/private-poc setup \
+./reframe --workspace /path/to/private-poc setup \
   --connector-approved "Named AWS administrator"
 ```
 
@@ -235,7 +235,7 @@ in AWS and attach the existing workspace/connector. Do not delete state to retry
 ```bash
 uv run --with 'mcp>=2,<3' python scripts/modernize.py \
   --workspace /path/to/private-poc assess --label run-a --allow-new-assessment --detach
-./modernize --workspace /path/to/private-poc status
+./reframe --workspace /path/to/private-poc status
 uv run --with 'mcp>=2,<3' python scripts/modernize.py \
   --workspace /path/to/private-poc resume --label run-a --detach
 ```
@@ -250,7 +250,7 @@ run name in the returned job. Required AWS human tasks remain explicit pause sta
 Existing findings bypass job creation and AWS setup:
 
 ```bash
-./modernize --workspace /path/to/private-poc assess --label imported \
+./reframe --workspace /path/to/private-poc assess --label imported \
   --findings /path/to/existing-findings
 # Or --findings s3://your-private-location/findings/
 ```
@@ -267,7 +267,7 @@ Inspect the private assessment, source-upload manifest, scope/ingestion coverage
 service tasks before confirming:
 
 ```bash
-./modernize --workspace /path/to/private-poc approve assessment --label run-a \
+./reframe --workspace /path/to/private-poc approve assessment --label run-a \
   --by "Assessment owner" --note "Reviewed ingestion, scope and provenance" --confirm-source-match
 ```
 
@@ -281,7 +281,7 @@ installed versions; they are not an OS-level isolation guarantee. No cloud autho
 is delegated to model roles. Use approved provider accounts for your source data.
 
 ```bash
-./modernize --workspace /path/to/private-poc validate
+./reframe --workspace /path/to/private-poc validate
 ```
 
 The controller supplies reusable protocols, inventories and bounded evidence reads.
@@ -300,9 +300,9 @@ against alternatives, not assumed. Structural checks cannot guarantee completene
 Record each SME answer or explicit deferral:
 
 ```bash
-./modernize --workspace /path/to/private-poc decide --question <question-id> \
+./reframe --workspace /path/to/private-poc decide --question <question-id> \
   --by "Business SME" --answer "Decision and rationale" --disposition resolved
-./modernize --workspace /path/to/private-poc approve validation \
+./reframe --workspace /path/to/private-poc approve validation \
   --by "Accountable architect" --note "Reviewed evidence, decisions and excluded scope"
 ```
 
@@ -314,7 +314,7 @@ so the change is incorporated before approval.
 ## 5. Business review and revision
 
 ```bash
-./modernize --workspace /path/to/private-poc review-site --provider codex
+./reframe --workspace /path/to/private-poc review-site --provider codex
 # Or --provider claude
 ```
 
@@ -325,9 +325,9 @@ fields/actions are disabled, all model content is escaped, no external assets or
 JavaScript are loaded. It is not an interactive backend simulation.
 
 ```bash
-./modernize --workspace /path/to/private-poc feedback \
+./reframe --workspace /path/to/private-poc feedback \
   --by "Business owner" --note "Describe the required change"
-./modernize --workspace /path/to/private-poc validate
+./reframe --workspace /path/to/private-poc validate
 ```
 
 Feedback preserves previous files, creates a new candidate round and invalidates
@@ -336,7 +336,7 @@ regenerate the site. Rework and explicit feedback share the saved round/call lim
 To approve an unchanged site:
 
 ```bash
-./modernize --workspace /path/to/private-poc approve specifications \
+./reframe --workspace /path/to/private-poc approve specifications \
   --by "Business owner" --note "Reviewed the exact HTML version and scope"
 ```
 
@@ -347,7 +347,7 @@ someone deliberately rewriting the private state files.
 ## 6. Package for implementation
 
 ```bash
-./modernize --workspace /path/to/private-poc package
+./reframe --workspace /path/to/private-poc package
 ```
 
 The private ZIP contains specifications, rule/test traceability, decisions, approvals,
@@ -363,8 +363,8 @@ assessment with `--label run-b` using the unchanged checkout/configuration. See 
 [repeatability protocol](assessment-comparison.md). Neither run overwrites the other.
 
 ```bash
-./modernize --workspace /path/to/private-poc compare --left run-a --right run-b
-./modernize --workspace /path/to/private-poc compare --left run-a --right run-b --semantic --provider claude
+./reframe --workspace /path/to/private-poc compare --left run-a --right run-b
+./reframe --workspace /path/to/private-poc compare --left run-a --right run-b --semantic --provider claude
 ```
 
 The first command emits a deterministic content diff and flags recorded configuration
@@ -403,8 +403,8 @@ Stop the local watcher before updating Reframe; the AWS job remains intact. From
 clean committed framework checkout, before a preparation candidate or downstream approval exists, run:
 
 ```bash
-modernize upgrade-framework --note "Describe the controller fix being applied"
-modernize resume --wait
+reframe upgrade-framework --note "Describe the controller fix being applied"
+reframe resume --wait
 ```
 
 This validates source integrity and records the old and new framework revisions in
@@ -425,7 +425,7 @@ not claimed as agent-readable evidence. Approval also checks original file hashe
 For an export larger than the default local byte limit, explicitly increase it:
 
 ```bash
-modernize resume --max-assessment-bytes 100000000 --wait
+reframe resume --max-assessment-bytes 100000000 --wait
 ```
 
 The limit change is recorded. The maximum accepted value is 250000000 bytes;
@@ -435,7 +435,7 @@ not increase model context limits or approve any findings.
 After the assessment is sealed, generate a private review index:
 
 ```bash
-modernize assessment-report
+reframe assessment-report
 ```
 
 Open the returned `assessment-review.html` locally. It leads with missing-input and code-issue reports, then groups business rules,
@@ -468,7 +468,7 @@ The preparation protocol requests structured findings and source citations, not
 private reasoning, scratchpads or call plans. Historical free-form notes remain in
 private receipts but are not replayed to providers. After inspecting a recorded
 `reasoning_extraction` refusal and correcting the output contract, an authorized
-operator can record the review with `modernize recover-provider --receipt
+operator can record the review with `reframe recover-provider --receipt
 provider-N.json --by "Owner" --note "Reviewed correction"`, then resume. This keeps
 the original refusal, hashes the reviewed receipt and revised protocol, and retains
 approval and consumed calls. A refusal of the revised request stops again; this
@@ -479,8 +479,8 @@ command cannot repeatedly clear it. It does not disable provider safeguards.
 With the run owner's authorization, use:
 
 ```bash
-modernize model-budget --max-calls 64 --by "Run owner" --note "Approved additional assessment coverage"
-modernize resume
+reframe model-budget --max-calls 64 --by "Run owner" --note "Approved additional assessment coverage"
+reframe resume
 ```
 
 This sets the total cap, not an additional allowance. Consumed calls remain counted,
@@ -506,7 +506,7 @@ Three malformed replies stop that unit rather than spending the entire budget.
 Preview the workload without model or cloud calls:
 
 ```bash
-modernize prepare-plan
+reframe prepare-plan
 ```
 
 This saves a private JSON manifest and a human-readable `preparation-plan.html`.
@@ -520,7 +520,7 @@ whole repository. Do not keep increasing them without inspecting the plan.
 For an existing **stopped** legacy preparation attempt, explicitly migrate with:
 
 ```bash
-modernize prepare-plan --activate
+reframe prepare-plan --activate
 ```
 
 Migration archives the old pipeline state, retains provider receipts, drafts,
@@ -554,8 +554,8 @@ reconciliation. These reads remain attached to the unit and consume the same bud
 A blocked unit can receive owner-attributed feedback without reopening passed units:
 
 ```bash
-modernize feedback --unit U0001 --by "Run owner" --note "Clarification for the missing evidence"
-modernize resume
+reframe feedback --unit U0001 --by "Run owner" --note "Clarification for the missing evidence"
+reframe resume
 ```
 
 This remains bounded by the unit revision limit and total call cap. Feedback does
@@ -571,7 +571,7 @@ An engineer who trusts the completed AWS assessment can explicitly skip independ
 executor/reviewer validation for a preview:
 
 ```bash
-modernize preview --skip-validation --by "Assessment owner" --note "Accept AWS findings as assumptions for design review" --provider codex
+reframe preview --skip-validation --by "Assessment owner" --note "Accept AWS findings as assumptions for design review" --provider codex
 ```
 
 Use `--provider claude` to generate the same structured draft with Claude instead.
@@ -610,14 +610,14 @@ so private findings stay outside the public framework repository. An explicit
 The default scope is the entire supplied repository.
 
 ```bash
-modernize init --source https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git --output-parent "$HOME/workspace"
+reframe init --source https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git --output-parent "$HOME/workspace"
 ```
 
 The layout is:
 
 ```text
 workspace/
-  mainframe-modernization-agentic-framework/  # framework code only
+  reframe/  # framework code only
   aws-mainframe-modernization-carddemo_assessment/
     project.json                            # saved run and approval state
     source/                                 # managed source clone, if applicable
@@ -635,7 +635,7 @@ No output is copied into the public framework repository.
 Move an existing stopped workspace through the CLI:
 
 ```bash
-modernize --workspace /path/to/old-assessment relocate --output-parent "$HOME/workspace"
+reframe --workspace /path/to/old-assessment relocate --output-parent "$HOME/workspace"
 ```
 
 Relocation refuses existing destinations, active agents and symbolic links. It

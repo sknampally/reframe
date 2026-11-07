@@ -2,7 +2,7 @@
 
 ## Four-phase POC boundary
 
-The [modernize CLI](cli-guide.md) implements preparation through a versioned package.
+The [reframe CLI](cli-guide.md) implements preparation through a versioned package.
 Live AWS/Kiro/Claude Code/Codex acceptance remains pending. Fixture tests verify
 control flow, not the correctness/completeness of generated modernization content.
 Approval owners are local attestations, not enterprise authenticated signatures.

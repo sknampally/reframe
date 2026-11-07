@@ -30,9 +30,9 @@ class TerminalTests(unittest.TestCase):
         with patch('modernize_setup.workspace',side_effect=AssertionError('No real workspace read')):ui.dashboard()
     def test_result_privacy_masks_error_paths(self):
         ui=self.ui()
-        ui.report({'status':'BLOCKED','reason':'secret bucket/path','next_step':'modernize init'})
+        ui.report({'status':'BLOCKED','reason':'secret bucket/path','next_step':'reframe init'})
         self.assertNotIn('secret bucket/path',self.output.getvalue())
-        self.assertIn('modernize init',self.output.getvalue())
+        self.assertIn('reframe init',self.output.getvalue())
     def test_result_visibility_can_be_enabled(self):
         ui=self.ui();ui.private=False
         ui.report({'status':'BLOCKED','reason':'Example failure'})

@@ -30,7 +30,7 @@ class GuidedTests(unittest.TestCase):
         self.assertEqual(guide.workspace(),self.work.resolve())
         self.assertEqual(guide.active_file().stat().st_mode & 0o777,0o600)
     def test_missing_workspace_guides_to_init(self):
-        with self.assertRaisesRegex(Blocked,'modernize init'):guide.workspace()
+        with self.assertRaisesRegex(Blocked,'reframe init'):guide.workspace()
     def test_resume_never_creates_assessment(self):
         with self.assertRaisesRegex(Blocked,'No active'):guide.prepare_command(self.args('resume'),self.work,self.project)
         self.project['active_assessment']='run-1'
@@ -69,7 +69,7 @@ class GuidedTests(unittest.TestCase):
         with patch.object(sys.stdin,'isatty',return_value=True),patch('builtins.input',return_value=str(self.work)),patch.object(guide,'checks') as checks:
             result=guide.guided_init(self.args('init'))
         checks.assert_called_once()
-        self.assertEqual(result['next_step'],'modernize assess')
+        self.assertEqual(result['next_step'],'reframe assess')
     def test_new_wizard_saves_choices_and_exposes_incomplete_setup(self):
         project=dict(self.project,setup={},settings={'transform':{}})
         def initialize(args,work):
@@ -80,7 +80,7 @@ class GuidedTests(unittest.TestCase):
         with patch.object(sys.stdin,'isatty',return_value=True),patch('builtins.input',side_effect=answers),patch.object(app,'initialize',side_effect=initialize),patch.object(guide,'checks'),patch.object(guide,'ensure_aws_login'):
             result=guide.guided_init(self.args('init'))
         self.assertEqual(result['status'],'SETUP_INCOMPLETE')
-        self.assertEqual(result['next_step'],'modernize init')
+        self.assertEqual(result['next_step'],'reframe init')
         self.assertEqual(guide.workspace(),self.work.resolve())
 
     def test_resume_routes_interrupted_model_work_without_aws_calls(self):
@@ -108,7 +108,7 @@ class GuidedTests(unittest.TestCase):
             code=app.main(['init','--guided'],reporter=output.append)
         self.assertEqual(code,130)
         self.assertEqual(output[0]['status'],'CANCELLED')
-        self.assertEqual(output[0]['next_step'],'modernize init')
+        self.assertEqual(output[0]['next_step'],'reframe init')
         self.assertFalse((self.work/'project.json').exists())
 
     def test_ctrl_c_retains_pending_phase_and_consumed_budget(self):

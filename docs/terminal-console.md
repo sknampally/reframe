@@ -3,8 +3,7 @@
 For first installation, updates and troubleshooting on Mac or Windows/WSL2, follow
 [the platform installation guide](platform-install.md). Every install command includes the required trailing dot.
 
-**Reframe** is the product name; `modernize` remains the executable and scriptable
-command. The current POC prepares mainframe modernization specifications and a
+**Reframe** is the product name and the `reframe` command. The current POC prepares mainframe modernization specifications and a
 reviewed implementation package. It does not implement or deploy an application.
 
 ## Launch
@@ -13,10 +12,10 @@ From your clean framework checkout, install or refresh the editable tool:
 
 ```bash
 uv tool install --force --python 3.12 --editable .
-modernize
+reframe
 ```
 
-`modernize ui` opens the same console. `modernize init` in an interactive terminal
+`reframe ui` opens the same console. `reframe init` in an interactive terminal
 opens the console and starts guided setup. Explicit commands and redirected output
 retain the existing JSON/script interface. The console requires a TTY and macOS/Linux;
 it adapts to terminal width and does not require a web server.
@@ -63,7 +62,7 @@ behavior; `/status` refreshes saved state rather than independently polling AWS.
 ## Client presentation preview
 
 ```bash
-modernize demo
+reframe demo
 ```
 
 Preview is explicitly labeled **simulated data · no service calls**. `/next` illustrates
@@ -90,7 +89,7 @@ missing permissions, business decisions or source verification.
 
 ## Guided start / continue
 
-Choose menu **1** or `/flow` (also `modernize flow` from your shell). The guide
+Choose menu **1** or `/flow` (also `reframe flow` from your shell). The guide
 continues saved setup/assessment, pauses for explicit assessment review, and asks
 whether to generate an AWS-assumed draft or run independent verification.
 The draft route asks for an owner, reason, provider and export name, then produces

@@ -1,0 +1,18 @@
+---
+description: Every Reframe change starts from a story on the Reframe Backlog
+alwaysApply: true
+---
+
+# Reframe backlog
+
+The product and the command are `reframe`. Track work on the Reframe Backlog: https://github.com/users/sknampally/projects/1
+
+Before changing code:
+
+1. Use an open story on that project. The story has label `type:story` and a parent epic.
+2. If no story covers the change, add one and parent it to an epic. Add an epic labeled `type:epic` when none fits.
+3. Implement that story.
+4. Run the tests that cover the change and report the story link, the result, and anything not verified.
+5. Commit on a feature branch and open a pull request. Every change that reaches the repository goes through that pull request. The repository owner reviews and approves it. Do not push to main, and do not merge.
+
+Cursor agents implement stories in this repo. Claude and Codex are model providers the `reframe` command can call during a run. They do not implement the backlog.

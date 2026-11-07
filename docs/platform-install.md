@@ -36,10 +36,10 @@ Having an application installed does not necessarily expose its CLI on PATH.
 Clone into your chosen working folder and install Reframe:
 
 ```bash
-git clone https://github.com/sknampally/mainframe-modernization-agentic-framework.git
-cd mainframe-modernization-agentic-framework
+git clone https://github.com/sknampally/reframe.git
+cd reframe
 uv tool install --force --python 3.12 --editable .
-modernize
+reframe
 ```
 
 If the repository already exists, use the update instructions below instead of
@@ -86,10 +86,10 @@ Keep the checkout and private project directory in the Linux home filesystem:
 ```bash
 mkdir -p "$HOME/projects"
 cd "$HOME/projects"
-git clone https://github.com/sknampally/mainframe-modernization-agentic-framework.git
-cd mainframe-modernization-agentic-framework
+git clone https://github.com/sknampally/reframe.git
+cd reframe
 uv tool install --force --python 3.12 --editable .
-modernize
+reframe
 ```
 
 For example, a private project directory could be `~/modernization-poc/carddemo`;
@@ -102,7 +102,7 @@ path or Windows `C:\...` path into an Ubuntu setup prompt.
 uv tool install --force --python 3.12 --editable .
 ```
 
-- `uv tool install`: create an isolated tool environment and expose `modernize`.
+- `uv tool install`: create an isolated tool environment and expose `reframe`.
 - `--force`: replace the existing tool installation/executable registration.
 - `--python 3.12`: use the selected Python version for the tool environment.
 - `--editable .`: install the framework in the **current repository directory**.
@@ -120,7 +120,7 @@ Exit Reframe with `/exit`, then in Terminal change to your framework checkout:
 git status --short
 git pull --ff-only
 uv tool install --force --python 3.12 --editable .
-modernize
+reframe
 ```
 
 ## Updates on Windows / WSL2
@@ -128,11 +128,11 @@ modernize
 Exit Reframe, open **Ubuntu**, then change to your Linux framework checkout:
 
 ```bash
-cd "$HOME/projects/mainframe-modernization-agentic-framework"
+cd "$HOME/projects/reframe"
 git status --short
 git pull --ff-only
 uv tool install --force --python 3.12 --editable .
-modernize
+reframe
 ```
 
 Use your actual clone location if different. Apply updates from the normal main
@@ -151,13 +151,13 @@ to bypass this check.
 Run inside Mac Terminal or Ubuntu, as applicable:
 
 ```bash
-command -v git uv uvx aws claude modernize
+command -v git uv uvx aws claude reframe
 git --version
 uv --version
 aws --version
 claude --version
 claude auth status
-modernize --help
+reframe --help
 ```
 
 When Codex is selected:
@@ -182,7 +182,7 @@ for the default Claude executor/reviewer pair.
 
 ## Guided AWS login and next steps
 
-Launch `modernize` and choose **1** or `/init`. Enter your existing AWS profile name
+Launch `reframe` and choose **1** or `/init`. Enter your existing AWS profile name
 and region. Reframe checks identity access; if the SSO session needs refreshing, it
 offers to launch AWS's login flow and verifies access again afterward. Missing SSO
 configuration gets a separate configuration choice. Manual fallback, in the same shell:
@@ -199,7 +199,7 @@ AWS login does not prove Transform application connection or connector authoriza
 `init` guides those separately and stops until requirements are satisfied.
 
 Once setup reports readiness, `/assess` is the next step. For a service-free interface
-walkthrough use `modernize demo`. WSL setup is documented, not a claim that the live
+walkthrough use `reframe demo`. WSL setup is documented, not a claim that the live
 CardDemo/AWS workflow has been verified on Windows.
 
 ## Common errors
@@ -208,7 +208,7 @@ CardDemo/AWS workflow has been verified on Windows.
 | --- | --- |
 | `<PACKAGE>` missing | Run the full install command including the final `.` |
 | `ModuleNotFoundError: rich` or `prompt_toolkit` | From the updated framework checkout, rerun the full installation command |
-| `modernize: command not found` | Run `uv tool update-shell`, reopen the terminal and check PATH |
+| `reframe: command not found` | Run `uv tool update-shell`, reopen the terminal and check PATH |
 | `Install missing tools: codex` | Install the Codex CLI in the same terminal environment, then verify version/login |
 | AWS authentication unavailable | Complete the offered SSO login; check that the selected profile exists in this environment |
 | Native Windows `fcntl`/process error | Use the Ubuntu/WSL2 instructions; native Windows runtime is not supported |
