@@ -74,7 +74,7 @@ class Terminal:
 
     def header(self):
         content = Text('REFRAME\n', style='bold bright_cyan')
-        content.append('From legacy source to a reviewed modernization plan\n',style='bold white')
+        content.append('Assess pinned source, build wireframes, and package an AI-DLC handoff\n',style='bold white')
         content.append('Assess  →  Validate  →  Business review  →  Package',style='dim')
         self.console.print(Panel(content, border_style='cyan', padding=(1,2),
             subtitle='PREVIEW · simulated data · no service calls' if self.demo else 'LIVE WORKSPACE · explicit human gates'))
@@ -83,7 +83,7 @@ class Terminal:
         self.header()
         project = self.project()
         if not project:
-            self.console.print(Panel('Start a guided setup to connect source, AWS access and agent runtimes.\nChoose 1 or type /flow. Installation help: /guide setup', title='Welcome',border_style='blue'))
+            self.console.print(Panel('Choose 1. If setup is not finished, Reframe creates the sandbox, checks the production deny, and connects Transform.\nNo assessment starts until you confirm an upload. Installation help: /guide setup', title='Welcome',border_style='blue'))
         else:
             stage = project.get('stage','UNKNOWN')
             self.say('Current state  '+stage.replace('_',' '),'bold yellow')

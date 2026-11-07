@@ -56,12 +56,7 @@ region from the saved AWS profile when available. The Transform application prof
 name is separate from the AWS CLI profile. Connection is rechecked before resource
 questions appear. No MCP client JSON or manual configuration file is needed for
 normal setup. An advanced file option accepts only a path to authentication arguments,
-never an `mcpServers` client configuration. The guide then offers existing or new AWS resources. It asks for confirmation before creating resources.
-It presents the connector activation link, requires the operator's confirmation
-and verifies that AWS reports the connector ACTIVE in the selected account,
-and suggests `reframe assess` only when setup is ready. Administrator activation
-and Transform application authentication remain real boundaries. No assessment job
-starts during `init`. Rerun `reframe init` to continue incomplete setup without
+never an `mcpServers` client configuration. When the sandbox settings are missing, guided start runs `terraform init` and `terraform apply` in `infrastructure/` with Terraform 1.5 or newer. It uses the bucket and role that apply creates, asks for a production bucket, and stops if that read is not denied. It then creates the Transform workspace and connector and activates the connector with the sandbox role. Terraform older than 1.5 stops before apply. No assessment job starts during `init`. Rerun `reframe init` to continue incomplete setup without
 recloning source or deleting evidence. If the framework was updated before any
 assessment/approval exists, setup can explicitly confirm a new framework baseline
 while keeping the pinned source unchanged. Existing assessment baselines are never
@@ -206,7 +201,7 @@ Use `--transform-workspace <id>` during init or `setup --attach-workspace <id>` 
 a workspace. Use `setup --attach-connector <id>` to reuse a connector. These private
 identifiers must never go into the framework repository.
 
-A new AWS assessment reads three private settings: `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`. The CLI refuses to start that assessment when any of them is empty, before it calls AWS. Init with a bucket sets the upload path to `s3://<bucket>/reframe`. The `infrastructure/` stack creates the sandbox bucket and the role that allows that same `reframe/` prefix and denies object and bucket reads outside that bucket. After you apply it, assume that role and list a production mainframe bucket you already use. Access denied is the expected result. Comment on story 40 that the deny check passed. Do not commit the account ID, the role ARN, or the bucket name.
+A new AWS assessment reads three private settings: `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`. The CLI refuses to start that assessment when any of them is empty, before it calls AWS. Guided start sets the upload path to `s3://<bucket>/reframe` from the sandbox it creates. The role allows that prefix and denies object and bucket reads outside that bucket. Comment on story 40 that the production deny check passed. Do not commit the account ID, the role ARN, or the bucket name.
 
 **AWS login is not necessarily a Transform application connection.** The official
 MCP `configure` operation supports its own authentication flow. If it is not already

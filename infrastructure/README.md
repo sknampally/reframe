@@ -12,7 +12,7 @@ The CLI reads these settings and refuses to start a new AWS assessment when any 
 
 ## Apply
 
-Configure an AWS CLI profile in your terminal, then run:
+Guided start runs this apply when the sandbox settings are empty. To run it yourself, configure an AWS CLI profile in your terminal, then run:
 
 ```bash
 export AWS_PROFILE=your-sandbox-profile
