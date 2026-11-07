@@ -206,7 +206,7 @@ Use `--transform-workspace <id>` during init or `setup --attach-workspace <id>` 
 a workspace. Use `setup --attach-connector <id>` to reuse a connector. These private
 identifiers must never go into the framework repository.
 
-A new AWS assessment reads three private settings: `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`. The CLI refuses to start that assessment when any of them is empty, before it calls AWS. The `infrastructure/` stack creates the sandbox bucket and the role that denies object and bucket reads outside that bucket. After you apply it, assume that role and list a production mainframe bucket you already use. Access denied is the expected result. Comment on story 40 that the deny check passed. Do not commit the account ID, the role ARN, or the bucket name.
+A new AWS assessment reads three private settings: `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`. The CLI refuses to start that assessment when any of them is empty, before it calls AWS. Init with a bucket sets the upload path to `s3://<bucket>/reframe`. The `infrastructure/` stack creates the sandbox bucket and the role that allows that same `reframe/` prefix and denies object and bucket reads outside that bucket. After you apply it, assume that role and list a production mainframe bucket you already use. Access denied is the expected result. Comment on story 40 that the deny check passed. Do not commit the account ID, the role ARN, or the bucket name.
 
 **AWS login is not necessarily a Transform application connection.** The official
 MCP `configure` operation supports its own authentication flow. If it is not already

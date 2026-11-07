@@ -7,7 +7,7 @@ resource "random_id" "suffix" {
 locals {
   bucket_name = "${var.name_prefix}-${random_id.suffix.hex}"
   role_name   = "${var.name_prefix}-role"
-  prefix      = "modernize"
+  prefix      = "reframe"
 }
 
 resource "aws_s3_bucket" "sandbox" {

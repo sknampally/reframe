@@ -354,6 +354,13 @@ class PreparationTests(unittest.TestCase):
                 app.assessment(self.work, self.project, self.args('assess', '--label', 'new', '--allow-new-assessment'), Client())
         self.assertIn('Sandbox configuration is empty', str(caught.exception))
 
+    def test_bucket_upload_prefix_is_reframe(self):
+        work = self.root / 'prefix'
+        args = app.parser().parse_args(['--workspace', str(work), 'init', '--source', str(self.source), '--scope', 'Zero-amount journey', '--bucket', 'fixture-bucket'])
+        app.initialize(args, work)
+        project = app.read(work / 'project.json')
+        self.assertEqual(project['settings']['transform']['upload_prefix'], 's3://fixture-bucket/reframe')
+
     def test_resume_unknown_label_never_creates(self):
         with self.assertRaisesRegex(pilot.Blocked, 'never creates'):
             app.assessment(self.work, self.project, self.args('resume', '--label', 'missing'))
