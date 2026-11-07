@@ -963,6 +963,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         project['stage'] = 'RUNNING_' + role.upper()
         persist(work, project)
         reply = runtime(project['providers'][role], run, area, role, message)
+        if role == 'reviewer':
+            require(sha(candidate_path) == state['candidate_sha256'], 'Reviewer cannot write the candidate')
         verify_source(project)
         write(area / f'reply-{state["calls"]}.json', reply)
         if 'evidence_notes' in reply:

@@ -274,3 +274,47 @@ class CheckpointTests(unittest.TestCase):
                 if isinstance(values[parent],list): values[parent].append(value)
                 else: values[parent][key]=value
         self.assertEqual(values[''],original)
+
+    def test_current_rule_files_exclude_unrelated_source(self):
+        self.source_files = ['other.cbl', 'rule.cbl']
+        (self.source / 'other.cbl').write_text('DISPLAY "OTHER".\n')
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            self.seen.append((role, context))
+            if 'unit_id' not in context:
+                return {'kind': 'blocked', 'reason': 'Stop before synthesis'}
+            if role == 'executor':
+                self.assertNotIn('candidate', context)
+                return self.checkpoint(context)
+            self.assertIn('candidate', context)
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Independent fixture review', 'findings': []}
+        with patch.object(app, 'legacy_pipeline', return_value={'status': 'READY_FOR_SYNTHESIS'}):
+            app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        listed = {}
+        for role, context in self.seen:
+            if 'unit_id' not in context:
+                continue
+            sources = sorted({part['path'] for part in context['evidence'] if part['area'] == 'source'})
+            self.assertEqual(context['source_files'], sources)
+            listed.setdefault(tuple(sources), set()).add(role)
+            if sources == ['rule.cbl']:
+                self.assertNotIn('other.cbl', json.dumps(context))
+            if sources == ['other.cbl']:
+                self.assertNotIn('rule.cbl', json.dumps(context))
+        self.assertIn(('rule.cbl',), listed)
+        self.assertIn(('other.cbl',), listed)
+        self.assertEqual(listed[('rule.cbl',)], {'executor', 'reviewer'})
+        self.assertEqual(listed[('other.cbl',)], {'executor', 'reviewer'})
+
+    def test_reviewer_cannot_write_the_candidate(self):
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if 'unit_id' not in context:
+                return {'kind': 'blocked', 'reason': 'Stop before synthesis'}
+            if role == 'executor':
+                return self.checkpoint(context)
+            path = self.work / self.project['checkpoints']['units'][context['unit_id']]['candidate_path']
+            path.write_text(path.read_text() + '\n')
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Tried to rewrite the candidate', 'findings': []}
+        with self.assertRaisesRegex(Blocked, 'Reviewer cannot write the candidate'):
+            app.pipeline(self.work, self.project, self.args('validate'), runtime)

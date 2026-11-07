@@ -114,6 +114,7 @@ class PreparationTests(unittest.TestCase):
         self.source = self.root / 'source'
         self.source.mkdir()
         (self.source / 'rule.cbl').write_text('IF AMOUNT = ZERO\n MOVE 1 TO ERROR-FLAG\nEND-IF\n')
+        self.source_files = ['rule.cbl']
         self.findings = self.root / 'findings'
         self.findings.mkdir()
         (self.findings / 'rules.json').write_text('{"rules":["reject zero amount"]}')
@@ -122,7 +123,11 @@ class PreparationTests(unittest.TestCase):
             if args == ('rev-parse', 'HEAD'): return 'a' * 40
             if args == ('remote', 'get-url', 'origin'): return 'https://example.invalid/source.git'
             if args == ('status', '--porcelain'): return 'dirty' if self.dirty else ''
-            if args[0] == 'ls-files': return 'rule.cbl' if len(args) == 1 or args[-1] == 'rule.cbl' else ''
+            if args[0] == 'ls-files':
+                names = self.source_files
+                if len(args) == 1:
+                    return '\n'.join(names)
+                return args[-1] if args[-1] in names else ''
             raise AssertionError(args)
         for module in (app, kw, pilot):
             mock = patch.object(module, 'git', side_effect=git)
@@ -611,6 +616,11 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn('--bare', command)
         self.assertIn('--strict-mcp-config', command)
         self.assertIn('mcp__*', command)
+        self.assertIn('--disallowedTools', command)
+        cwd = Path(process.call_args.kwargs['cwd'])
+        candidate = self.work / 'candidate.json'
+        candidate.write_text('sealed')
+        self.assertFalse(candidate.resolve().is_relative_to(cwd.resolve()))
 
     def test_completed_aws_job_stops_before_agents(self):
         self.assess()
