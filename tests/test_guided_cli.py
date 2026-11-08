@@ -115,7 +115,7 @@ class GuidedTests(unittest.TestCase):
         def run(command, **kwargs):
             self.assertEqual(command[:2], [str(binary), 'version'])
             return argparse.Namespace(returncode=0, stdout='{"terraform_version":"0.11.13","platform":"darwin_amd64"}', stderr='')
-        with patch.dict(guide.os.environ, {'PATH': str(bindir)}), patch('platform.system', return_value='Darwin'), patch('platform.machine', return_value='x86_64'), patch.object(guide, 'opentofu_install_directories', return_value=[]), patch.object(guide.subprocess, 'run', side_effect=run):
+        with patch.dict(guide.os.environ, {'PATH': str(bindir)}), patch('platform.system', return_value='Darwin'), patch.object(guide, 'host_machine', return_value='x86_64'), patch.object(guide, 'opentofu_install_directories', return_value=[]), patch.object(guide.subprocess, 'run', side_effect=run):
             with self.assertRaisesRegex(Blocked, '1.5'):
                 guide.sandbox_outputs('fixture', 'us-east-1', True)
 
@@ -142,8 +142,31 @@ class GuidedTests(unittest.TestCase):
                     self.assertEqual(command[1:3], ['version', '-json'])
                     platform_name = reported if command[0] == str(right) else 'other_arch'
                     return argparse.Namespace(returncode=0, stdout=json.dumps({'terraform_version': '1.12.5', 'platform': platform_name}), stderr='')
-                with patch.dict(guide.os.environ, {'PATH': str(other)}), patch('platform.system', return_value=system), patch('platform.machine', return_value=machine), patch.object(guide, 'opentofu_install_directories', return_value=[str(native)]), patch.object(guide.subprocess, 'run', side_effect=run):
+                with patch.dict(guide.os.environ, {'PATH': str(other)}), patch('platform.system', return_value=system), patch.object(guide, 'host_machine', return_value=machine.lower()), patch.object(guide, 'opentofu_install_directories', return_value=[str(native)]), patch.object(guide.subprocess, 'run', side_effect=run):
                     self.assertEqual(guide.opentofu_binary(), str(right))
+
+    def test_translated_python_uses_the_hardware_tofu(self):
+        intel = self.work / 'translated' / 'intel'
+        native = self.work / 'translated' / 'native'
+        intel.mkdir(parents=True)
+        native.mkdir()
+        (intel / 'tofu').write_text('')
+        (native / 'tofu').write_text('')
+        (intel / 'tofu').chmod(0o755)
+        (native / 'tofu').chmod(0o755)
+        def run(command, **kwargs):
+            self.assertEqual(command[1:3], ['version', '-json'])
+            reported = 'darwin_arm64' if command[0] == str(native / 'tofu') else 'darwin_amd64'
+            return argparse.Namespace(returncode=0, stdout=json.dumps({'terraform_version': '1.12.5', 'platform': reported}), stderr='')
+        with patch.dict(guide.os.environ, {'PATH': str(intel)}), patch('platform.system', return_value='Darwin'), patch.object(guide, 'host_machine', return_value='arm64'), patch.object(guide, 'opentofu_install_directories', return_value=[str(native)]), patch.object(guide.subprocess, 'run', side_effect=run):
+            self.assertEqual(guide.opentofu_binary(), str(native / 'tofu'))
+
+    def test_apple_silicon_is_visible_from_translated_python(self):
+        def run(command, **kwargs):
+            self.assertEqual(command, ['/usr/bin/arch', '-arm64', '/usr/bin/uname', '-m'])
+            return argparse.Namespace(returncode=0, stdout='arm64\n', stderr='')
+        with patch('platform.system', return_value='Darwin'), patch('platform.machine', return_value='x86_64'), patch.object(guide.subprocess, 'run', side_effect=run):
+            self.assertEqual(guide.current_platform(), 'darwin_arm64')
 
     def test_denied_production_read_is_required(self):
         with patch.object(guide, 'opentofu_binary', return_value='tofu'), patch.object(guide.subprocess, 'run', return_value=argparse.Namespace(returncode=1, stdout='listed', stderr='')):
