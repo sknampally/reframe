@@ -20,7 +20,7 @@ No custom prompt writing or manual agent handoffs are required for normal operat
 
 ## Run the guided workflow
 
-Install Git, uv, the AWS CLI, Terraform 1.5 or newer, and your chosen design provider (Claude Code or Codex) using the [engineer setup guide](docs/engineer-setup.md). Authenticate an AWS profile. AWS Transform application access is also required; terminal AWS login alone is insufficient.
+Install Git, uv, the AWS CLI, OpenTofu 1.5 or newer, and your chosen design provider (Claude Code or Codex) using the [engineer setup guide](docs/engineer-setup.md). Authenticate an AWS profile. AWS Transform application access is also required; terminal AWS login alone is insufficient.
 
 On macOS/Linux, or inside Ubuntu/WSL2 on Windows, start from a clean `main` checkout:
 
@@ -33,7 +33,7 @@ uv tool install --force --managed-python --python 3.12 --editable .
 reframe
 ```
 
-`terraform version` must be 1.5 or newer. Choose **1 — Guided start / continue**. You supply the source, a private output directory, the AWS profile, the region, and the provider. The profile has no default; `aws configure list-profiles` lists the names. The CLI verifies access and offers SSO login when required.
+`tofu version` must be 1.5 or newer. Choose **1 — Guided start / continue**. You supply the source, a private output directory, the AWS profile, the region, and the provider. The profile has no default; `aws configure list-profiles` lists the names. The CLI verifies access and offers SSO login when required.
 
 If setup is not finished, guided start creates the private sandbox bucket and role. The role can use the `reframe/` prefix in that bucket and denies object and bucket reads everywhere else. It asks for a production bucket you already use and continues only when that read is denied. It stores `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`, then creates and activates the connector. You do not name the sandbox bucket or edit `project.json`. Keep the account ID, role ARN, and bucket name off this repository and out of issues. Comment on [story 40](https://github.com/sknampally/reframe/issues/40) that the production deny check passed. Answer **no** to the continuation question to pause before anything is created. The [sandbox notes](infrastructure/README.md) describe the same apply when you want to run it outside the menu.
 

@@ -3,7 +3,7 @@
 set -eu
 bucket=${1:?Pass the production bucket name. Do not commit it.}
 cd "$(dirname "$0")"
-role_arn=$(terraform output -raw sandbox_role_arn)
+role_arn=$(tofu output -raw sandbox_role_arn)
 creds=$(aws sts assume-role --role-arn "$role_arn" --role-session-name reframe-deny-check --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
 access_key=$(printf '%s' "$creds" | awk '{print $1}')
 secret_key=$(printf '%s' "$creds" | awk '{print $2}')

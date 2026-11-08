@@ -105,11 +105,11 @@ class GuidedTests(unittest.TestCase):
         self.assertEqual(result['status'],'READY_TO_ASSESS')
         self.assertEqual(result['next_step'],'reframe assess')
 
-    def test_old_terraform_stops_before_apply(self):
+    def test_old_opentofu_stops_before_apply(self):
         def run(command, **kwargs):
-            self.assertEqual(command[:2], ['terraform','version'])
+            self.assertEqual(command[:2], ['tofu','version'])
             return argparse.Namespace(returncode=0, stdout='{"terraform_version":"0.11.13"}', stderr='')
-        with patch.object(guide.shutil,'which',return_value='/terraform'),patch.object(guide.subprocess,'run',side_effect=run):
+        with patch.object(guide.shutil,'which',return_value='/tofu'),patch.object(guide.subprocess,'run',side_effect=run):
             with self.assertRaisesRegex(Blocked,'1.5'):
                 guide.sandbox_outputs('fixture','us-east-1',True)
 

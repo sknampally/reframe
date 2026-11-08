@@ -2,7 +2,7 @@
 
 This stack creates one private S3 bucket and one IAM role for fixture AWS Transform runs. The role can use the `reframe/` prefix in that bucket. It denies object and bucket reads everywhere else, including production mainframe data in the same account.
 
-Terraform does not create the Transform workspace. After apply, create or attach that workspace with `reframe setup` and keep its id in the private run settings.
+OpenTofu does not create the Transform workspace. Guided start does that after apply. The `.tf` files are the shared configuration language OpenTofu runs.
 
 The CLI reads these settings and refuses to start a new AWS assessment when any of them is empty:
 
@@ -16,8 +16,8 @@ Guided start runs this apply when the sandbox settings are empty. To run it your
 
 ```bash
 export AWS_PROFILE=your-sandbox-profile
-terraform -chdir=infrastructure init
-terraform -chdir=infrastructure apply
+tofu -chdir=infrastructure init
+tofu -chdir=infrastructure apply
 ```
 
 Copy `sandbox_role` and `upload_prefix` into the private run settings. Use `sandbox_role_arn` only for connector activation and the deny check. Do not commit those values, and do not paste an account ID, role ARN, or bucket name into an issue.
