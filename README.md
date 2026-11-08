@@ -18,9 +18,26 @@ Supply an S3 source ZIP, GitHub URL or clean local Git checkout, configure your 
 AWS/provider access, and use the built-in protocols.
 No custom prompt writing or manual agent handoffs are required for normal operation.
 
-## Run the guided workflow
+## Before you run reframe
 
-Install Git, uv, the AWS CLI, OpenTofu 1.5 or newer, and your chosen design provider (Claude Code or Codex) using the [engineer setup guide](docs/engineer-setup.md). Authenticate an AWS profile. AWS Transform application access is also required; terminal AWS login alone is insufficient.
+Install these on the workstation first. Reframe does not install them. When a required tool is missing, guided start stops before it creates a sandbox or starts an assessment.
+
+| Tool | When required | Check |
+| --- | --- | --- |
+| Git | Always | `git --version` |
+| uv and Python 3.12 | Always | `uv --version` |
+| OpenTofu 1.5 or newer, built for this computer | Always, before guided setup | `tofu version` |
+| AWS CLI v2 and a named profile | A new assessment | `aws --version` |
+| AWS Transform application access | A new assessment | Terminal AWS login is not enough |
+| Claude Code | Default executor, reviewer, and HTML provider | `claude --version` |
+| Codex CLI | Only when you select Codex for HTML or execution | `codex --version` |
+| Kiro CLI | Only when you select Kiro as the executor | `kiro-cli --version` |
+
+OpenTofu is the tool that creates the private sandbox bucket and role. Install the build that matches the computer: `darwin_arm64` on Apple Silicon, `darwin_amd64` on an Intel Mac, `linux_arm64` or `linux_amd64` on Linux, and the Linux build inside Ubuntu/WSL2 on Windows. Native PowerShell is not supported. On a Mac with Homebrew, `brew install opentofu` installs it. The command is `tofu`, and `tofu version` must report 1.5 or newer. Other systems use the [OpenTofu install guide](https://opentofu.org/docs/intro/install/). If `tofu` is missing, older than 1.5, or built for a different computer, install the matching build and choose **1** again. Nothing is created until that install is in place.
+
+Git, uv, the AWS CLI, Claude, and the optional Codex or Kiro CLIs are installed with the [engineer setup guide](docs/engineer-setup.md). Authenticate the AWS profile you will type into guided start. There is no default profile.
+
+## Run the guided workflow
 
 On macOS/Linux, or inside Ubuntu/WSL2 on Windows, start from a clean `main` checkout:
 

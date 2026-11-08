@@ -15,6 +15,7 @@ The commands below are alternatives when direct vendor installation is permitted
 | Git | Always | Clone and pin source/framework revisions |
 | uv and Python 3.10+ | Always for the documented installation | Install the framework and its isolated dependencies |
 | AWS CLI v2 | New AWS assessments or S3 findings | Authenticate an AWS profile and access assessment storage |
+| OpenTofu 1.5 or newer | Always, before guided setup | Create the private sandbox bucket and role |
 | Claude Code CLI | Current validation workflow | Separate Sonnet executor and Opus reviewer sessions |
 | Codex CLI | When selected for HTML or execution; HTML default | Generate review content using the selected provider |
 | Kiro CLI | Only when Kiro executor is selected | Optional company-approved agent runtime |
@@ -70,6 +71,21 @@ On Linux, use the matching x86_64 or ARM64 installer and verification instructio
 in the [official AWS CLI v2 installation guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
 The same guide covers macOS installation without administrator privileges. Confirm
 `aws --version` reports `aws-cli/2`.
+
+## OpenTofu 1.5 or newer
+
+Reframe does not install OpenTofu. Guided start stops before it creates a sandbox when `tofu` is missing, older than 1.5, or built for a different computer.
+
+Install the build for this computer. On Apple Silicon the platform is `darwin_arm64`. On an Intel Mac it is `darwin_amd64`. On Linux it is `linux_arm64` or `linux_amd64`. On Windows, install that Linux build inside Ubuntu/WSL2.
+
+On a Mac with Homebrew:
+
+```bash
+brew install opentofu
+tofu version
+```
+
+`tofu version` must report 1.5 or newer. Other systems follow the [OpenTofu install guide](https://opentofu.org/docs/intro/install/). Choose guided start again after it is installed. Nothing is created until then.
 
 ## 3. Configure an AWS profile and sign in
 
@@ -179,7 +195,7 @@ change. For uv-managed tools, `uv tool update-shell` can configure its executabl
 directory. Diagnose without exposing credentials:
 
 ```bash
-command -v git uv uvx aws claude
+command -v git uv uvx aws tofu claude
 # Check only when selected:
 command -v codex kiro-cli
 ```
