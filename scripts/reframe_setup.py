@@ -7,6 +7,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from pilot import Blocked, require
 
@@ -200,6 +202,32 @@ def opentofu_binary():
             else 'Install OpenTofu 1.5 or newer, then choose guided start again.')
 
 
+def profile_uses_sso(profile):
+    result = subprocess.run(['aws', '--profile', profile, 'configure', 'get', 'sso_role_name'], capture_output=True, text=True)
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+@contextmanager
+def aws_profile_env(profile, region):
+    """Use the selected profile. An SSO profile must not pick up a stale static key."""
+    env = os.environ.copy()
+    for key in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN'):
+        env.pop(key, None)
+    env.update(AWS_PROFILE=profile, AWS_DEFAULT_REGION=region, AWS_SDK_LOAD_CONFIG='1')
+    directory = None
+    if profile_uses_sso(profile):
+        directory = tempfile.mkdtemp(prefix='reframe-aws-')
+        credentials = Path(directory) / 'credentials'
+        credentials.write_text('')
+        credentials.chmod(0o600)
+        env['AWS_SHARED_CREDENTIALS_FILE'] = str(credentials)
+    try:
+        yield env
+    finally:
+        if directory:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
 def sandbox_outputs(profile, region, apply):
     """Create or read the sandbox. The role ARN stays in memory for connector activation."""
     import reframe as app
@@ -208,20 +236,20 @@ def sandbox_outputs(profile, region, apply):
     require(re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d+', region or ''), 'Enter an AWS region name.')
     directory = app.FRAMEWORK / 'infrastructure'
     require((directory / 'main.tf').is_file(), 'The sandbox stack is not in this framework checkout.')
-    env = os.environ.copy()
-    env.update(AWS_PROFILE=profile, AWS_DEFAULT_REGION=region, TF_IN_AUTOMATION='1', TF_INPUT='0', TOFU=tofu)
-    env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
-    def run(args, capture=False):
-        print('Running ' + tofu + ' ' + args[0] + '...')
-        result = subprocess.run([tofu, '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
-        if result.returncode != 0:
-            halt('OpenTofu ' + args[0] + ' did not finish. Setup stopped before an assessment.',
-                 'Check OpenTofu 1.5 or newer and the selected AWS profile, then choose 1 again. /privacy shows the local detail.')
-        return result
-    if apply:
-        run(['init', '-input=false'])
-        run(['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile])
-    result = subprocess.run([tofu, '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
+    with aws_profile_env(profile, region) as env:
+        env.update(TF_IN_AUTOMATION='1', TF_INPUT='0', TOFU=tofu)
+        env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
+        def run(args, capture=False):
+            print('Running ' + tofu + ' ' + args[0] + '...')
+            result = subprocess.run([tofu, '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
+            if result.returncode != 0:
+                halt('OpenTofu ' + args[0] + ' did not finish. Setup stopped before an assessment.',
+                     'Sign in to the selected AWS profile again, then choose 1. /privacy shows the local detail.')
+            return result
+        if apply:
+            run(['init', '-input=false'])
+            run(['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile])
+        result = subprocess.run([tofu, '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
     if result.returncode != 0:
         require(not apply, 'OpenTofu outputs were not available. Setup stopped before an assessment.')
         return sandbox_outputs(profile, region, True)
@@ -237,17 +265,17 @@ def sandbox_outputs(profile, region, apply):
     return bucket, prefix, role, role_arn
 
 
-def confirm_production_deny(bucket):
+def confirm_production_deny(bucket, profile, region):
     import reframe as app
     require(re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', bucket or ''),
             'Enter the production bucket name only. Setup stopped before an assessment.')
     script = app.FRAMEWORK / 'infrastructure' / 'deny-check.sh'
     print('Checking that the sandbox role cannot read the production bucket...')
     tofu = opentofu_binary()
-    env = os.environ.copy()
-    env.update(TOFU=tofu)
-    env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
-    result = subprocess.run([str(script), bucket], capture_output=True, text=True, env=env)
+    with aws_profile_env(profile, region) as env:
+        env.update(TOFU=tofu)
+        env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
+        result = subprocess.run([str(script), bucket], capture_output=True, text=True, env=env)
     if result.returncode != 0:
         halt('The sandbox role was not denied for that production bucket. Setup stopped before a Transform workspace was created.',
              'Name a production bucket this role must not read, then choose 1 again. /privacy shows the local detail.')
@@ -365,7 +393,7 @@ def guided_init(args):
             print('Setup paused before anything was created. Choose 1 again to continue.')
             return {'status': 'SETUP_INCOMPLETE', 'next_step': 'Choose 1 again. Nothing was created.'}
         bucket, prefix, role, sandbox_arn = sandbox_outputs(args.aws_profile, args.region, True)
-        confirm_production_deny(ask('Production bucket the sandbox role must not read'))
+        confirm_production_deny(ask('Production bucket the sandbox role must not read'), args.aws_profile, args.region)
         args.bucket = bucket
         app.initialize(args, work)
         project = app.read(work / 'project.json')
@@ -391,7 +419,7 @@ def guided_init(args):
         if not sandbox_arn:
             bucket, prefix, role, sandbox_arn = sandbox_outputs(project['aws']['profile'], project['aws']['region'], not ready)
             if not project.get('setup', {}).get('production_deny_checked'):
-                confirm_production_deny(ask('Production bucket the sandbox role must not read'))
+                confirm_production_deny(ask('Production bucket the sandbox role must not read'), project['aws']['profile'], project['aws']['region'])
                 project.setdefault('setup', {})['production_deny_checked'] = True
             transform['upload_prefix'] = prefix
             transform['sandbox_role'] = role
