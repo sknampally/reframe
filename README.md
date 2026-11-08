@@ -215,24 +215,24 @@ reframe/
 ├── scripts/
 │   ├── pilot.py
 │   ├── kiro_workflow.py
-│   ├── modernize.py                  # reframe command implementation
-│   ├── modernize_setup.py
-│   ├── modernize_flow.py
-│   ├── modernize_terminal.py
-│   ├── modernize_workspace.py
-│   ├── modernize_checkpoints.py
-│   ├── modernize_preview.py
-│   ├── modernize_contracts.py
-│   ├── modernize_source.py
-│   ├── modernize_models.py
-│   └── modernize_artifacts.py
+│   ├── reframe.py                  # reframe command implementation
+│   ├── reframe_setup.py
+│   ├── reframe_flow.py
+│   ├── reframe_terminal.py
+│   ├── reframe_workspace.py
+│   ├── reframe_checkpoints.py
+│   ├── reframe_preview.py
+│   ├── reframe_contracts.py
+│   ├── reframe_source.py
+│   ├── reframe_models.py
+│   └── reframe_artifacts.py
 ├── tests/
 │   ├── test_pilot.py
 │   ├── test_kiro_workflow.py
 │   ├── test_mcp_transport.py
 │   ├── test_terminal.py
 │   ├── test_guided_cli.py
-│   ├── test_modernize.py
+│   ├── test_reframe.py
 │   └── fixtures/
 │       └── mcp_server.py
 └── docs/

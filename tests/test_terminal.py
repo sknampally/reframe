@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).parents[1]/'scripts'))
 from rich.console import Console
-from modernize_terminal import Terminal, clean
+from reframe_terminal import Terminal, clean
 from pilot import Blocked
 
 class TerminalTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class TerminalTests(unittest.TestCase):
         return Terminal(console=Console(file=self.output,width=width,color_system=None),demo=demo)
     def test_no_workspace_displays_welcome(self):
         ui=self.ui()
-        with patch('modernize_setup.workspace',side_effect=Blocked('No project')):ui.dashboard()
+        with patch('reframe_setup.workspace',side_effect=Blocked('No project')):ui.dashboard()
         self.assertIn('Welcome',self.output.getvalue())
         self.assertIn('Workspace menu',self.output.getvalue())
     def test_preview_has_explicit_label_and_no_backend_calls(self):
@@ -27,7 +27,7 @@ class TerminalTests(unittest.TestCase):
         self.assertEqual(ui.demo_index,1)
     def test_preview_does_not_read_active_project(self):
         ui=self.ui(True)
-        with patch('modernize_setup.workspace',side_effect=AssertionError('No real workspace read')):ui.dashboard()
+        with patch('reframe_setup.workspace',side_effect=AssertionError('No real workspace read')):ui.dashboard()
     def test_result_privacy_masks_error_paths(self):
         ui=self.ui()
         ui.report({'status':'BLOCKED','reason':'secret bucket/path','next_step':'reframe init'})
@@ -81,7 +81,7 @@ class TerminalTests(unittest.TestCase):
 
     def test_multiline_paste_is_one_rejected_input(self):
         ui=self.ui()
-        with patch('modernize_terminal.PromptSession') as session:
+        with patch('reframe_terminal.PromptSession') as session:
             session.return_value.prompt.return_value='{\n"mcpServers":{}\n}'
             with self.assertRaisesRegex(Blocked,'single value'):ui.ask('Workspace ID')
         session.return_value.prompt.assert_called_once()
@@ -93,9 +93,9 @@ class TerminalTests(unittest.TestCase):
         self.assertIn('Reinstall using a managed Python',self.output.getvalue())
 
     def test_reporter_avoids_json_dump(self):
-        import modernize
+        import reframe
         results=[]
-        code=modernize.main(['--workspace','/nonexistent-fixture','status'],reporter=results.append)
+        code=reframe.main(['--workspace','/nonexistent-fixture','status'],reporter=results.append)
         self.assertEqual(code,2)
         self.assertEqual(results[0]['status'],'BLOCKED')
 

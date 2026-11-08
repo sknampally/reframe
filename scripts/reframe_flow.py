@@ -6,7 +6,7 @@ from pilot import require
 
 
 def run(ui):
-    from modernize_setup import workspace
+    from reframe_setup import workspace
     project = ui.project()
     if project:
         choice = ui.ask('Continue saved project or start a fresh run? (continue/fresh)', 'continue')
@@ -14,7 +14,7 @@ def run(ui):
         if choice == 'fresh':
             source = ui.ask('Source Git URL, local checkout or S3 ZIP', project['source']['repository'])
             parent = ui.ask('Parent directory for the new run', str(workspace().parent / ('run-' + datetime.now().strftime('%Y%m%d-%H%M%S'))))
-            from modernize_workspace import output_directory
+            from reframe_workspace import output_directory
             require(not output_directory(parent, source).exists(), 'Output directory already exists; choose another parent or continue it')
             if ui.invoke(['init', '--guided', '--source', source, '--output-parent', parent]) != 0:
                 return
@@ -33,9 +33,9 @@ def run(ui):
             require(choice in {'draft', 'verify'}, 'Choose draft or verify')
             if choice == 'draft':
                 ui.say('Claude or Codex will generate design content. No executor/reviewer verification or approval is implied.')
-                from modernize import name as safe_name
+                from reframe import name as safe_name
                 name = safe_name(ui.ask('Draft name (reuse the same name to resume)', 'guided-draft'))
-                from modernize_workspace import preview_directory
+                from reframe_workspace import preview_directory
                 saved = preview_directory(workspace(), name) / 'preview-state.json'
                 state = json.loads(saved.read_text()) if saved.exists() else {}
                 owner = state.get('owner') or ui.ask('Accountable owner for skipping verification')

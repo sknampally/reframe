@@ -187,7 +187,7 @@ need the optional MCP Python SDK. One way to invoke the CLI without changing you
 system Python is:
 
 ```bash
-uv run --with 'mcp>=2,<3' python scripts/modernize.py \
+uv run --with 'mcp>=2,<3' python scripts/reframe.py \
   --workspace /path/to/private-poc setup \
   --create-bucket --create-workspace <workspace-name> --create-connector <connector-name>
 ```
@@ -230,10 +230,10 @@ in AWS and attach the existing workspace/connector. Do not delete state to retry
 ## 3. Assess; leave and resume
 
 ```bash
-uv run --with 'mcp>=2,<3' python scripts/modernize.py \
+uv run --with 'mcp>=2,<3' python scripts/reframe.py \
   --workspace /path/to/private-poc assess --label run-a --allow-new-assessment --detach
 ./reframe --workspace /path/to/private-poc status
-uv run --with 'mcp>=2,<3' python scripts/modernize.py \
+uv run --with 'mcp>=2,<3' python scripts/reframe.py \
   --workspace /path/to/private-poc resume --label run-a --detach
 ```
 

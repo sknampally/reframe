@@ -73,7 +73,7 @@ def rebase(value, old, new):
 
 
 def relocate(work, project, parent, app):
-    from modernize_setup import select_workspace
+    from reframe_setup import select_workspace
     work=work.resolve(); target=output_directory(parent,project['source']['repository'])
     require(target!=work, 'Workspace already has the requested repository-based location')
     require(not target.exists(), 'Destination already exists; no files overwritten')

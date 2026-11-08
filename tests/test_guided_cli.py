@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).parents[1]/'scripts'))
-import modernize as app
-import modernize_setup as guide
+import reframe as app
+import reframe_setup as guide
 from pilot import Blocked
 
 class GuidedTests(unittest.TestCase):

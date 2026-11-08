@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four-phase modernization preparation CLI. Never builds or deploys an application."""
+"""Reverse-engineer mainframe source into an AI-DLC handoff for any language. Never builds or deploys an application."""
 import argparse
 import contextlib
 import difflib
@@ -18,9 +18,9 @@ from types import SimpleNamespace
 
 import kiro_workflow as kw
 from pilot import Blocked, git, require, sha
-from modernize_artifacts import digest, validate_spec, validate_screens, render_site, render_assessment_facts, SECTIONS
-from modernize_models import call as model_call, ProviderSafetyRefusal, check_provider_refusals, preparation_protocol_hash
-from modernize_contracts import require_stage_contract
+from reframe_artifacts import digest, validate_spec, validate_screens, render_site, render_assessment_facts, SECTIONS
+from reframe_models import call as model_call, ProviderSafetyRefusal, check_provider_refusals, preparation_protocol_hash
+from reframe_contracts import require_stage_contract
 
 FRAMEWORK = Path(__file__).resolve().parent.parent
 
@@ -71,7 +71,7 @@ def initialize(args, work):
     work.chmod(0o700)
     source_record = None
     if args.source.startswith('s3://'):
-        from modernize_source import from_s3
+        from reframe_source import from_s3
         from urllib.parse import urlsplit
         args.bucket = args.bucket or urlsplit(args.source).netloc
         source_record = from_s3(args.source, work, args.aws_profile, args.region)
@@ -114,7 +114,7 @@ def initialize(args, work):
     bind_run_pins(project)
     for folder in ('previews', 'packages', 'reports'):
         (work / folder).mkdir(exist_ok=True, mode=0o700)
-    from modernize_workspace import report_index
+    from reframe_workspace import report_index
     report_index(work)
     persist(work, project)
     return {'workspace': str(work), 'status': project['stage'], 'source_commit': project['source']['commit']}
@@ -150,7 +150,7 @@ def mutation(work, project, key, fn):
 def setup(work, project, args, client=None):
     authentication = None
     if args.connect:
-        from modernize_setup import connect_arguments
+        from reframe_setup import connect_arguments
         authentication = connect_arguments(args.connect)
     identity = aws(project, 'sts', 'get-caller-identity', '--output', 'json')
     write(work / 'aws-identity.json', identity)
@@ -647,7 +647,7 @@ def spec_path(work, project):
     require(sha(path) == record['sha256'], 'Specification changed after review')
     require(sha(work / record['review_path']) == record['review_sha256'], 'Independent review changed after acceptance')
     if project.get('checkpoints'):
-        import modernize_checkpoints as cp
+        import reframe_checkpoints as cp
         plan, capsules = cp.verified_capsules(work, project, sys.modules[__name__])
         require(record.get('checkpoints_sha256') == digest(capsules) and len(capsules) == len(plan['units']),
                 'Reviewed evidence checkpoints changed after synthesis')
@@ -891,7 +891,7 @@ def bounded_preparation_context(context, limit):
 
 
 def preparation_plan(work, project, args):
-    import modernize_checkpoints as cp
+    import reframe_checkpoints as cp
     require(not project.get('specification') and not (set(project.get('approvals', {})) - {'assessment'}),
             'Planning requires no completed specification or downstream approval')
     current = git(FRAMEWORK, 'rev-parse', 'HEAD')
@@ -961,7 +961,7 @@ def pipeline(work, project, args, runtime=model_call):
     if getattr(args, 'command', None) == 'resume':
         require_run_pins(project)
     require_stage_contract(work, 'task')
-    import modernize_checkpoints as cp
+    import reframe_checkpoints as cp
     # Existing legacy runs retain their pinned behavior until explicitly migrated.
     if not project.get('pipeline'):
         preparation_plan(work, project, SimpleNamespace(activate=True))
@@ -986,7 +986,7 @@ def legacy_pipeline(work, project, args, runtime=model_call):
     capsules = []
     checkpoint_paths = set()
     if project.get('checkpoints'):
-        import modernize_checkpoints as cp
+        import reframe_checkpoints as cp
         plan, capsules = cp.verified_capsules(work, project, sys.modules[__name__])
         require(len(capsules) == len(plan['units']), 'Every evidence unit needs independent review before synthesis')
         checkpoint_paths = {p['path'] for u in plan['units'] for p in u['segments'] if p['area'] == 'source' and not p.get('opaque')}
@@ -1502,17 +1502,17 @@ def parser():
 def main(argv=None, reporter=None):
     values = list(sys.argv[1:] if argv is None else argv)
     if reporter is None and (not values or values in [['ui'], ['demo'], ['flow']]):
-        from modernize_terminal import launch
+        from reframe_terminal import launch
         return launch(demo=values == ['demo'], initial='flow' if values == ['flow'] else None)
     if reporter is None and values == ['init'] and sys.stdin.isatty() and sys.stdout.isatty():
-        from modernize_terminal import launch
+        from reframe_terminal import launch
         return launch(initial='init')
     emit = reporter or (lambda value: print(json.dumps(value, indent=2)))
     args = parser().parse_args(values)
     if args.command == 'init' and args.source and not args.workspace and getattr(args, 'output_parent', None):
-        from modernize_workspace import output_directory
+        from reframe_workspace import output_directory
         args.workspace = str(output_directory(args.output_parent, args.source))
-    from modernize_setup import guided_init, workspace, select_workspace, prepare_command, next_step
+    from reframe_setup import guided_init, workspace, select_workspace, prepare_command, next_step
     project = None
     try:
         if args.command == 'init' and (args.guided or not args.source or not args.scope or not args.workspace):
@@ -1536,7 +1536,7 @@ def main(argv=None, reporter=None):
                       'assessments': {k: read(Path(v['directory']) / 'run.json')['status'] for k, v in project['assessments'].items()},
                       'approvals': list(project['approvals']), 'package': project.get('package'), 'next_step': next_step(project)}
             if project.get('checkpoints'):
-                import modernize_checkpoints as cp
+                import reframe_checkpoints as cp
                 plan, capsules = cp.verified_capsules(work, project, sys.modules[__name__])
                 result['preparation'] = {'units':len(plan['units']), 'reviewed_units':len(capsules),
                     'calls_consumed':project['pipeline']['calls'], 'total_cap':project['settings']['max_model_calls']}
@@ -1581,13 +1581,13 @@ def main(argv=None, reporter=None):
                     elif args.command == 'resume' and project['stage'] in {'AWAITING_ASSESSMENT_APPROVAL', 'AWAITING_VALIDATION_APPROVAL', 'AWAITING_SPECIFICATIONS_APPROVAL', 'PACKAGED', 'PROVIDER_REVIEW_REQUIRED', 'BLOCKED', 'REWORK_LIMIT'}:
                         result = {'status': project['stage'], 'next_step': next_step(project)}
                     elif args.command == 'relocate':
-                        import modernize_workspace
-                        result = modernize_workspace.relocate(work, project, args.output_parent, sys.modules[__name__])
+                        import reframe_workspace
+                        result = reframe_workspace.relocate(work, project, args.output_parent, sys.modules[__name__])
                     elif args.command == 'prepare-plan': result = preparation_plan(work, project, args)
 
                     elif args.command == 'preview':
-                        import modernize_preview
-                        result = modernize_preview.run(work, project, args, sys.modules[__name__])
+                        import reframe_preview
+                        result = reframe_preview.run(work, project, args, sys.modules[__name__])
                     elif args.command == 'model-budget': result = set_model_budget(work, project, args)
                     elif args.command == 'recover-provider': result = recover_provider_request(work, project, args)
                     elif args.command == 'assessment-report': result = assessment_report(work, project, args)
@@ -1628,7 +1628,7 @@ def main(argv=None, reporter=None):
                     persist(work, project)
                     raise
         if args.command in {'preview', 'assessment-report', 'review-site', 'package'} and 'work' in locals():
-            from modernize_workspace import report_index
+            from reframe_workspace import report_index
             result['reports'] = str(report_index(work))
         if project is not None and 'next_step' not in result:
             result['next_step'] = next_step(project)

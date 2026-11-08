@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from pilot import Blocked, require, sha, tracked_file, git
-from modernize_artifacts import digest
+from reframe_artifacts import digest
 
 UNIT_BYTES = 60000
 CHECKPOINT_BYTES = 14000

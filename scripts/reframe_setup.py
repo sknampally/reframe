@@ -192,7 +192,7 @@ def opentofu_binary():
 
 def sandbox_outputs(profile, region, apply):
     """Create or read the sandbox. The role ARN stays in memory for connector activation."""
-    import modernize as app
+    import reframe as app
     tofu = opentofu_binary()
     require(re.fullmatch(r'[A-Za-z0-9_.=,@-]+', profile or ''), 'Enter the AWS profile name only.')
     require(re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d+', region or ''), 'Enter an AWS region name.')
@@ -228,7 +228,7 @@ def sandbox_outputs(profile, region, apply):
 
 
 def confirm_production_deny(bucket):
-    import modernize as app
+    import reframe as app
     require(re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', bucket or ''),
             'Enter the production bucket name only. Setup stopped before an assessment.')
     script = app.FRAMEWORK / 'infrastructure' / 'deny-check.sh'
@@ -316,11 +316,11 @@ def checks(project, work=None):
 
 
 def guided_init(args):
-    import modernize as app
+    import reframe as app
     require(sys.stdin.isatty(), 'Interactive setup needs a terminal; supply --workspace, --source and --scope for scripted init')
     print('Reframe setup. A new project creates the sandbox, checks the production deny, and connects Transform.')
     print('No assessment starts until you confirm an upload. Workstation guide: ' + str(app.FRAMEWORK / 'docs/engineer-setup.md'))
-    from modernize_workspace import default_parent, output_directory
+    from reframe_workspace import default_parent, output_directory
     default = args.workspace
     parent = getattr(args, 'output_parent', None)
     if not default and not parent and not args.source and active_file().exists(): default = str(workspace())
@@ -407,7 +407,7 @@ def guided_init(args):
 
 
 def refresh_unstarted_baseline(work, project):
-    import modernize as app
+    import reframe as app
     previous = project.get('framework_commit')
     if not previous: return
     current = app.git(app.FRAMEWORK, 'rev-parse', 'HEAD')
@@ -453,7 +453,7 @@ def next_step(project):
 
 def prepare_command(args, work, project):
     """Resolve saved defaults; never interpret a missing resume label as a new run."""
-    import modernize as app
+    import reframe as app
     if args.command in {'assess', 'resume'}:
         if getattr(args, 'source', None):
             source = args.source

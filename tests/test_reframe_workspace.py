@@ -4,10 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import test_modernize as fixtures
-import modernize as app
-import modernize_setup as setup
-import modernize_workspace as layout
+import test_reframe as fixtures
+import reframe as app
+import reframe_setup as setup
+import reframe_workspace as layout
 from pilot import Blocked, sha
 
 
