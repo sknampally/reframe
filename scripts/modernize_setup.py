@@ -133,11 +133,12 @@ def halt(message, hint):
     raise error
 
 
-def require_terraform():
-    require(shutil.which('terraform'), 'Install Terraform 1.5 or newer, then choose guided start again.')
-    result = subprocess.run(['terraform', 'version', '-json'], capture_output=True, text=True)
+def require_opentofu():
+    require(shutil.which('tofu'), 'Install OpenTofu 1.5 or newer, then choose guided start again.')
+    result = subprocess.run(['tofu', 'version', '-json'], capture_output=True, text=True)
     version = ''
     if result.returncode == 0 and result.stdout.strip().startswith('{'):
+        # OpenTofu reports its version in terraform_version for CLI compatibility.
         version = json.loads(result.stdout).get('terraform_version', '')
     parts = []
     for piece in version.split('.'):
@@ -146,13 +147,13 @@ def require_terraform():
         else:
             break
     require(len(parts) >= 2 and parts[:2] >= [1, 5],
-            'Install Terraform 1.5 or newer, then choose guided start again. An older terraform is first on PATH.')
+            'Install OpenTofu 1.5 or newer, then choose guided start again. An older tofu is first on PATH.')
 
 
 def sandbox_outputs(profile, region, apply):
     """Create or read the sandbox. The role ARN stays in memory for connector activation."""
     import modernize as app
-    require_terraform()
+    require_opentofu()
     require(re.fullmatch(r'[A-Za-z0-9_.=,@-]+', profile or ''), 'Enter the AWS profile name only.')
     require(re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d+', region or ''), 'Enter an AWS region name.')
     directory = app.FRAMEWORK / 'infrastructure'
@@ -160,18 +161,18 @@ def sandbox_outputs(profile, region, apply):
     env = os.environ.copy()
     env.update(AWS_PROFILE=profile, AWS_DEFAULT_REGION=region, TF_IN_AUTOMATION='1', TF_INPUT='0')
     def run(args, capture=False):
-        print('Running terraform ' + args[0] + '...')
-        result = subprocess.run(['terraform', '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
+        print('Running tofu ' + args[0] + '...')
+        result = subprocess.run(['tofu', '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
         if result.returncode != 0:
-            halt('Terraform ' + args[0] + ' did not finish. Setup stopped before an assessment.',
-                 'Check Terraform 1.5 or newer and the selected AWS profile, then choose 1 again. /privacy shows the local detail.')
+            halt('OpenTofu ' + args[0] + ' did not finish. Setup stopped before an assessment.',
+                 'Check OpenTofu 1.5 or newer and the selected AWS profile, then choose 1 again. /privacy shows the local detail.')
         return result
     if apply:
         run(['init', '-input=false'])
         run(['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile])
-    result = subprocess.run(['terraform', '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
+    result = subprocess.run(['tofu', '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
     if result.returncode != 0:
-        require(not apply, 'Terraform outputs were not available. Setup stopped before an assessment.')
+        require(not apply, 'OpenTofu outputs were not available. Setup stopped before an assessment.')
         return sandbox_outputs(profile, region, True)
     outputs = json.loads(result.stdout)
     prefix = outputs['upload_prefix']['value']
@@ -181,7 +182,7 @@ def sandbox_outputs(profile, region, apply):
             'The sandbox upload prefix is not the reframe prefix.')
     bucket = prefix.removeprefix('s3://').removesuffix('/reframe')
     require(bucket and '/' not in bucket and isinstance(role, str) and role and isinstance(role_arn, str) and role_arn,
-            'Terraform outputs were incomplete. Setup stopped before an assessment.')
+            'OpenTofu outputs were incomplete. Setup stopped before an assessment.')
     return bucket, prefix, role, role_arn
 
 
