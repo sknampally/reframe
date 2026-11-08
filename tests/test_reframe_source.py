@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
-import modernize_source as source
+import reframe_source as source
 from pilot import Blocked
 
 

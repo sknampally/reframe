@@ -4,9 +4,9 @@ import json
 import unittest
 from unittest.mock import patch
 
-import test_modernize as fixtures
-import modernize as app
-import modernize_checkpoints as cp
+import test_reframe as fixtures
+import reframe as app
+import reframe_checkpoints as cp
 from pilot import Blocked, sha
 
 

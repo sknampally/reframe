@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).parents[1]/'scripts'))
-from modernize_flow import run
-from modernize_terminal import Terminal
+from reframe_flow import run
+from reframe_terminal import Terminal
 from rich.console import Console
 
 class GuidedFlowTests(unittest.TestCase):
@@ -22,7 +22,7 @@ class GuidedFlowTests(unittest.TestCase):
         ui = self.ui({'stage':'BLOCKED','approvals':{'assessment':True}},
                      ['continue','draft','guided-draft','Owner','Demo','claude'])
         ui.yes.return_value = True
-        with tempfile.TemporaryDirectory() as root, patch('modernize_setup.workspace', return_value=Path(root)):
+        with tempfile.TemporaryDirectory() as root, patch('reframe_setup.workspace', return_value=Path(root)):
             run(ui)
         args = ui.invoke.call_args.args[0]
         self.assertEqual(args[0], 'preview')
@@ -70,7 +70,7 @@ class GuidedFlowTests(unittest.TestCase):
         ui = self.ui({'stage':'ASSESSMENT_APPROVED','approvals':{'assessment':True}},
                      ['continue','draft','guided-draft'])
         ui.yes.return_value = True
-        with tempfile.TemporaryDirectory() as root, patch('modernize_setup.workspace', return_value=Path(root)):
+        with tempfile.TemporaryDirectory() as root, patch('reframe_setup.workspace', return_value=Path(root)):
             saved = Path(root)/'previews'/'guided-draft'
             saved.mkdir(parents=True)
             (saved/'preview-state.json').write_text(json.dumps({'owner':'Owner','reason':'Accepted risk','provider':'claude'}))
@@ -84,7 +84,7 @@ class GuidedFlowTests(unittest.TestCase):
         ui = self.ui({'stage':'ASSESSMENT_APPROVED','approvals':{'assessment':True}},
                      ['continue','draft','guided-draft','Owner','Demo','claude'])
         ui.yes.return_value = False
-        with tempfile.TemporaryDirectory() as root, patch('modernize_setup.workspace', return_value=Path(root)):
+        with tempfile.TemporaryDirectory() as root, patch('reframe_setup.workspace', return_value=Path(root)):
             run(ui)
         ui.invoke.assert_not_called()
 

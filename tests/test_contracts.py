@@ -4,10 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import test_modernize as fixtures
+import test_reframe as fixtures
 import kiro_workflow as kw
-import modernize as app
-import modernize_contracts as contracts
+import reframe as app
+import reframe_contracts as contracts
 import pilot
 
 

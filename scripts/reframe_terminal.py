@@ -66,7 +66,7 @@ class Terminal:
                     'providers':{'executor':'claude', 'reviewer':'claude','wireframes':'codex'},
                     'settings':{'executor_model':'claude-sonnet-5-5','reviewer_model':'claude-opus-5-5'},
                     'assessments':{}, 'approvals':{}, 'source':{'commit':'illustrative'}}
-        from modernize_setup import workspace
+        from reframe_setup import workspace
         try:
             return json.loads((workspace()/'project.json').read_text())
         except (Blocked, OSError, ValueError, KeyError, RuntimeError):
@@ -102,13 +102,13 @@ class Terminal:
             executor=project.get('providers',{}).get('executor','claude')
             self.say('Agents  '+executor+' / '+str(config.get('executor_model') or 'configured default')+'  →  Claude / '+str(config.get('reviewer_model') or 'configured default'),'dim')
             if not self.demo:
-                from modernize_setup import next_step
+                from reframe_setup import next_step
                 self.say('Suggested next step  '+next_step(project),'bright_cyan')
                 self.assessment_status(project)
         self.menu()
 
     def assessment_status(self, project):
-        from modernize import read
+        from reframe import read
         rows=[]
         for label, record in project.get('assessments',{}).items():
             try: state=read(Path(record['directory'])/'run.json')['status']
@@ -155,15 +155,15 @@ class Terminal:
         self.say('No arbitrary shell commands are executed. Preview never creates genuine approvals or workflow records.')
 
     def guide(self, topic='workflow'):
-        from modernize import FRAMEWORK
+        from reframe import FRAMEWORK
         files={'setup':'engineer-setup.md','workflow':'cli-guide.md','comparison':'assessment-comparison.md'}
         if topic not in files:
             self.say('Choose /guide setup, /guide workflow or /guide comparison.','yellow');return
         self.console.print(Markdown((FRAMEWORK/'docs'/files[topic]).read_text()))
 
     def invoke(self, args):
-        import modernize as app
-        import modernize_setup as setup
+        import reframe as app
+        import reframe_setup as setup
         # UI input adapters are local to this synchronous console action.
         original_ask, original_yes, original_optional = setup.ask, setup.yes, setup.optional
         try:
@@ -173,7 +173,7 @@ class Terminal:
             setup.ask, setup.yes, setup.optional = original_ask, original_yes, original_optional
 
     def artifacts(self):
-        from modernize_setup import workspace
+        from reframe_setup import workspace
         if self.demo:
             self.say('Preview outputs: specification.json · decisions.json · review.html · implementation-backlog.json','cyan');return
         if self.private:
@@ -209,10 +209,10 @@ class Terminal:
             else:self.say('Preview is read-only. Use /next to illustrate the next gate, or /live for real actions.','yellow')
             return True
         if cmd in {'flow', 'next'}:
-            from modernize_flow import run
+            from reframe_flow import run
             run(self);return True
         if cmd=='workspace':
-            from modernize_setup import select_workspace
+            from reframe_setup import select_workspace
             from pilot import require
             path=Path(self.ask('Existing private workspace path')).expanduser().resolve()
             require((path/'project.json').is_file(),'No saved project at that path')

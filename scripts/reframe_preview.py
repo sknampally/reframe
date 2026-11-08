@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from pilot import require, sha, git
-from modernize_artifacts import SECTIONS, digest, validate_screens
+from reframe_artifacts import SECTIONS, digest, validate_screens
 
 NOTICE = 'AWS Transform findings assumed correct by owner decision. Independent source verification skipped. Draft for stakeholder review; not an approved implementation handoff.'
 
@@ -137,7 +137,7 @@ def run(work, project, args, app, runtime=None):
         project['verification_skip']={'owner':args.by.strip(),'reason':args.note.strip(),
                                       'assessment_sha256':fingerprint,'at':time.time()}
         app.persist(work, project)
-    from modernize_workspace import preview_directory
+    from reframe_workspace import preview_directory
     destination=preview_directory(work,app.name(args.name))
     destination.mkdir(exist_ok=True,mode=0o700)
     state_path=destination/'preview-state.json'

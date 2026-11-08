@@ -5,9 +5,9 @@ from pathlib import Path
 import zipfile
 from unittest.mock import patch
 
-import test_modernize as fixtures
-import modernize as app
-import modernize_preview as preview
+import test_reframe as fixtures
+import reframe as app
+import reframe_preview as preview
 from pilot import Blocked, sha
 
 

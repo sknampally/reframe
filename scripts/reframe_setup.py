@@ -1,6 +1,7 @@
 """Interactive onboarding and private active-workspace selection."""
 import json
 import configparser
+import platform
 import re
 import os
 import shutil
@@ -133,36 +134,76 @@ def halt(message, hint):
     raise error
 
 
-def require_opentofu():
-    require(shutil.which('tofu'), 'Install OpenTofu 1.5 or newer, then choose guided start again.')
-    result = subprocess.run(['tofu', 'version', '-json'], capture_output=True, text=True)
-    version = ''
-    if result.returncode == 0 and result.stdout.strip().startswith('{'):
-        # OpenTofu reports its version in terraform_version for CLI compatibility.
-        version = json.loads(result.stdout).get('terraform_version', '')
-    parts = []
-    for piece in version.split('.'):
-        if piece.isdigit():
-            parts.append(int(piece))
-        else:
-            break
-    require(len(parts) >= 2 and parts[:2] >= [1, 5],
-            'Install OpenTofu 1.5 or newer, then choose guided start again. An older tofu is first on PATH.')
+def current_platform():
+    """OpenTofu platform name for the computer running this command."""
+    system = {'Darwin': 'darwin', 'Linux': 'linux', 'Windows': 'windows'}.get(platform.system(), '')
+    arch = {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64', 'amd64': 'amd64'}.get(platform.machine().lower(), '')
+    return system + '_' + arch if system and arch else ''
+
+
+def opentofu_install_directories():
+    """Standard install locations, so a native binary is found without a PATH change."""
+    if platform.system() == 'Darwin':
+        return ['/opt/homebrew/bin', '/usr/local/bin']
+    if platform.system() == 'Linux':
+        return ['/usr/local/bin', '/usr/bin', str(Path.home() / '.local' / 'bin')]
+    if platform.system() == 'Windows':
+        roots = [os.environ.get('ProgramFiles', ''), os.environ.get('LocalAppData', '')]
+        return [str(Path(root) / 'OpenTofu') for root in roots if root]
+    return []
+
+
+def opentofu_binary():
+    """Use OpenTofu 1.5 or newer whose own platform matches this computer."""
+    want = current_platform()
+    require(want, 'Install OpenTofu 1.5 or newer for this computer, then choose guided start again.')
+    names = ('tofu.exe', 'tofu') if platform.system() == 'Windows' else ('tofu',)
+    seen = set()
+    found = False
+    for directory in [*os.environ.get('PATH', '').split(os.pathsep), *opentofu_install_directories()]:
+        if not directory:
+            continue
+        for name in names:
+            path = Path(directory) / name
+            resolved = str(path)
+            if resolved in seen or not path.is_file() or not os.access(path, os.X_OK):
+                continue
+            seen.add(resolved)
+            found = True
+            result = subprocess.run([resolved, 'version', '-json'], capture_output=True, text=True)
+            version = ''
+            reported = ''
+            if result.returncode == 0 and result.stdout.strip().startswith('{'):
+                payload = json.loads(result.stdout)
+                # OpenTofu reports its version in terraform_version for CLI compatibility.
+                version = payload.get('terraform_version', '')
+                reported = payload.get('platform', '')
+            parts = []
+            for piece in version.split('.'):
+                if piece.isdigit():
+                    parts.append(int(piece))
+                else:
+                    break
+            if reported == want and len(parts) >= 2 and parts[:2] >= [1, 5]:
+                return resolved
+    require(False, 'Install OpenTofu 1.5 or newer for this computer, then choose guided start again.' if found
+            else 'Install OpenTofu 1.5 or newer, then choose guided start again.')
 
 
 def sandbox_outputs(profile, region, apply):
     """Create or read the sandbox. The role ARN stays in memory for connector activation."""
-    import modernize as app
-    require_opentofu()
+    import reframe as app
+    tofu = opentofu_binary()
     require(re.fullmatch(r'[A-Za-z0-9_.=,@-]+', profile or ''), 'Enter the AWS profile name only.')
     require(re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d+', region or ''), 'Enter an AWS region name.')
     directory = app.FRAMEWORK / 'infrastructure'
     require((directory / 'main.tf').is_file(), 'The sandbox stack is not in this framework checkout.')
     env = os.environ.copy()
-    env.update(AWS_PROFILE=profile, AWS_DEFAULT_REGION=region, TF_IN_AUTOMATION='1', TF_INPUT='0')
+    env.update(AWS_PROFILE=profile, AWS_DEFAULT_REGION=region, TF_IN_AUTOMATION='1', TF_INPUT='0', TOFU=tofu)
+    env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
     def run(args, capture=False):
-        print('Running tofu ' + args[0] + '...')
-        result = subprocess.run(['tofu', '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
+        print('Running ' + tofu + ' ' + args[0] + '...')
+        result = subprocess.run([tofu, '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
         if result.returncode != 0:
             halt('OpenTofu ' + args[0] + ' did not finish. Setup stopped before an assessment.',
                  'Check OpenTofu 1.5 or newer and the selected AWS profile, then choose 1 again. /privacy shows the local detail.')
@@ -170,7 +211,7 @@ def sandbox_outputs(profile, region, apply):
     if apply:
         run(['init', '-input=false'])
         run(['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile])
-    result = subprocess.run(['tofu', '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
+    result = subprocess.run([tofu, '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
     if result.returncode != 0:
         require(not apply, 'OpenTofu outputs were not available. Setup stopped before an assessment.')
         return sandbox_outputs(profile, region, True)
@@ -187,12 +228,16 @@ def sandbox_outputs(profile, region, apply):
 
 
 def confirm_production_deny(bucket):
-    import modernize as app
+    import reframe as app
     require(re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', bucket or ''),
             'Enter the production bucket name only. Setup stopped before an assessment.')
     script = app.FRAMEWORK / 'infrastructure' / 'deny-check.sh'
     print('Checking that the sandbox role cannot read the production bucket...')
-    result = subprocess.run([str(script), bucket], capture_output=True, text=True)
+    tofu = opentofu_binary()
+    env = os.environ.copy()
+    env.update(TOFU=tofu)
+    env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
+    result = subprocess.run([str(script), bucket], capture_output=True, text=True, env=env)
     if result.returncode != 0:
         halt('The sandbox role was not denied for that production bucket. Setup stopped before a Transform workspace was created.',
              'Name a production bucket this role must not read, then choose 1 again. /privacy shows the local detail.')
@@ -271,11 +316,11 @@ def checks(project, work=None):
 
 
 def guided_init(args):
-    import modernize as app
+    import reframe as app
     require(sys.stdin.isatty(), 'Interactive setup needs a terminal; supply --workspace, --source and --scope for scripted init')
     print('Reframe setup. A new project creates the sandbox, checks the production deny, and connects Transform.')
     print('No assessment starts until you confirm an upload. Workstation guide: ' + str(app.FRAMEWORK / 'docs/engineer-setup.md'))
-    from modernize_workspace import default_parent, output_directory
+    from reframe_workspace import default_parent, output_directory
     default = args.workspace
     parent = getattr(args, 'output_parent', None)
     if not default and not parent and not args.source and active_file().exists(): default = str(workspace())
@@ -362,7 +407,7 @@ def guided_init(args):
 
 
 def refresh_unstarted_baseline(work, project):
-    import modernize as app
+    import reframe as app
     previous = project.get('framework_commit')
     if not previous: return
     current = app.git(app.FRAMEWORK, 'rev-parse', 'HEAD')
@@ -408,7 +453,7 @@ def next_step(project):
 
 def prepare_command(args, work, project):
     """Resolve saved defaults; never interpret a missing resume label as a new run."""
-    import modernize as app
+    import reframe as app
     if args.command in {'assess', 'resume'}:
         if getattr(args, 'source', None):
             source = args.source

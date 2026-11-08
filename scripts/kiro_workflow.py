@@ -362,7 +362,7 @@ def export_findings(run, directory, client, identity):
         shutil.rmtree(text_root)
     text_root.mkdir(mode=0o700)
     originals, expanded_total = [], 0
-    from modernize_source import extract_archive
+    from reframe_source import extract_archive
     for index, (path, request) in enumerate(zip(expected, requests)):
         record = {'file': path.relative_to(directory).as_posix(), 'source':request,
                   'sha256':sha(path), 'bytes':path.stat().st_size, 'text_files':[]}
