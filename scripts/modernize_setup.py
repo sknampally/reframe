@@ -1,6 +1,7 @@
 """Interactive onboarding and private active-workspace selection."""
 import json
 import configparser
+import platform
 import re
 import os
 import shutil
@@ -133,36 +134,54 @@ def halt(message, hint):
     raise error
 
 
-def require_opentofu():
-    require(shutil.which('tofu'), 'Install OpenTofu 1.5 or newer, then choose guided start again.')
-    result = subprocess.run(['tofu', 'version', '-json'], capture_output=True, text=True)
+def opentofu_binary():
+    """Use the tofu whose CPU architecture matches this computer."""
+    machine = platform.machine()
+    want = 'arm64' if machine in {'arm64', 'aarch64'} else 'x86_64'
+    candidates = []
+    seen = set()
+    for directory in os.environ.get('PATH', '').split(os.pathsep):
+        path = Path(directory) / 'tofu'
+        resolved = str(path)
+        if resolved in seen or not path.is_file() or not os.access(path, os.X_OK):
+            continue
+        seen.add(resolved)
+        candidates.append(path)
+    require(candidates, 'Install OpenTofu 1.5 or newer, then choose guided start again.')
+    def architecture(path):
+        described = subprocess.run(['file', '-b', str(path)], capture_output=True, text=True).stdout
+        if 'arm64' in described:
+            return 'arm64'
+        if 'x86_64' in described:
+            return 'x86_64'
+        return ''
+    match = next((path for path in candidates if architecture(path) == want), None)
+    require(match, 'OpenTofu on PATH does not match this ' + want + ' computer. Put the matching tofu first on PATH, then choose guided start again.')
+    binary = str(match)
+    result = subprocess.run([binary, 'version', '-json'], capture_output=True, text=True)
     version = ''
     if result.returncode == 0 and result.stdout.strip().startswith('{'):
         # OpenTofu reports its version in terraform_version for CLI compatibility.
         version = json.loads(result.stdout).get('terraform_version', '')
-    parts = []
-    for piece in version.split('.'):
-        if piece.isdigit():
-            parts.append(int(piece))
-        else:
-            break
+    parts = [int(piece) for piece in version.split('.') if piece.isdigit()]
     require(len(parts) >= 2 and parts[:2] >= [1, 5],
-            'Install OpenTofu 1.5 or newer, then choose guided start again. An older tofu is first on PATH.')
+            'Install OpenTofu 1.5 or newer, then choose guided start again.')
+    return binary
 
 
 def sandbox_outputs(profile, region, apply):
     """Create or read the sandbox. The role ARN stays in memory for connector activation."""
     import modernize as app
-    require_opentofu()
+    tofu = opentofu_binary()
     require(re.fullmatch(r'[A-Za-z0-9_.=,@-]+', profile or ''), 'Enter the AWS profile name only.')
     require(re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d+', region or ''), 'Enter an AWS region name.')
     directory = app.FRAMEWORK / 'infrastructure'
     require((directory / 'main.tf').is_file(), 'The sandbox stack is not in this framework checkout.')
     env = os.environ.copy()
-    env.update(AWS_PROFILE=profile, AWS_DEFAULT_REGION=region, TF_IN_AUTOMATION='1', TF_INPUT='0')
+    env.update(AWS_PROFILE=profile, AWS_DEFAULT_REGION=region, TF_IN_AUTOMATION='1', TF_INPUT='0', TOFU=tofu)
     def run(args, capture=False):
-        print('Running tofu ' + args[0] + '...')
-        result = subprocess.run(['tofu', '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
+        print('Running ' + tofu + ' ' + args[0] + '...')
+        result = subprocess.run([tofu, '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
         if result.returncode != 0:
             halt('OpenTofu ' + args[0] + ' did not finish. Setup stopped before an assessment.',
                  'Check OpenTofu 1.5 or newer and the selected AWS profile, then choose 1 again. /privacy shows the local detail.')
@@ -170,7 +189,7 @@ def sandbox_outputs(profile, region, apply):
     if apply:
         run(['init', '-input=false'])
         run(['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile])
-    result = subprocess.run(['tofu', '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
+    result = subprocess.run([tofu, '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
     if result.returncode != 0:
         require(not apply, 'OpenTofu outputs were not available. Setup stopped before an assessment.')
         return sandbox_outputs(profile, region, True)
@@ -192,7 +211,7 @@ def confirm_production_deny(bucket):
             'Enter the production bucket name only. Setup stopped before an assessment.')
     script = app.FRAMEWORK / 'infrastructure' / 'deny-check.sh'
     print('Checking that the sandbox role cannot read the production bucket...')
-    result = subprocess.run([str(script), bucket], capture_output=True, text=True)
+    result = subprocess.run([str(script), bucket], capture_output=True, text=True, env={**os.environ, 'TOFU': opentofu_binary()})
     if result.returncode != 0:
         halt('The sandbox role was not denied for that production bucket. Setup stopped before a Transform workspace was created.',
              'Name a production bucket this role must not read, then choose 1 again. /privacy shows the local detail.')
