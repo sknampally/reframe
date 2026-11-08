@@ -4,6 +4,7 @@ import configparser
 import platform
 import re
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -265,21 +266,21 @@ def sandbox_outputs(profile, region, apply):
     return bucket, prefix, role, role_arn
 
 
-def confirm_production_deny(bucket, profile, region):
+def confirm_production_deny(profile, region):
+    """Prove the sandbox role cannot list some other bucket. The user does not name one."""
     import reframe as app
-    require(re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', bucket or ''),
-            'Enter the production bucket name only. Setup stopped before an assessment.')
+    probe = 'reframe-deny-probe-' + secrets.token_hex(4)
     script = app.FRAMEWORK / 'infrastructure' / 'deny-check.sh'
-    print('Checking that the sandbox role cannot read the production bucket...')
+    print('Checking that the sandbox role cannot read other buckets...')
     tofu = opentofu_binary()
     with aws_profile_env(profile, region) as env:
         env.update(TOFU=tofu)
         env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
-        result = subprocess.run([str(script), bucket], capture_output=True, text=True, env=env)
+        result = subprocess.run([str(script), probe], capture_output=True, text=True, env=env)
     if result.returncode != 0:
-        halt('The sandbox role was not denied for that production bucket. Setup stopped before a Transform workspace was created.',
-             'Name a production bucket this role must not read, then choose 1 again. /privacy shows the local detail.')
-    print('Production read was denied.')
+        halt('The sandbox role was not denied for another bucket. Setup stopped before a Transform workspace was created.',
+             'Choose 1 again. /privacy shows the local detail.')
+    print('Read of another bucket was denied.')
 
 
 def choose_aws_profile():
@@ -393,7 +394,7 @@ def guided_init(args):
             print('Setup paused before anything was created. Choose 1 again to continue.')
             return {'status': 'SETUP_INCOMPLETE', 'next_step': 'Choose 1 again. Nothing was created.'}
         bucket, prefix, role, sandbox_arn = sandbox_outputs(args.aws_profile, args.region, True)
-        confirm_production_deny(ask('Production bucket the sandbox role must not read'), args.aws_profile, args.region)
+        confirm_production_deny(args.aws_profile, args.region)
         args.bucket = bucket
         app.initialize(args, work)
         project = app.read(work / 'project.json')
@@ -419,7 +420,7 @@ def guided_init(args):
         if not sandbox_arn:
             bucket, prefix, role, sandbox_arn = sandbox_outputs(project['aws']['profile'], project['aws']['region'], not ready)
             if not project.get('setup', {}).get('production_deny_checked'):
-                confirm_production_deny(ask('Production bucket the sandbox role must not read'), project['aws']['profile'], project['aws']['region'])
+                confirm_production_deny(project['aws']['profile'], project['aws']['region'])
                 project.setdefault('setup', {})['production_deny_checked'] = True
             transform['upload_prefix'] = prefix
             transform['sandbox_role'] = role
