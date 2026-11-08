@@ -276,7 +276,17 @@ def confirm_production_deny(profile, region):
     with aws_profile_env(profile, region) as env:
         env.update(TOFU=tofu)
         env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
-        result = subprocess.run([str(script), probe], capture_output=True, text=True, env=env)
+        create = ['aws', 's3api', 'create-bucket', '--bucket', probe, '--region', region]
+        if region != 'us-east-1':
+            create += ['--create-bucket-configuration', 'LocationConstraint=' + region]
+        made = subprocess.run(create, capture_output=True, text=True, env=env)
+        if made.returncode != 0:
+            halt('The permission check could not create its temporary bucket. Setup stopped before a Transform workspace was created.',
+                 'Choose 1 again. /privacy shows the local detail.')
+        try:
+            result = subprocess.run([str(script), probe], capture_output=True, text=True, env=env)
+        finally:
+            subprocess.run(['aws', 's3api', 'delete-bucket', '--bucket', probe, '--region', region], capture_output=True, text=True, env=env)
     if result.returncode != 0:
         halt('The sandbox role was not denied for another bucket. Setup stopped before a Transform workspace was created.',
              'Choose 1 again. /privacy shows the local detail.')
