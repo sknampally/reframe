@@ -113,34 +113,40 @@ class GuidedTests(unittest.TestCase):
         binary.write_text('')
         binary.chmod(0o755)
         def run(command, **kwargs):
-            if command[0] == 'file':
-                return argparse.Namespace(returncode=0, stdout='Mach-O 64-bit executable x86_64', stderr='')
             self.assertEqual(command[:2], [str(binary), 'version'])
-            return argparse.Namespace(returncode=0, stdout='{"terraform_version":"0.11.13"}', stderr='')
-        with patch.dict(guide.os.environ, {'PATH': str(bindir)}), patch('platform.machine', return_value='x86_64'), patch.object(guide.subprocess, 'run', side_effect=run):
+            return argparse.Namespace(returncode=0, stdout='{"terraform_version":"0.11.13","platform":"darwin_amd64"}', stderr='')
+        with patch.dict(guide.os.environ, {'PATH': str(bindir)}), patch('platform.system', return_value='Darwin'), patch('platform.machine', return_value='x86_64'), patch.object(guide, 'opentofu_install_directories', return_value=[]), patch.object(guide.subprocess, 'run', side_effect=run):
             with self.assertRaisesRegex(Blocked, '1.5'):
                 guide.sandbox_outputs('fixture', 'us-east-1', True)
 
-    def test_apple_silicon_uses_the_native_tofu(self):
-        intel = self.work / 'usr' / 'local' / 'bin'
-        native = self.work / 'opt' / 'homebrew' / 'bin'
-        intel.mkdir(parents=True)
-        native.mkdir(parents=True)
-        (intel / 'tofu').write_text('')
-        (native / 'tofu').write_text('')
-        (intel / 'tofu').chmod(0o755)
-        (native / 'tofu').chmod(0o755)
-        def run(command, **kwargs):
-            if command[0] == 'file':
-                kind = 'arm64' if 'homebrew' in command[-1] else 'x86_64'
-                return argparse.Namespace(returncode=0, stdout='Mach-O 64-bit executable ' + kind, stderr='')
-            self.assertEqual(command[0], str(native / 'tofu'))
-            return argparse.Namespace(returncode=0, stdout='{"terraform_version":"1.12.5"}', stderr='')
-        with patch.dict(guide.os.environ, {'PATH': os.pathsep.join((str(intel), str(native)))}), patch('platform.machine', return_value='arm64'), patch.object(guide.subprocess, 'run', side_effect=run):
-            self.assertEqual(guide.opentofu_binary(), str(native / 'tofu'))
+    def test_setup_finds_the_native_tofu_without_a_path_change(self):
+        cases = [
+            ('Darwin', 'arm64', 'darwin_arm64', 'tofu'),
+            ('Darwin', 'x86_64', 'darwin_amd64', 'tofu'),
+            ('Linux', 'aarch64', 'linux_arm64', 'tofu'),
+            ('Windows', 'AMD64', 'windows_amd64', 'tofu.exe'),
+        ]
+        for system, machine, reported, name in cases:
+            with self.subTest(platform=reported):
+                other = self.work / reported / 'other'
+                native = self.work / reported / 'native'
+                other.mkdir(parents=True)
+                native.mkdir()
+                wrong = other / name
+                right = native / name
+                wrong.write_text('')
+                right.write_text('')
+                wrong.chmod(0o755)
+                right.chmod(0o755)
+                def run(command, **kwargs):
+                    self.assertEqual(command[1:3], ['version', '-json'])
+                    platform_name = reported if command[0] == str(right) else 'other_arch'
+                    return argparse.Namespace(returncode=0, stdout=json.dumps({'terraform_version': '1.12.5', 'platform': platform_name}), stderr='')
+                with patch.dict(guide.os.environ, {'PATH': str(other)}), patch('platform.system', return_value=system), patch('platform.machine', return_value=machine), patch.object(guide, 'opentofu_install_directories', return_value=[str(native)]), patch.object(guide.subprocess, 'run', side_effect=run):
+                    self.assertEqual(guide.opentofu_binary(), str(right))
 
     def test_denied_production_read_is_required(self):
-        with patch.object(guide.subprocess,'run',return_value=argparse.Namespace(returncode=1,stdout='listed',stderr='')):
+        with patch.object(guide, 'opentofu_binary', return_value='tofu'), patch.object(guide.subprocess, 'run', return_value=argparse.Namespace(returncode=1, stdout='listed', stderr='')):
             with self.assertRaisesRegex(Blocked,'not denied') as caught:
                 guide.confirm_production_deny('fixture-production')
         self.assertFalse(hasattr(caught.exception,'hint') and 'fixture-production' in caught.exception.hint)

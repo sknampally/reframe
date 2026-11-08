@@ -56,7 +56,7 @@ region from the saved AWS profile when available. The Transform application prof
 name is separate from the AWS CLI profile. Connection is rechecked before resource
 questions appear. No MCP client JSON or manual configuration file is needed for
 normal setup. An advanced file option accepts only a path to authentication arguments,
-never an `mcpServers` client configuration. When the sandbox settings are missing, guided start runs `tofu init` and `tofu apply` in `infrastructure/` with OpenTofu 1.5 or newer. It uses the bucket and role that apply creates, asks for a production bucket, and stops if that read is not denied. It then creates the Transform workspace and connector and activates the connector with the sandbox role. OpenTofu older than 1.5 stops before apply. No assessment job starts during `init`. Rerun `reframe init` to continue incomplete setup without
+never an `mcpServers` client configuration. When the sandbox settings are missing, guided start selects OpenTofu 1.5 or newer for this computer and runs `tofu init` and `tofu apply` in `infrastructure/`. A native install is used even when another build is earlier on `PATH`. It uses the bucket and role that apply creates, asks for a production bucket, and stops if that read is not denied. It then creates the Transform workspace and connector and activates the connector with the sandbox role. OpenTofu older than 1.5 stops before apply. No assessment job starts during `init`. Rerun `reframe init` to continue incomplete setup without
 recloning source or deleting evidence. If the framework was updated before any
 assessment/approval exists, setup can explicitly confirm a new framework baseline
 while keeping the pinned source unchanged. Existing assessment baselines are never

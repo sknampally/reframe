@@ -134,39 +134,60 @@ def halt(message, hint):
     raise error
 
 
+def current_platform():
+    """OpenTofu platform name for the computer running this command."""
+    system = {'Darwin': 'darwin', 'Linux': 'linux', 'Windows': 'windows'}.get(platform.system(), '')
+    arch = {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64', 'amd64': 'amd64'}.get(platform.machine().lower(), '')
+    return system + '_' + arch if system and arch else ''
+
+
+def opentofu_install_directories():
+    """Standard install locations, so a native binary is found without a PATH change."""
+    if platform.system() == 'Darwin':
+        return ['/opt/homebrew/bin', '/usr/local/bin']
+    if platform.system() == 'Linux':
+        return ['/usr/local/bin', '/usr/bin', str(Path.home() / '.local' / 'bin')]
+    if platform.system() == 'Windows':
+        roots = [os.environ.get('ProgramFiles', ''), os.environ.get('LocalAppData', '')]
+        return [str(Path(root) / 'OpenTofu') for root in roots if root]
+    return []
+
+
 def opentofu_binary():
-    """Use the tofu whose CPU architecture matches this computer."""
-    machine = platform.machine()
-    want = 'arm64' if machine in {'arm64', 'aarch64'} else 'x86_64'
-    candidates = []
+    """Use OpenTofu 1.5 or newer whose own platform matches this computer."""
+    want = current_platform()
+    require(want, 'Install OpenTofu 1.5 or newer for this computer, then choose guided start again.')
+    names = ('tofu.exe', 'tofu') if platform.system() == 'Windows' else ('tofu',)
     seen = set()
-    for directory in os.environ.get('PATH', '').split(os.pathsep):
-        path = Path(directory) / 'tofu'
-        resolved = str(path)
-        if resolved in seen or not path.is_file() or not os.access(path, os.X_OK):
+    found = False
+    for directory in [*os.environ.get('PATH', '').split(os.pathsep), *opentofu_install_directories()]:
+        if not directory:
             continue
-        seen.add(resolved)
-        candidates.append(path)
-    require(candidates, 'Install OpenTofu 1.5 or newer, then choose guided start again.')
-    def architecture(path):
-        described = subprocess.run(['file', '-b', str(path)], capture_output=True, text=True).stdout
-        if 'arm64' in described:
-            return 'arm64'
-        if 'x86_64' in described:
-            return 'x86_64'
-        return ''
-    match = next((path for path in candidates if architecture(path) == want), None)
-    require(match, 'OpenTofu on PATH does not match this ' + want + ' computer. Put the matching tofu first on PATH, then choose guided start again.')
-    binary = str(match)
-    result = subprocess.run([binary, 'version', '-json'], capture_output=True, text=True)
-    version = ''
-    if result.returncode == 0 and result.stdout.strip().startswith('{'):
-        # OpenTofu reports its version in terraform_version for CLI compatibility.
-        version = json.loads(result.stdout).get('terraform_version', '')
-    parts = [int(piece) for piece in version.split('.') if piece.isdigit()]
-    require(len(parts) >= 2 and parts[:2] >= [1, 5],
-            'Install OpenTofu 1.5 or newer, then choose guided start again.')
-    return binary
+        for name in names:
+            path = Path(directory) / name
+            resolved = str(path)
+            if resolved in seen or not path.is_file() or not os.access(path, os.X_OK):
+                continue
+            seen.add(resolved)
+            found = True
+            result = subprocess.run([resolved, 'version', '-json'], capture_output=True, text=True)
+            version = ''
+            reported = ''
+            if result.returncode == 0 and result.stdout.strip().startswith('{'):
+                payload = json.loads(result.stdout)
+                # OpenTofu reports its version in terraform_version for CLI compatibility.
+                version = payload.get('terraform_version', '')
+                reported = payload.get('platform', '')
+            parts = []
+            for piece in version.split('.'):
+                if piece.isdigit():
+                    parts.append(int(piece))
+                else:
+                    break
+            if reported == want and len(parts) >= 2 and parts[:2] >= [1, 5]:
+                return resolved
+    require(False, 'Install OpenTofu 1.5 or newer for this computer, then choose guided start again.' if found
+            else 'Install OpenTofu 1.5 or newer, then choose guided start again.')
 
 
 def sandbox_outputs(profile, region, apply):
@@ -179,6 +200,7 @@ def sandbox_outputs(profile, region, apply):
     require((directory / 'main.tf').is_file(), 'The sandbox stack is not in this framework checkout.')
     env = os.environ.copy()
     env.update(AWS_PROFILE=profile, AWS_DEFAULT_REGION=region, TF_IN_AUTOMATION='1', TF_INPUT='0', TOFU=tofu)
+    env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
     def run(args, capture=False):
         print('Running ' + tofu + ' ' + args[0] + '...')
         result = subprocess.run([tofu, '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
@@ -211,7 +233,11 @@ def confirm_production_deny(bucket):
             'Enter the production bucket name only. Setup stopped before an assessment.')
     script = app.FRAMEWORK / 'infrastructure' / 'deny-check.sh'
     print('Checking that the sandbox role cannot read the production bucket...')
-    result = subprocess.run([str(script), bucket], capture_output=True, text=True, env={**os.environ, 'TOFU': opentofu_binary()})
+    tofu = opentofu_binary()
+    env = os.environ.copy()
+    env.update(TOFU=tofu)
+    env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
+    result = subprocess.run([str(script), bucket], capture_output=True, text=True, env=env)
     if result.returncode != 0:
         halt('The sandbox role was not denied for that production bucket. Setup stopped before a Transform workspace was created.',
              'Name a production bucket this role must not read, then choose 1 again. /privacy shows the local detail.')
