@@ -94,7 +94,7 @@ class GuidedTests(unittest.TestCase):
             project['setup']['connector_approved_by']=args.connector_approved
             project['stage']='READY_TO_ASSESS'
             return {'status':'READY_TO_ASSESS'}
-        answers=['/fixture/source',str(self.work),str(self.work),'Fixture scope','fixture','us-east-1','claude','codex','yes','fixture-production','Fixture admin']
+        answers=['/fixture/source',str(self.work),str(self.work),'Fixture scope','fixture','us-east-1','claude','codex','yes','Fixture admin']
         with patch.object(sys.stdin,'isatty',return_value=True),patch('builtins.input',side_effect=answers), \
              patch.object(app,'initialize',side_effect=initialize),patch.object(guide,'checks'),patch.object(guide,'ensure_aws_login'), \
              patch.object(guide,'sandbox_outputs',return_value=('fixture-bucket','s3://fixture-bucket/reframe','fixture-sandbox-role','fixture-role-arn')) as outputs, \
@@ -102,7 +102,7 @@ class GuidedTests(unittest.TestCase):
              patch.object(app,'setup',side_effect=setup):
             result=guide.guided_init(self.args('init'))
         outputs.assert_called_once_with('fixture','us-east-1',True)
-        deny.assert_called_once_with('fixture-production', 'fixture', 'us-east-1')
+        deny.assert_called_once_with('fixture', 'us-east-1')
         self.assertEqual(result['status'],'READY_TO_ASSESS')
         self.assertEqual(result['next_step'],'reframe assess')
 
@@ -181,10 +181,14 @@ class GuidedTests(unittest.TestCase):
             self.assertFalse(credentials.exists())
 
     def test_denied_production_read_is_required(self):
-        with patch.object(guide, 'opentofu_binary', return_value='tofu'), patch.object(guide, 'profile_uses_sso', return_value=False), patch.object(guide.subprocess, 'run', return_value=argparse.Namespace(returncode=1, stdout='listed', stderr='')):
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            return argparse.Namespace(returncode=1, stdout='listed', stderr='')
+        with patch.object(guide, 'opentofu_binary', return_value='tofu'), patch.object(guide, 'profile_uses_sso', return_value=False), patch.object(guide.subprocess, 'run', side_effect=run), patch('builtins.input', side_effect=AssertionError('asked')):
             with self.assertRaisesRegex(Blocked,'not denied') as caught:
-                guide.confirm_production_deny('fixture-production', 'fixture', 'us-east-1')
-        self.assertFalse(hasattr(caught.exception,'hint') and 'fixture-production' in caught.exception.hint)
+                guide.confirm_production_deny('fixture', 'us-east-1')
+        self.assertTrue(calls[-1][-1].startswith('reframe-deny-probe-'))
         self.assertNotIn('listed', str(caught.exception))
 
     def test_resume_routes_interrupted_model_work_without_aws_calls(self):

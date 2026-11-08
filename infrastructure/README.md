@@ -24,8 +24,4 @@ Copy `sandbox_role` and `upload_prefix` into the private run settings. Use `sand
 
 ## Deny check
 
-Pass a production mainframe bucket you already use. The script must report that the read was denied. Then comment on story 40 that the production deny check passed.
-
-```bash
-infrastructure/deny-check.sh YOUR_PRODUCTION_BUCKET
-```
+Guided start runs this check. It assumes the sandbox role and lists a bucket name it generates. That bucket is not created. The check continues only when AWS denies the list. You do not choose a bucket. Then comment on story 40 that the production deny check passed.
