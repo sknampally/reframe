@@ -184,11 +184,16 @@ class GuidedTests(unittest.TestCase):
         calls = []
         def run(command, **kwargs):
             calls.append(command)
+            if command[:3] == ['aws', 's3api', 'create-bucket'] or command[:3] == ['aws', 's3api', 'delete-bucket']:
+                return argparse.Namespace(returncode=0, stdout='', stderr='')
             return argparse.Namespace(returncode=1, stdout='listed', stderr='')
         with patch.object(guide, 'opentofu_binary', return_value='tofu'), patch.object(guide, 'profile_uses_sso', return_value=False), patch.object(guide.subprocess, 'run', side_effect=run), patch('builtins.input', side_effect=AssertionError('asked')):
             with self.assertRaisesRegex(Blocked,'not denied') as caught:
                 guide.confirm_production_deny('fixture', 'us-east-1')
-        self.assertTrue(calls[-1][-1].startswith('reframe-deny-probe-'))
+        self.assertEqual(calls[0][:3], ['aws', 's3api', 'create-bucket'])
+        self.assertTrue(calls[1][-1].startswith('reframe-deny-probe-'))
+        self.assertEqual(calls[2][:3], ['aws', 's3api', 'delete-bucket'])
+        self.assertEqual(calls[0][4], calls[2][4])
         self.assertNotIn('listed', str(caught.exception))
 
     def test_resume_routes_interrupted_model_work_without_aws_calls(self):

@@ -24,4 +24,4 @@ Copy `sandbox_role` and `upload_prefix` into the private run settings. Use `sand
 
 ## Deny check
 
-Guided start runs this check. It assumes the sandbox role and lists a bucket name it generates. That bucket is not created. The check continues only when AWS denies the list. You do not choose a bucket. Then comment on story 40 that the production deny check passed.
+Guided start runs this check. It creates an empty temporary bucket, lists that bucket with the sandbox role, and deletes the temporary bucket. The check continues only when AWS denies the list. You do not choose a bucket. Then comment on story 40 that the production deny check passed.
