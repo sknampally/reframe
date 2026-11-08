@@ -30,7 +30,10 @@ dist/
 .venv/
 
 # Terraform state and local variable files stay on the machine that applied them.
+# The provider lock is written by apply inside this checkout. Ignoring it keeps
+# the checkout clean so workspace initialization can continue.
 .terraform/
+.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfvars

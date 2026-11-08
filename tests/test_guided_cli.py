@@ -354,4 +354,15 @@ class GuidedTests(unittest.TestCase):
         self.project['stage']='AWAITING_ASSESSMENT_APPROVAL'
         self.assertIn('approve assessment',guide.next_step(self.project))
 
+    def test_opentofu_lock_file_does_not_dirty_the_framework_checkout(self):
+        import subprocess
+        ignored = subprocess.run(
+            ['git', 'check-ignore', '-q', 'infrastructure/.terraform.lock.hcl'],
+            cwd=app.FRAMEWORK)
+        self.assertEqual(ignored.returncode, 0)
+        status = subprocess.run(
+            ['git', 'status', '--porcelain', '--', 'infrastructure/.terraform.lock.hcl'],
+            cwd=app.FRAMEWORK, capture_output=True, text=True)
+        self.assertEqual(status.stdout, '')
+
 if __name__=='__main__':unittest.main()

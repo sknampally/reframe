@@ -2,7 +2,7 @@
 
 This stack creates one private S3 bucket and one IAM role for fixture AWS Transform runs. The role can use the `reframe/` prefix in that bucket. It denies object and bucket reads everywhere else, including production mainframe data in the same account.
 
-OpenTofu does not create the Transform workspace. Guided start does that after apply. The `.tf` files are the shared configuration language OpenTofu runs.
+OpenTofu does not create the Transform workspace. Guided start does that after apply. The `.tf` files are the shared configuration language OpenTofu runs. Apply writes `.terraform.lock.hcl` beside this stack. That file stays on the machine that applied it, so the framework checkout stays clean for workspace initialization.
 
 The CLI reads these settings and refuses to start a new AWS assessment when any of them is empty:
 
