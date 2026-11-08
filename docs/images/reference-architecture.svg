@@ -79,8 +79,8 @@
 <text x="949" y="690" text-anchor="middle" class="label">Technical pass</text>
 <rect x="1076" y="425" width="308" height="120" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
 <text x="1230.0" y="458" text-anchor="middle" class="head">Target implementation</text>
-<text x="1230.0" y="487" text-anchor="middle" class="body">C#/.NET on AWS</text>
-<text x="1230.0" y="510" text-anchor="middle" class="body">Blazor: UI option, not fixed</text>
+<text x="1230.0" y="487" text-anchor="middle" class="body">Chosen language and runtime</text>
+<text x="1230.0" y="510" text-anchor="middle" class="body">UI technology is a decision</text>
 <rect x="1076" y="630" width="308" height="140" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
 <text x="1230.0" y="663" text-anchor="middle" class="head">Equivalence &amp; operations</text>
 <text x="1230.0" y="692" text-anchor="middle" class="body">Controlled legacy/target checks</text>
@@ -92,6 +92,6 @@
 <path d="M1230 340 V425" class="approve"/>
 <path d="M1230 545 V630" class="edge"/>
 <path d="M1230 770 V845" class="approve"/>
-<text x="36" y="1003" text-anchor="start" class="sub">Design proposal only. No executable orchestrator, .NET migration, or equivalence harness is supplied.</text>
+<text x="36" y="1003" text-anchor="start" class="sub">Design proposal only. No generated application or equivalence harness is supplied.</text>
 <text x="36" y="1028" text-anchor="start" class="label">A technical PASS recommends advancement; human approval never substitutes for missing evidence.</text>
 </svg>

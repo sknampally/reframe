@@ -1,6 +1,6 @@
 # Reframe
 
-A CLI that assesses pinned mainframe source, builds wireframes, and packages an AI-DLC handoff for forward deployment. It does not build the target application, deploy it, or prove runtime equivalence. C#/.NET on AWS is an intended later target; that design remains an explicit architecture decision.
+A CLI that reverse-engineers pinned mainframe source, builds wireframes, and packages an AI-DLC handoff. A later team uses that handoff in any AI coding tool and any target language. Reframe does not build the target application, deploy it, or prove runtime equivalence. The language, runtime, and platform remain an explicit architecture decision.
 
 **Status: four-phase POC tested with offline fixtures. One repaired CardDemo AWS
 assessment reached the human review gate; uninterrupted release acceptance and
@@ -277,7 +277,7 @@ Installed `skills/` and `docs/lessons-learned.md` remain future additions; they 
 - Local pilot runner: shared manifest, metered operations, sealing, and review preflight are implemented for manual diagnostics.
 - Validation pilot: pin public source and validate one rule with independently reviewed evidence.
 - Preparation CLI: four phases, Claude Code review, HTML, versioned packages and repeated assessment comparison implemented; live provider/AWS acceptance pending.
-- Implementation pilot: build one vertical .NET slice with measured equivalence and failure-path tests.
+- Implementation pilot: build one vertical slice in the language the team chooses, with measured equivalence and failure-path tests.
 - Operational pilot: rehearse migration, recovery, observability, and rollback before any release claim.
 
 Each milestone requires its own reviewed evidence; the roadmap is not a list of working features.
