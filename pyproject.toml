@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "reframe"
 version = "0.3.0"
-description = "Evidence-driven modernization preparation CLI"
+description = "Reverse-engineer mainframe source into an AI-DLC handoff for any language"
 requires-python = ">=3.10"
 dependencies = ["mcp>=2,<3", "rich>=13,<15", "prompt-toolkit>=3.0,<4"]
 

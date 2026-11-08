@@ -1,6 +1,6 @@
 # 05 — Incremental implementation
 
-Purpose: implement one reviewable vertical slice without losing its evidence chain. This repository supplies guidance, not a generated .NET application or build pipeline.
+Purpose: implement one reviewable vertical slice without losing its evidence chain. This repository supplies guidance, not generated application code or a build pipeline. The team chooses the language and the AI coding tool.
 
 ## Inputs and prerequisites
 

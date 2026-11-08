@@ -22,7 +22,7 @@ The useful lessons are methodological: generated job-level coverage does not pro
 | Baseline | Upstream commit, selected public modules, exclusions, and tool versions — currently not populated |
 | Scope | One bounded behavior and approved synthetic fixtures |
 | Evidence | Source path, paragraph/symbol, revision, and reviewed rule mapping |
-| Target | Reasoned .NET design decision and observable contract |
+| Target | Reasoned design decision for the chosen language and its observable contract |
 | Verification | Actual commands, environment, expected and actual results, reviewer findings |
 | Outcome | Measured result and limitations; no claim until independently reviewed |
 

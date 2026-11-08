@@ -74,7 +74,7 @@ class Terminal:
 
     def header(self):
         content = Text('REFRAME\n', style='bold bright_cyan')
-        content.append('Assess pinned source, build wireframes, and package an AI-DLC handoff\n',style='bold white')
+        content.append('Reverse-engineer mainframe source into an AI-DLC handoff for any language\n',style='bold white')
         content.append('Assess  →  Validate  →  Business review  →  Package',style='dim')
         self.console.print(Panel(content, border_style='cyan', padding=(1,2),
             subtitle='PREVIEW · simulated data · no service calls' if self.demo else 'LIVE WORKSPACE · explicit human gates'))
