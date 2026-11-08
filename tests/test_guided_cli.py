@@ -102,7 +102,7 @@ class GuidedTests(unittest.TestCase):
              patch.object(app,'setup',side_effect=setup):
             result=guide.guided_init(self.args('init'))
         outputs.assert_called_once_with('fixture','us-east-1',True)
-        deny.assert_called_once_with('fixture-production')
+        deny.assert_called_once_with('fixture-production', 'fixture', 'us-east-1')
         self.assertEqual(result['status'],'READY_TO_ASSESS')
         self.assertEqual(result['next_step'],'reframe assess')
 
@@ -168,10 +168,22 @@ class GuidedTests(unittest.TestCase):
         with patch('platform.system', return_value='Darwin'), patch('platform.machine', return_value='x86_64'), patch.object(guide.subprocess, 'run', side_effect=run):
             self.assertEqual(guide.current_platform(), 'darwin_arm64')
 
+    def test_sso_profile_ignores_a_stale_static_key(self):
+        with patch.dict(guide.os.environ, {'AWS_ACCESS_KEY_ID': 'stale', 'AWS_SESSION_TOKEN': 'stale'}, clear=False), patch.object(guide, 'profile_uses_sso', return_value=True):
+            with guide.aws_profile_env('fixture', 'us-east-1') as env:
+                credentials = Path(env['AWS_SHARED_CREDENTIALS_FILE'])
+                self.assertEqual(credentials.read_text(), '')
+                self.assertEqual(credentials.stat().st_mode & 0o777, 0o600)
+                self.assertNotIn('AWS_ACCESS_KEY_ID', env)
+                self.assertNotIn('AWS_SESSION_TOKEN', env)
+                self.assertEqual(env['AWS_PROFILE'], 'fixture')
+                self.assertEqual(env['AWS_DEFAULT_REGION'], 'us-east-1')
+            self.assertFalse(credentials.exists())
+
     def test_denied_production_read_is_required(self):
-        with patch.object(guide, 'opentofu_binary', return_value='tofu'), patch.object(guide.subprocess, 'run', return_value=argparse.Namespace(returncode=1, stdout='listed', stderr='')):
+        with patch.object(guide, 'opentofu_binary', return_value='tofu'), patch.object(guide, 'profile_uses_sso', return_value=False), patch.object(guide.subprocess, 'run', return_value=argparse.Namespace(returncode=1, stdout='listed', stderr='')):
             with self.assertRaisesRegex(Blocked,'not denied') as caught:
-                guide.confirm_production_deny('fixture-production')
+                guide.confirm_production_deny('fixture-production', 'fixture', 'us-east-1')
         self.assertFalse(hasattr(caught.exception,'hint') and 'fixture-production' in caught.exception.hint)
         self.assertNotIn('listed', str(caught.exception))
 
