@@ -134,10 +134,20 @@ def halt(message, hint):
     raise error
 
 
+def host_machine():
+    """CPU architecture of this computer, including a Mac whose Python process is translated."""
+    machine = platform.machine().lower()
+    if platform.system() == 'Darwin' and machine in {'x86_64', 'i386'}:
+        native = subprocess.run(['/usr/bin/arch', '-arm64', '/usr/bin/uname', '-m'], capture_output=True, text=True)
+        if native.returncode == 0 and native.stdout.strip().lower() in {'arm64', 'aarch64'}:
+            return 'arm64'
+    return machine
+
+
 def current_platform():
     """OpenTofu platform name for the computer running this command."""
     system = {'Darwin': 'darwin', 'Linux': 'linux', 'Windows': 'windows'}.get(platform.system(), '')
-    arch = {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64', 'amd64': 'amd64'}.get(platform.machine().lower(), '')
+    arch = {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64', 'amd64': 'amd64'}.get(host_machine(), '')
     return system + '_' + arch if system and arch else ''
 
 
