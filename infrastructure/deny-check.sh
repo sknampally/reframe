@@ -4,7 +4,14 @@ set -eu
 bucket=${1:?Pass the production bucket name. Do not commit it.}
 cd "$(dirname "$0")"
 role_arn=$("${TOFU:-tofu}" output -raw sandbox_role_arn)
-creds=$(aws sts assume-role --role-arn "$role_arn" --role-session-name reframe-deny-check --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+set +e
+creds=$(aws sts assume-role --role-arn "$role_arn" --role-session-name reframe-deny-check --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text 2>&1)
+assume_status=$?
+set -e
+if [ "$assume_status" -ne 0 ]; then
+  echo "The sandbox role could not be assumed for the deny check. Choose guided start again so the role trust can update." >&2
+  exit "$assume_status"
+fi
 access_key=$(printf '%s' "$creds" | awk '{print $1}')
 secret_key=$(printf '%s' "$creds" | awk '{print $2}')
 session_token=$(printf '%s' "$creds" | awk '{print $3}')
