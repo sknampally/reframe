@@ -679,7 +679,12 @@ class PreparationTests(unittest.TestCase):
         app.write(directory / 'run.json', run)
         class Client:
             def calls(self, requests):
-                return [{}, {'job':{'jobId':'fixture-job','status':'COMPLETED'}}]
+                values = {'list_resources':{'users':[{'userId':'11111111-1111-1111-1111-111111111111','email':'fixture@example.com'}]},
+                          'manage_collaborator':{},
+                          'load_instructions':{},
+                          'get_job_status':{'job':{'jobId':'fixture-job','status':'COMPLETED'}}}
+                return [values.get(key, {}) for key, _value in requests]
+        app.write(self.work / 'aws-identity.json', {'Arn':'arn:aws:sts::000000000000:assumed-role/fixture/fixture@example.com'})
         result = app.assessment(self.work, self.project, self.args('resume','--label','a'), Client())
         self.assertEqual(result['status'], 'AWAITING_ASSESSMENT_APPROVAL')
         self.assertNotIn('pipeline', self.project)
@@ -690,6 +695,7 @@ class PreparationTests(unittest.TestCase):
         self.project['settings']['transform'] = {'workspace_id':'fixture-workspace','upload_prefix':'s3://fixture-private/source','sandbox_role':'fixture-sandbox-role','orchestrator_agent':'fixture-mainframe'}
         self.project['settings']['allow_new_assessments'] = True
         app.persist(self.work, self.project)
+        app.write(self.work / 'aws-identity.json', {'Arn':'arn:aws:sts::000000000000:assumed-role/fixture/fixture@example.com'})
         created = []
         class First:
             def calls(self, requests):
@@ -700,6 +706,8 @@ class PreparationTests(unittest.TestCase):
                         if json.loads(receipt.read_text()).get('accepted') is not False:
                             raise AssertionError('receipt must be written before the provider call')
                         raise OSError('lost response')
+                if any(name == 'list_resources' for name, _arguments in requests):
+                    return [{'users':[{'userId':'11111111-1111-1111-1111-111111111111','email':'fixture@example.com'}]}]
                 return [{}]
         self_work = self.work
         completed = type('Result', (), {'returncode': 0})()
@@ -723,10 +731,13 @@ class PreparationTests(unittest.TestCase):
         self.project['setup']['connector_approved_by'] = 'Fixture admin'
         self.project['setup']['connector_id'] = 'fixture-connector'
         self.project['settings']['transform'] = {'workspace_id':'fixture-workspace','upload_prefix':'s3://fixture-private/source','sandbox_role':'fixture-sandbox-role','orchestrator_agent':'fixture-mainframe'}
+        app.write(self.work / 'aws-identity.json', {'Arn':'arn:aws:sts::000000000000:assumed-role/fixture/fixture@example.com'})
         class Client:
             def calls(self, requests):
-                return [{'job':{'jobId':'fixture-job','status':'RUNNING'}} if key in {'create_job','get_job_status'} else {}
-                        for key, value in requests]
+                values = {'list_resources':{'users':[{'userId':'11111111-1111-1111-1111-111111111111','email':'fixture@example.com'}]},
+                          'create_job':{'job':{'jobId':'fixture-job','status':'RUNNING'}},
+                          'get_job_status':{'job':{'jobId':'fixture-job','status':'RUNNING'}}}
+                return [values.get(key, {}) for key, value in requests]
         result = type('Result', (), {'returncode':0})()
         with patch.object(kw.subprocess, 'run', return_value=result):
             app.assessment(self.work, self.project, self.args('assess','--label','a','--allow-new-assessment'), Client())
@@ -770,10 +781,15 @@ class PreparationTests(unittest.TestCase):
                 calls.extend(requests)
                 values = {'get_status':{}, 'create_workspace':{'workspaceId':'fixture-workspace'},
                           'create_connector':{'connectorId':'fixture-connector','verificationLink':'https://example.invalid/verify'},
-                          'get_resource':{'accountConnection':{'awsAccountConnection':{'status':'ACTIVE','accountId':'fixture-account'}}}}
+                          'get_resource':{'accountConnection':{'awsAccountConnection':{'status':'ACTIVE','accountId':'fixture-account'}}},
+                          'list_resources':{'users':[
+                              {'userId':'AROAEXAMPLE:fixture@example.com','userName':'fixture@example.com'},
+                              {'userId':'11111111-1111-1111-1111-111111111111','email':'fixture@example.com'}]},
+                          'manage_collaborator':{}}
                 return [values[key] for key, value in requests]
         def aws(project, *args):
-            if args[:2] == ('sts','get-caller-identity'): return {'Account':'fixture-account'}
+            if args[:2] == ('sts','get-caller-identity'):
+                return {'Account':'fixture-account','Arn':'arn:aws:sts::000000000000:assumed-role/fixture/fixture@example.com'}
             if args[:2] == ('s3api','get-public-access-block'):
                 return {'PublicAccessBlockConfiguration': {k:True for k in ('BlockPublicAcls','IgnorePublicAcls','BlockPublicPolicy','RestrictPublicBuckets')}}
             return {}
@@ -791,6 +807,16 @@ class PreparationTests(unittest.TestCase):
         connector=next(value for key,value in calls if key=='create_connector')
         self.assertEqual(connector['connectorType'],'mainframe_modernization|s3|2')
         self.assertEqual(connector['configuration'],{'s3BucketArn':'arn:aws:s3:::fixture-private'})
+        member = next(value for key, value in calls if key == 'manage_collaborator')
+        self.assertEqual(member['userId'], '11111111-1111-1111-1111-111111111111')
+        self.assertEqual(member['role'], 'ADMIN')
+
+    def test_console_access_ignores_the_role_session(self):
+        class Client:
+            def calls(self, requests):
+                return [{'users':[{'userId':'AROAEXAMPLE:fixture@example.com','userName':'fixture@example.com'}]}]
+        with self.assertRaisesRegex(pilot.Blocked, 'console user'):
+            app.grant_console_access(Client(), {'Arn':'arn:aws:sts::000000000000:assumed-role/fixture/fixture@example.com'}, 'fixture-workspace')
 
     def test_operator_confirmation_cannot_override_aws_connector_readiness(self):
         self.project['aws'].update(bucket='fixture-private', region='us-east-1')
