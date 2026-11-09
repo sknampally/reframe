@@ -253,6 +253,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(run['plan_bootstrap']['attempts'],2)
         self.assertEqual(run['status'],'WAITING_FOR_HUMAN')
 
+    def test_option_three_confirmation_is_sent_once_after_the_objective(self):
+        run, snapshot, identity = self.onboarding()
+        run['plan_bootstrap'] = {'pending':False,'attempts':2,'sent_messages':['older'],'confirmation_sent':False}
+        snapshot['messages']['messages'][0]['text'] = (
+            'Select option 3 to build a custom plan with Analyze code. Please confirm your choice.')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests)
+                return [{}, {'accepted':True}]
+        self.assertTrue(flow.bootstrap_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        sent = [args['text'] for name,args in calls if name=='send_message']
+        self.assertEqual(len(sent),1)
+        self.assertIn('Select option 3', sent[0])
+        self.assertNotIn('fixture-job', sent[0])
+        snapshot['messages']['messages'][0]['messageId'] = 'again'
+        self.assertTrue(flow.bootstrap_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name=='send_message' for name,_ in calls),1)
+        self.assertEqual(run['status'],'WAITING_FOR_HUMAN')
+
     def execution_fixture(self):
         run, snapshot, identity = self.onboarding()
         run['settings']['allow_new_assessments'] = True

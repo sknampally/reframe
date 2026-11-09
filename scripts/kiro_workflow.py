@@ -445,6 +445,12 @@ def select_orchestrator(run, client):
     return agent
 
 
+def plan_confirmation(text):
+    """AWS is asking which menu choice builds the assessment plan."""
+    lower = text.lower()
+    return 'option 3' in lower and 'confirm' in lower and 'analy' in lower
+
+
 def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     """Select the agreed capabilities through job chat, never approve a deliverable.
 
@@ -462,7 +468,8 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     latest = max(system, key=lambda m: str(m.get('createdAt', '')))
     text = latest.get('text', '').lower()
     recognized = (('custom' in text and ('capabilities' in text or 'job plan' in text))
-                  or ('please confirm' in text and 'assessment-only' in text))
+                  or ('please confirm' in text and 'assessment-only' in text)
+                  or plan_confirmation(text))
     if not recognized:
         return False
     progress = run.setdefault('plan_bootstrap', {'sent_messages': [], 'attempts': 0})
@@ -480,23 +487,32 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
         return True
     if message_id in progress['sent_messages']:
         return False
-    if progress['attempts'] >= 2:
-        run['status'] = 'WAITING_FOR_HUMAN'
-        run['reason'] = 'AWS plan onboarding did not finish after two bounded attempts; inspect the private assessment status.'
-        return True
     config = run['settings']['transform']
     connector = config.get('connector_id')
     source = run.get('uploaded_source', {}).get('uri')
     require(connector and source, 'Plan setup requires the recorded connector_id and uploaded source URI; do not guess inputs')
     # AWS refuses job, workspace, connector, and archive identifiers in this chat.
     # The recorded upload is submitted later on the resource-location task.
-    message = (
-        'I want an assessment only. Analyze code. Analyze data where supported inputs exist. '
-        'Generate technical documentation. Extract business logic. '
-        'Do not decompose code, plan test cases, reimagine the application, implement it, or deploy it. '
-        'This capability selection is confirmed. Generate the plan and proceed. '
-        'Scope: ' + run['objective'] + '. '
-        'Preserve human approval of the generated findings. This is capability selection, not deliverable approval.')
+    if plan_confirmation(text):
+        if progress.get('confirmation_sent'):
+            run['status'] = 'WAITING_FOR_HUMAN'
+            run['reason'] = 'AWS plan confirmation did not produce a plan; inspect the private assessment status.'
+            return True
+        message = (
+            'Select option 3. Build the custom plan with only Analyze code, Analyze data, '
+            'Generate technical documentation, and Extract business logic. Do not include reimagine.')
+    else:
+        if progress['attempts'] >= 2:
+            run['status'] = 'WAITING_FOR_HUMAN'
+            run['reason'] = 'AWS plan onboarding did not finish after two bounded attempts; inspect the private assessment status.'
+            return True
+        message = (
+            'I want an assessment only. Analyze code. Analyze data where supported inputs exist. '
+            'Generate technical documentation. Extract business logic. '
+            'Do not decompose code, plan test cases, reimagine the application, implement it, or deploy it. '
+            'This capability selection is confirmed. Generate the plan and proceed. '
+            'Scope: ' + run['objective'] + '. '
+            'Preserve human approval of the generated findings. This is capability selection, not deliverable approval.')
     require(len(message) <= 7000, 'Assessment scope exceeds AWS job chat limit')
     attempt = progress['attempts'] + 1
     private_save(directory / f'plan-bootstrap-{attempt}-intent.json', {'reply_to': message_id, 'text': message})
@@ -506,6 +522,8 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
                              ('send_message', {**identity, 'text': message, 'skipPolling': True})])[-1]
     private_save(directory / f'plan-bootstrap-{attempt}-receipt.json', response)
     progress.update(pending=False, attempts=attempt)
+    if plan_confirmation(text):
+        progress['confirmation_sent'] = True
     progress['sent_messages'].append(message_id)
     run['status'] = 'WAITING_FOR_ASSESSMENT'
     run['reason'] = 'Assessment-only plan selection sent; resume to check the same job.'
