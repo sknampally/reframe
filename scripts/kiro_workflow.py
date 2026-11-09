@@ -531,33 +531,42 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     return True
 
 
+REQUIRED_ASSESSMENT_STEPS = frozenset({
+    'Kick off modernization', 'Analyze code', 'Analyze data',
+    'Generate technical documentation', 'Extract business logic',
+})
+OPTIONAL_ASSESSMENT_STEPS = frozenset({'Analyze activity metrics'})
+
+
+def assessment_plan_authorized(steps):
+    """The required assessment steps, plus activity metrics when AWS includes it."""
+    names = {step.get('stepName') for step in steps}
+    return REQUIRED_ASSESSMENT_STEPS <= names <= REQUIRED_ASSESSMENT_STEPS | OPTIONAL_ASSESSMENT_STEPS
+
+
 def assessment_plan_complete(snapshot):
     """An optional invitation may keep the job open after every assessment step finishes."""
     steps = snapshot.get('plan', {}).get('steps', [])
-    expected = {'Kick off modernization', 'Analyze code', 'Analyze data',
-                'Generate technical documentation', 'Extract business logic'}
-    return (len(steps) == len(expected) and {s.get('stepName') for s in steps} == expected
-            and all(s.get('status') == 'SUCCEEDED' for s in steps))
+    return bool(steps) and assessment_plan_authorized(steps) and all(step.get('status') == 'SUCCEEDED' for step in steps)
 
 
 def assessment_start_offered(text):
     """True when AWS has finished the plan and is asking to run it.
 
-    Older jobs say they can start the execution. Current jobs say the plan is
-    ready to execute and ask to proceed with running it.
+    The wording changes between jobs. A finished plan asks to start, to proceed
+    with execution, or what to do next. Match those offers, not one sentence.
     """
     lower = text.lower()
-    legacy = 'plan' in lower and 'ready' in lower and 'start the execution' in lower
-    current = 'ready to execute' in lower and 'running the plan' in lower
-    generated = 'plan has been generated' in lower and 'what would you like to do next' in lower
-    return legacy or current or generated
+    planned = ('plan generated' in lower or 'plan has been generated' in lower or 'plan is ready' in lower)
+    ready = ('ready to execute' in lower or 'ready to start' in lower
+             or 'start the execution' in lower or 'what would you like to do next' in lower
+             or ('proceed' in lower and 'execut' in lower))
+    return planned and ready
 
 
 def start_assessment_plan(run, directory, client, identity, snapshot):
-    """Start only the exact assessment plan already authorized by this run."""
+    """Start the assessment plan already authorized by this run."""
     steps = snapshot.get('plan', {}).get('steps', [])
-    expected = {'Kick off modernization', 'Analyze code', 'Analyze data',
-                'Generate technical documentation', 'Extract business logic'}
     if not steps or any(step.get('status') != 'NOT_STARTED' for step in steps):
         return False
     messages = [m for m in snapshot.get('messages', {}).get('messages', [])
@@ -569,7 +578,7 @@ def start_assessment_plan(run, directory, client, identity, snapshot):
     if not assessment_start_offered(latest.get('text', '')):
         return False
     require(run['settings'].get('allow_new_assessments'), 'Assessment execution is not authorized')
-    require(len(steps) == len(expected) and {s.get('stepName') for s in steps} == expected,
+    require(assessment_plan_authorized(steps),
             'Generated plan differs from the authorized assessment capabilities; inspect before starting')
     intent = directory / 'plan-execution-intent.json'
     receipt = directory / 'plan-execution-receipt.json'
@@ -579,10 +588,10 @@ def start_assessment_plan(run, directory, client, identity, snapshot):
     if intent.exists():
         run.update(status='NEEDS_RECONCILIATION', reason='Execution request outcome uncertain; reconcile before retrying.')
         return True
-    message = ('Start execution of the existing assessment plan in this job now. '
-               'Use the already recorded connector and source archive. Execute only kickoff, '
-               'code analysis, data analysis, technical documentation and business-rule extraction. '
-               'Do not create another job, add capabilities, implement or deploy. '
+    message = ('Start the existing assessment plan now. The source archive is already recorded. '
+               'There is no SCRT file and there are no SMF records, so do not wait for them. '
+               'Execute kickoff, code analysis, data analysis, technical documentation, and business-rule extraction. '
+               'Do not create another job, add reimagine, implement, or deploy. '
                'This starts the authorized assessment; final findings remain subject to human review.')
     private_save(intent, {'identity': identity, 'reply_to': latest.get('messageId'), 'text': message,
                           'steps': steps})

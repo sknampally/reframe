@@ -319,6 +319,23 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
         self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
 
+    def test_ready_to_start_with_activity_metrics_starts_the_plan(self):
+        run, snapshot, identity = self.execution_fixture()
+        snapshot['plan']['steps'].append({'stepName':'Analyze activity metrics','status':'NOT_STARTED'})
+        snapshot['messages']['messages'][0]['text'] = (
+            'Plan generated successfully. Your assessment-only plan includes Analyze activity metrics. '
+            'The plan is ready to execute. Are you ready to start?')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
+        self.assertIn('no SMF records', calls[-1][1]['text'])
+        for step in snapshot['plan']['steps']:
+            step['status'] = 'SUCCEEDED'
+        self.assertTrue(flow.assessment_plan_complete(snapshot))
+
     def test_generated_plan_without_a_start_phrase_still_starts(self):
         run, snapshot, identity = self.execution_fixture()
         snapshot['messages']['messages'][0]['text'] = (
