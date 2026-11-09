@@ -286,6 +286,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
         self.assertTrue((self.directory/'plan-execution-receipt.json').exists())
 
+    def test_ready_to_execute_wording_starts_the_plan(self):
+        run, snapshot, identity = self.execution_fixture()
+        snapshot['messages']['messages'][0]['text'] = (
+            'Plan generated successfully. Ready to execute. '
+            'Would you like to proceed with running the plan now?')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
+
     def test_execution_start_rejects_added_capability_and_uncertain_send(self):
         run, snapshot, identity = self.execution_fixture()
         class Client:

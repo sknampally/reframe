@@ -524,6 +524,18 @@ def assessment_plan_complete(snapshot):
             and all(s.get('status') == 'SUCCEEDED' for s in steps))
 
 
+def assessment_start_offered(text):
+    """True when AWS has finished the plan and is asking to run it.
+
+    Older jobs say they can start the execution. Current jobs say the plan is
+    ready to execute and ask to proceed with running it.
+    """
+    lower = text.lower()
+    legacy = 'plan' in lower and 'ready' in lower and 'start the execution' in lower
+    current = 'ready to execute' in lower and 'running the plan' in lower
+    return legacy or current
+
+
 def start_assessment_plan(run, directory, client, identity, snapshot):
     """Start only the exact assessment plan already authorized by this run."""
     steps = snapshot.get('plan', {}).get('steps', [])
@@ -537,8 +549,7 @@ def start_assessment_plan(run, directory, client, identity, snapshot):
     if not messages:
         return False
     latest = max(messages, key=lambda m: str(m.get('createdAt', '')))
-    text = latest.get('text', '').lower()
-    if not ('plan' in text and 'ready' in text and 'start the execution' in text):
+    if not assessment_start_offered(latest.get('text', '')):
         return False
     require(run['settings'].get('allow_new_assessments'), 'Assessment execution is not authorized')
     require(len(steps) == len(expected) and {s.get('stepName') for s in steps} == expected,
