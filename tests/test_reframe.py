@@ -371,6 +371,17 @@ class PreparationTests(unittest.TestCase):
         project = app.read(work / 'project.json')
         self.assertEqual(project['settings']['transform']['upload_prefix'], 's3://fixture-bucket/reframe')
 
+    def test_sandbox_role_writes_anywhere_in_its_bucket_and_cannot_read_others(self):
+        policy = (Path(__file__).resolve().parents[1] / 'infrastructure' / 'main.tf').read_text()
+        use = policy.split('sid    = "UseSandbox"', 1)[1].split('sid    = "DenyReadsOutsideSandbox"', 1)[0]
+        deny = policy.split('sid    = "DenyReadsOutsideSandbox"', 1)[1]
+        self.assertIn('"${aws_s3_bucket.sandbox.arn}/*"', use)
+        self.assertIn('s3:PutObject', use)
+        self.assertNotIn('s3:prefix', policy)
+        for action in ('s3:GetObject', 's3:GetObjectVersion', 's3:ListBucket'):
+            self.assertIn(action, deny)
+        self.assertIn('not_resources', deny)
+
     def test_resume_unknown_label_never_creates(self):
         with self.assertRaisesRegex(pilot.Blocked, 'never creates'):
             app.assessment(self.work, self.project, self.args('resume', '--label', 'missing'))
