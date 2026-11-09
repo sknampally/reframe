@@ -147,6 +147,32 @@ def mutation(work, project, key, fn):
     return result
 
 
+def console_session_name(identity):
+    """Email-style name on an assumed-role session. The console user is a different record."""
+    arn = identity.get('Arn') or ''
+    if ':assumed-role/' in arn and '/' in arn:
+        return arn.rsplit('/', 1)[-1]
+    return ''
+
+
+def directory_user(user):
+    user_id = user.get('userId') or ''
+    return bool(re.fullmatch(r'[0-9a-fA-F-]{36}', user_id)) and user_id.count('-') == 4
+
+
+def grant_console_access(client, identity, workspace_id):
+    """Let the Transform web user open the workspace the AWS role created."""
+    session = console_session_name(identity)
+    require(session, 'The AWS session has no console user name, so the workspace cannot be opened in Transform.')
+    found = client.calls([('list_resources', {'resource': 'users', 'searchTerm': session})])[0]
+    users = found.get('users') or []
+    chosen = [user for user in users if (user.get('email') or '').lower() == session.lower() and directory_user(user)]
+    require(len(chosen) == 1, 'The Transform console user for this AWS session was not found, so the workspace cannot be opened in the console.')
+    client.calls([('manage_collaborator', {
+        'workspaceId': workspace_id, 'action': 'put', 'userId': chosen[0]['userId'], 'role': 'ADMIN'})])
+    print('Transform console user can open this workspace.')
+
+
 def setup(work, project, args, client=None):
     authentication = None
     if args.connect:
@@ -222,6 +248,7 @@ def setup(work, project, args, client=None):
         project['setup']['connector_approved_by'] = args.connector_approved
     if project['setup'].get('connector_id'):
         config['connector_id'] = project['setup']['connector_id']
+    grant_console_access(client, identity, config['workspace_id'])
     project['stage'] = 'READY_TO_ASSESS' if project['setup'].get('connector_approved_by') else 'WAITING_FOR_CONNECTOR_APPROVAL'
     persist(work, project)
     return {'status': project['stage'], 'verification_link': project['setup'].get('verification_link')}
@@ -474,6 +501,11 @@ def assessment(work, project, args, client=None):
         run['settings']['allow_new_assessments'] = True
     try:
         verify_source(project)
+        if not run.get('assessment_input') and not (run.get('create_pending') and not run.get('job_id')):
+            service = client or kw.Transform(run['settings']['transform'], directory)
+            identity_path = work / 'aws-identity.json'
+            identity = read(identity_path) if identity_path.is_file() else aws(project, 'sts', 'get-caller-identity', '--output', 'json')
+            grant_console_access(service, identity, run['settings']['transform']['workspace_id'])
         if args.attach_job:
             require(not run['job_id'] and run['create_pending'], 'Only reconcile an uncertain creation')
             service = client or kw.Transform(run['settings']['transform'], directory)
