@@ -565,6 +565,20 @@ def assessment_start_offered(text):
     return planned and ready
 
 
+def assessment_plan_announced(text):
+    """True when AWS has generated the plan and setup should continue.
+
+    The next sentence is not stable. One job asks to start, another asks what
+    to do next, and another asks to configure the recorded source. A request to
+    approve findings is not this announcement.
+    """
+    lower = text.lower()
+    if 'approve' in lower and 'finding' in lower:
+        return False
+    return ('plan has been generated' in lower or 'plan generated' in lower
+            or 'plan is ready' in lower or assessment_start_offered(text))
+
+
 def exclude_activity_metrics(run, directory, client, identity, snapshot):
     """Ask AWS to rebuild a not-yet-started plan that includes activity metrics.
 
@@ -613,7 +627,7 @@ def start_assessment_plan(run, directory, client, identity, snapshot):
     if not messages:
         return False
     latest = max(messages, key=lambda m: str(m.get('createdAt', '')))
-    if not assessment_start_offered(latest.get('text', '')):
+    if not assessment_plan_announced(latest.get('text', '')):
         return False
     require(run['settings'].get('allow_new_assessments'), 'Assessment execution is not authorized')
     require(assessment_plan_authorized(steps),
@@ -626,7 +640,8 @@ def start_assessment_plan(run, directory, client, identity, snapshot):
     if intent.exists():
         run.update(status='NEEDS_RECONCILIATION', reason='Execution request outcome uncertain; reconcile before retrying.')
         return True
-    message = ('Start the existing assessment plan now. The source archive is already recorded. '
+    message = ('Yes. Configure the assessment inputs from the recorded source archive, then start the existing assessment plan now. '
+               'The source archive is already recorded. '
                'There is no SCRT file and there are no SMF records, so do not wait for them. '
                'Execute kickoff, code analysis, data analysis, technical documentation, and business-rule extraction. '
                'Do not create another job, add reimagine, implement, or deploy. '

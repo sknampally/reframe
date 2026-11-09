@@ -336,6 +336,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
         self.assertEqual(run['status'],'WAITING_FOR_HUMAN')
 
+    def test_generated_plan_that_asks_for_inputs_starts(self):
+        run, snapshot, identity = self.execution_fixture()
+        snapshot['messages']['messages'][0]['text'] = (
+            'Your assessment plan has been generated with the following capabilities: '
+            'Analyze code, Analyze data, Generate technical documentation, and Extract business logic. '
+            'Next step: configure your assessment inputs. '
+            'Would you like to proceed with configuring your inputs?')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        sent = [args['text'] for name,args in calls if name=='send_message']
+        self.assertEqual(len(sent),1)
+        self.assertIn('Configure the assessment inputs', sent[0])
+        self.assertIn('start the existing assessment plan', sent[0])
+        self.assertNotIn('s3://', sent[0])
+
     def test_generated_plan_without_a_start_phrase_still_starts(self):
         run, snapshot, identity = self.execution_fixture()
         snapshot['messages']['messages'][0]['text'] = (
