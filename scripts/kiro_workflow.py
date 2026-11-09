@@ -500,15 +500,18 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
             return True
         message = (
             'Select option 3. Build the custom plan with only Analyze code, Analyze data, '
-            'Generate technical documentation, and Extract business logic. Do not include reimagine.')
+            'Generate technical documentation, and Extract business logic. '
+            'Do not include Analyze activity metrics. No SMF records and no SCRT file are available. '
+            'Do not include reimagine.')
     else:
         if progress['attempts'] >= 2:
             run['status'] = 'WAITING_FOR_HUMAN'
             run['reason'] = 'AWS plan onboarding did not finish after two bounded attempts; inspect the private assessment status.'
             return True
         message = (
-            'I want an assessment only. Analyze code. Analyze data where supported inputs exist. '
+            'I want an assessment only. Analyze code. Analyze data. '
             'Generate technical documentation. Extract business logic. '
+            'Do not include Analyze activity metrics. No SMF records and no SCRT file are available. '
             'Do not decompose code, plan test cases, reimagine the application, implement it, or deploy it. '
             'This capability selection is confirmed. Generate the plan and proceed. '
             'Scope: ' + run['objective'] + '. '
@@ -535,13 +538,11 @@ REQUIRED_ASSESSMENT_STEPS = frozenset({
     'Kick off modernization', 'Analyze code', 'Analyze data',
     'Generate technical documentation', 'Extract business logic',
 })
-OPTIONAL_ASSESSMENT_STEPS = frozenset({'Analyze activity metrics'})
 
 
 def assessment_plan_authorized(steps):
-    """The required assessment steps, plus activity metrics when AWS includes it."""
-    names = {step.get('stepName') for step in steps}
-    return REQUIRED_ASSESSMENT_STEPS <= names <= REQUIRED_ASSESSMENT_STEPS | OPTIONAL_ASSESSMENT_STEPS
+    """The assessment steps this run is allowed to execute."""
+    return {step.get('stepName') for step in steps} == REQUIRED_ASSESSMENT_STEPS
 
 
 def assessment_plan_complete(snapshot):
@@ -562,6 +563,43 @@ def assessment_start_offered(text):
              or 'start the execution' in lower or 'what would you like to do next' in lower
              or ('proceed' in lower and 'execut' in lower))
     return planned and ready
+
+
+def exclude_activity_metrics(run, directory, client, identity, snapshot):
+    """Ask AWS to rebuild a not-yet-started plan that includes activity metrics.
+
+    That step needs an SMF file. This source has none, and the task has no way
+    to continue without one. One request is sent. The plan is not started
+    while the step remains.
+    """
+    steps = snapshot.get('plan', {}).get('steps', [])
+    if not steps or any(step.get('status') != 'NOT_STARTED' for step in steps):
+        return False
+    if not any(step.get('stepName') == 'Analyze activity metrics' for step in steps):
+        return False
+    receipt = directory / 'plan-without-activity-metrics-receipt.json'
+    intent = directory / 'plan-without-activity-metrics-intent.json'
+    if receipt.is_file():
+        run['status'] = 'WAITING_FOR_HUMAN'
+        run['reason'] = 'AWS kept Analyze activity metrics after one request to remove it. Start a new assessment that excludes that step.'
+        return True
+    if intent.is_file():
+        run['status'] = 'NEEDS_RECONCILIATION'
+        run['reason'] = 'The request to remove activity metrics has an uncertain result. Reconcile before sending it again.'
+        return True
+    message = (
+        'Regenerate this assessment plan without Analyze activity metrics. '
+        'No SMF records and no SCRT file are available. '
+        'Keep Kick off modernization, Analyze code, Analyze data, Generate technical documentation, and Extract business logic. '
+        'Do not include reimagine, implementation, or deployment.')
+    private_save(intent, {'text': message})
+    response = client.calls([('load_instructions', identity),
+                             ('send_message', {**identity, 'text': message, 'skipPolling': True})])[-1]
+    private_save(receipt, response)
+    run['status'] = 'WAITING_FOR_ASSESSMENT'
+    run['reason'] = 'Asked AWS to rebuild the plan without activity metrics.'
+    private_save(directory / 'run.json', run)
+    return True
 
 
 def start_assessment_plan(run, directory, client, identity, snapshot):
@@ -838,6 +876,8 @@ def assessment_step(run, directory, client=None):
     elif status in {'FAILED', 'STOPPED', 'CANCELLED'}:
         run['status'] = 'ASSESSMENT_FAILED'
         run['reason'] = 'AWS stopped this assessment before it finished. Start a new assessment for the same source after the recorded cause is fixed.'
+    elif exclude_activity_metrics(run, directory, client, identity, snapshot):
+        return
     elif start_assessment_plan(run, directory, client, identity, snapshot):
         return
     elif bootstrap_assessment_plan(run, directory, client, identity, snapshot):

@@ -195,7 +195,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(flow.bootstrap_assessment_plan(run,self.directory,Client(),identity,snapshot))
         self.assertEqual([name for name,_ in calls],['load_instructions','send_message'])
         sent = calls[-1][1]['text']
-        for value in ['Validate one rule','Analyze code','Extract business logic','not deliverable approval']:
+        for value in ['Validate one rule','Analyze code','Extract business logic','not deliverable approval',
+                      'Do not include Analyze activity metrics']:
             self.assertIn(value,sent)
         for value in ['fixture-job','fixture-connector','s3://fixture-bucket/source.zip',self.commit]:
             self.assertNotIn(value,sent)
@@ -319,22 +320,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
         self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
 
-    def test_ready_to_start_with_activity_metrics_starts_the_plan(self):
+    def test_activity_metrics_plan_is_rebuilt_once_and_not_started(self):
         run, snapshot, identity = self.execution_fixture()
         snapshot['plan']['steps'].append({'stepName':'Analyze activity metrics','status':'NOT_STARTED'})
-        snapshot['messages']['messages'][0]['text'] = (
-            'Plan generated successfully. Your assessment-only plan includes Analyze activity metrics. '
-            'The plan is ready to execute. Are you ready to start?')
         calls = []
         class Client:
             def calls(self, requests):
                 calls.extend(requests); return [{}, {'accepted':True}]
-        self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        self.assertTrue(flow.exclude_activity_metrics(run,self.directory,Client(),identity,snapshot))
         self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
-        self.assertIn('no SMF records', calls[-1][1]['text'])
-        for step in snapshot['plan']['steps']:
-            step['status'] = 'SUCCEEDED'
-        self.assertTrue(flow.assessment_plan_complete(snapshot))
+        self.assertIn('without Analyze activity metrics', calls[-1][1]['text'])
+        self.assertIn('Analyze data', calls[-1][1]['text'])
+        self.assertFalse(flow.assessment_plan_authorized(snapshot['plan']['steps']))
+        self.assertTrue(flow.exclude_activity_metrics(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
+        self.assertEqual(run['status'],'WAITING_FOR_HUMAN')
 
     def test_generated_plan_without_a_start_phrase_still_starts(self):
         run, snapshot, identity = self.execution_fixture()
