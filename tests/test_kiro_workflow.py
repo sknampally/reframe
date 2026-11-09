@@ -336,6 +336,30 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
         self.assertEqual(run['status'],'WAITING_FOR_HUMAN')
 
+    def test_requested_source_uri_is_sent_once_from_the_recorded_upload(self):
+        run, snapshot, identity = self.execution_fixture()
+        archive = self.directory / 'source.zip'
+        archive.write_bytes(b'synthetic archive')
+        run['uploaded_source'] = {'uri': 's3://fixture-bucket/source.zip', 'sha256': flow.sha(archive)}
+        snapshot['messages']['messages'][0]['text'] = (
+            'Please provide the S3 URI for your source code. '
+            'Once you provide that, I will configure the inputs and start the plan execution.')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.supply_recorded_source(run,self.directory,Client(),identity,snapshot))
+        self.assertTrue(flow.supply_recorded_source(run,self.directory,Client(),identity,snapshot))
+        sent = [args['text'] for name,args in calls if name=='send_message']
+        self.assertEqual(len(sent),1)
+        self.assertIn('s3://fixture-bucket/source.zip', sent[0])
+        self.assertNotIn('fixture-job', sent[0])
+        self.assertNotIn('fixture-workspace', sent[0])
+        self.assertNotIn('fixture-connector', sent[0])
+        snapshot['messages']['messages'][0]['text'] = 'The plan is ready. I can start the execution.'
+        (self.directory / 'source-chat-receipt.json').unlink()
+        self.assertFalse(flow.supply_recorded_source(run,self.directory,Client(),identity,snapshot))
+
     def test_generated_plan_that_asks_for_inputs_starts(self):
         run, snapshot, identity = self.execution_fixture()
         snapshot['messages']['messages'][0]['text'] = (

@@ -616,6 +616,64 @@ def exclude_activity_metrics(run, directory, client, identity, snapshot):
     return True
 
 
+def source_location_requested(text):
+    """True when AWS is waiting for the source archive location."""
+    lower = text.lower()
+    return 's3' in lower and 'uri' in lower and 'source' in lower
+
+
+def supply_recorded_source(run, directory, client, identity, snapshot):
+    """Give AWS the recorded upload when it asks where the source is.
+
+    The plan chat must not carry workspace, job, or connector identifiers.
+    This reply is only the upload already stored for the run, and only after
+    AWS asks for that location. The source task form remains the other path.
+    """
+    steps = snapshot.get('plan', {}).get('steps', [])
+    if not steps or any(step.get('status') != 'NOT_STARTED' for step in steps):
+        return False
+    if not assessment_plan_authorized(steps):
+        return False
+    messages = [m for m in snapshot.get('messages', {}).get('messages', [])
+                if m.get('messageOrigin') == 'SYSTEM'
+                and m.get('processingInfo', {}).get('messageType') == 'FINAL_RESPONSE']
+    if not messages:
+        return False
+    latest = max(messages, key=lambda m: str(m.get('createdAt', '')))
+    if not source_location_requested(latest.get('text', '')):
+        return False
+    source = run.get('uploaded_source', {})
+    uri = source.get('uri', '')
+    require(uri.startswith('s3://') and source.get('sha256'),
+            'Source configuration requires a recorded upload URI and checksum')
+    archive = directory / 'source.zip'
+    require(archive.is_file() and sha(archive) == source['sha256'],
+            'Recorded source archive changed or is missing')
+    receipt = directory / 'source-chat-receipt.json'
+    intent = directory / 'source-chat-intent.json'
+    if receipt.is_file():
+        run.update(status='WAITING_FOR_ASSESSMENT',
+                   reason='Recorded source location sent; waiting for AWS to configure inputs and start the plan.')
+        return True
+    if intent.is_file():
+        run.update(status='NEEDS_RECONCILIATION',
+                   reason='Recorded source location outcome is uncertain. Reconcile before sending it again.')
+        return True
+    message = ('The recorded source archive is ' + uri + '. '
+               'There is no SCRT file and there are no SMF records. '
+               'Configure the assessment inputs with that archive and start the existing assessment plan. '
+               'Execute kickoff, code analysis, data analysis, technical documentation, and business-rule extraction. '
+               'Do not create another job, add reimagine, implement, or deploy.')
+    private_save(intent, {'reply_to': latest.get('messageId'), 'text': message})
+    response = client.calls([('load_instructions', identity),
+                             ('send_message', {**identity, 'text': message, 'skipPolling': True})])[-1]
+    private_save(receipt, response)
+    run.update(status='WAITING_FOR_ASSESSMENT',
+               reason='Recorded source location sent; waiting for AWS to configure inputs and start the plan.')
+    private_save(directory / 'run.json', run)
+    return True
+
+
 def start_assessment_plan(run, directory, client, identity, snapshot):
     """Start the assessment plan already authorized by this run."""
     steps = snapshot.get('plan', {}).get('steps', [])
@@ -892,6 +950,8 @@ def assessment_step(run, directory, client=None):
         run['status'] = 'ASSESSMENT_FAILED'
         run['reason'] = 'AWS stopped this assessment before it finished. Start a new assessment for the same source after the recorded cause is fixed.'
     elif exclude_activity_metrics(run, directory, client, identity, snapshot):
+        return
+    elif supply_recorded_source(run, directory, client, identity, snapshot):
         return
     elif start_assessment_plan(run, directory, client, identity, snapshot):
         return
