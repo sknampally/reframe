@@ -195,9 +195,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(flow.bootstrap_assessment_plan(run,self.directory,Client(),identity,snapshot))
         self.assertEqual([name for name,_ in calls],['load_instructions','send_message'])
         sent = calls[-1][1]['text']
-        for value in ['fixture-job','fixture-connector','s3://fixture-bucket/source.zip',self.commit,
-                      'Validate one rule','Analyze code','Extract business logic','not deliverable approval']:
+        for value in ['Validate one rule','Analyze code','Extract business logic','not deliverable approval']:
             self.assertIn(value,sent)
+        for value in ['fixture-job','fixture-connector','s3://fixture-bucket/source.zip',self.commit]:
+            self.assertNotIn(value,sent)
         self.assertTrue((self.directory/'plan-bootstrap-1-receipt.json').exists())
 
     def test_uncertain_plan_message_requires_reconciliation(self):

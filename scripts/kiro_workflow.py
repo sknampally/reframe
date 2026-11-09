@@ -488,17 +488,15 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     connector = config.get('connector_id')
     source = run.get('uploaded_source', {}).get('uri')
     require(connector and source, 'Plan setup requires the recorded connector_id and uploaded source URI; do not guess inputs')
+    # AWS refuses job, workspace, connector, and archive identifiers in this chat.
+    # The recorded upload is submitted later on the resource-location task.
     message = (
-        'Use the EXISTING job ' + identity['jobId'] + ' in workspace ' + identity['workspaceId'] +
-        '. Do not create or switch jobs. Select option 3, custom ASSESSMENT-ONLY plan. '
-        'Confirm these explicit capabilities: Analyze code; Analyze data (where supported inputs exist); '
-        'Generate technical documentation; Extract business logic. '
-        'Do not add Decompose code or Plan test cases: proposed boundaries and test specifications belong to the later independently reviewed preparation phase. '
-        'This capability selection is confirmed: generate the plan and proceed. '
-        'Use existing active connector ' + connector + ' and source archive ' + source +
-        '. Pinned source commit: ' + run['source']['commit'] + '. Scope: ' + run['objective'] +
-        '. No application implementation, reimagination, deployment, new infrastructure or additional jobs. '
-        'Preserve required human approval of generated deliverables. This is capability selection, not deliverable approval.')
+        'I want an assessment only. Analyze code. Analyze data where supported inputs exist. '
+        'Generate technical documentation. Extract business logic. '
+        'Do not decompose code, plan test cases, reimagine the application, implement it, or deploy it. '
+        'This capability selection is confirmed. Generate the plan and proceed. '
+        'Scope: ' + run['objective'] + '. '
+        'Preserve human approval of the generated findings. This is capability selection, not deliverable approval.')
     require(len(message) <= 7000, 'Assessment scope exceeds AWS job chat limit')
     attempt = progress['attempts'] + 1
     private_save(directory / f'plan-bootstrap-{attempt}-intent.json', {'reply_to': message_id, 'text': message})
