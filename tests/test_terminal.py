@@ -44,7 +44,11 @@ class TerminalTests(unittest.TestCase):
     def test_menu_dispatch_keeps_existing_controller_gate(self):
         ui=self.ui()
         with patch.object(ui,'invoke') as invoke:ui.dispatch('2')
-        invoke.assert_called_once_with(['assess'])
+        invoke.assert_called_once_with(['assess','--wait'])
+    def test_resume_stays_with_the_aws_job(self):
+        ui=self.ui()
+        with patch.object(ui,'invoke') as invoke:ui.dispatch('4')
+        invoke.assert_called_once_with(['resume','--wait'])
     def test_flags_are_arguments_not_shell_text(self):
         ui=self.ui()
         with patch.object(ui,'invoke') as invoke:ui.dispatch('/feedback --by "Example owner" --note "$(echo injected)"')

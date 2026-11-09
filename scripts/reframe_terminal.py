@@ -227,6 +227,8 @@ class Terminal:
             args=['--question',self.ask('SME question ID'),'--by',self.ask('Decision owner'),'--answer',self.ask('Answer and rationale'),
                   '--disposition',Prompt.ask('Disposition',choices=['resolved','deferred'],console=self.console)]
         if cmd=='feedback' and not args:args=['--by',self.ask('Feedback owner'),'--note',self.ask('Requested change')]
+        if cmd in {'assess','resume'} and '--wait' not in args and '--detach' not in args:
+            args=[*args,'--wait']
         if cmd in {'assess','resume','validate','review-site','package'}:
             self.say('Running '+cmd+'. Existing evidence and approval checks remain enforced.','cyan')
         self.invoke([cmd,*args])

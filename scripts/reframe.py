@@ -530,8 +530,11 @@ def assessment(work, project, args, client=None):
                     run.update(status='WAITING_FOR_ASSESSMENT', reason='Routine assessment checkpoint handled using the saved upload scope.')
                     write(directory / 'run.json', run)
             polls += 1
+            if args.wait and run['status'] == 'WAITING_FOR_ASSESSMENT' and polls >= run['settings']['max_polls_per_resume']:
+                run['reason'] = 'AWS is still working. Resume continues this same assessment.'
             if not args.wait or run['status'] != 'WAITING_FOR_ASSESSMENT' or polls >= run['settings']['max_polls_per_resume']:
                 break
+            print('AWS Transform is working on this assessment. Reframe stays with this job until it is ready for review.', flush=True)
             time.sleep(run['settings']['poll_seconds'])
         if run['assessment_ready']:
             run['status'] = 'AWAITING_ASSESSMENT_APPROVAL'
