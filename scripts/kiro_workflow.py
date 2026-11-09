@@ -549,7 +549,8 @@ def assessment_start_offered(text):
     lower = text.lower()
     legacy = 'plan' in lower and 'ready' in lower and 'start the execution' in lower
     current = 'ready to execute' in lower and 'running the plan' in lower
-    return legacy or current
+    generated = 'plan has been generated' in lower and 'what would you like to do next' in lower
+    return legacy or current or generated
 
 
 def start_assessment_plan(run, directory, client, identity, snapshot):

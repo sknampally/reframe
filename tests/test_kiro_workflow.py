@@ -319,6 +319,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
         self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
 
+    def test_generated_plan_without_a_start_phrase_still_starts(self):
+        run, snapshot, identity = self.execution_fixture()
+        snapshot['messages']['messages'][0]['text'] = (
+            'Your custom assessment plan has been generated successfully. '
+            'What would you like to do next?')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
+
     def test_execution_start_rejects_added_capability_and_uncertain_send(self):
         run, snapshot, identity = self.execution_fixture()
         class Client:
