@@ -96,6 +96,7 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(updated['job_id'],'existing-job')
         self.assertEqual(updated['framework_commit'],'a'*40)
         self.assertEqual(updated['events'][-1]['from'],'b'*40)
+        self.assertEqual(self.project['pins']['framework_commit'],'a'*40)
         self.assertEqual(result['status'],'FRAMEWORK_UPDATED')
 
     def test_framework_upgrade_rejects_approved_or_dirty_project(self):

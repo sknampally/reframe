@@ -451,6 +451,9 @@ def upgrade_framework(work, project, args):
         update(run)
         write(path, run)
     update(project)
+    pins = project.get('pins')
+    if pins is not None:
+        pins['framework_commit'] = current
     persist(work, project)
     return {'status':'FRAMEWORK_UPDATED', 'revision':current, 'next_step':'reframe resume'}
 
