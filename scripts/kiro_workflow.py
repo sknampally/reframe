@@ -665,10 +665,10 @@ def configure_source_task(run, directory, client, identity, tasks):
 
 
 def continue_without_activity_records(run, directory, client, identity, tasks):
-    """Leave activity metrics empty when this source has no SMF or SCRT records.
+    """Decline activity metrics when this source has no SMF or SCRT records.
 
-    The form is already blank. Confirming it does not invent records and does
-    not replace a path AWS already filled in.
+    Approving the blank form makes AWS try to read a file that was not supplied.
+    Declining the step leaves a filled-in path untouched.
     """
     candidates = [task for task in tasks if isinstance(task, dict)
                   and task.get('uxComponentId') == 'MainframeSMFConfigureComponent'
@@ -682,7 +682,7 @@ def continue_without_activity_records(run, directory, client, identity, tasks):
     state = run.setdefault('activity_metrics', {})
     if state.get('task_id') == task_id and state.get('receipt'):
         run.update(status='WAITING_FOR_ASSESSMENT',
-                   reason='Activity metrics continued without SMF or SCRT records; waiting for AWS.')
+                   reason='Activity metrics skipped because no SMF or SCRT records were supplied; waiting for AWS.')
         return True
     if state.get('pending'):
         receipt = directory / 'activity-metrics-submit-receipt.json'
@@ -712,12 +712,12 @@ def continue_without_activity_records(run, directory, client, identity, tasks):
     state.update(task_id=task_id, pending=True)
     private_save(directory / 'run.json', run)
     response = client.calls([('load_instructions', identity), ('complete_task', {
-        **identity, 'taskId': task_id, 'content': '{}', 'action': 'APPROVE'})])[-1]
+        **identity, 'taskId': task_id, 'content': '{}', 'action': 'REJECT'})])[-1]
     receipt = directory / 'activity-metrics-submit-receipt.json'
     private_save(receipt, response)
     state.update(pending=False, receipt=receipt.name)
     run.update(status='WAITING_FOR_ASSESSMENT',
-               reason='Activity metrics continued without SMF or SCRT records; waiting for AWS.')
+               reason='Activity metrics skipped because no SMF or SCRT records were supplied; waiting for AWS.')
     private_save(directory / 'run.json', run)
     return True
 

@@ -403,7 +403,7 @@ class WorkflowTests(unittest.TestCase):
         submitted = [args for name, args in calls if name == 'complete_task']
         self.assertEqual(len(submitted), 1)
         self.assertEqual(submitted[0]['content'], '{}')
-        self.assertEqual(submitted[0]['action'], 'APPROVE')
+        self.assertEqual(submitted[0]['action'], 'REJECT')
         run['smf_source'] = {'uri':'s3://fixture-bucket/smf/'}
         self.assertFalse(flow.continue_without_activity_records(run,self.directory,Client(),identity,[waiting]))
 
