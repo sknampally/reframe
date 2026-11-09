@@ -382,6 +382,41 @@ class WorkflowTests(unittest.TestCase):
                                'properties':{'assetLocation':{'type':'string'}}}}
         return run,identity,task
 
+    def activity_metrics_task(self):
+        return {'taskId':'fixture-metrics','uxComponentId':'MainframeSMFConfigureComponent',
+                'status':'AWAITING_HUMAN_INPUT','blockingType':'BLOCKING','category':'REGULAR',
+                'taskType':'NORMAL','jobMetadata':{'workspaceId':'fixture-workspace','jobId':'fixture-job'}}
+
+    def test_blank_activity_metrics_form_is_confirmed_once(self):
+        run, identity, _task = self.source_location_fixture()
+        waiting = self.activity_metrics_task()
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests)
+                if requests[-1][0] == 'get_resource':
+                    return [{}, {'task': waiting, 'agentArtifactContent': {'properties': {
+                        'sourceCodeS3Path':'', 'scrtFileS3Path':'', 'smfNewCustomerFeatures':True}}}]
+                return [{}, {'accepted':True}]
+        self.assertTrue(flow.continue_without_activity_records(run,self.directory,Client(),identity,[waiting]))
+        self.assertTrue(flow.continue_without_activity_records(run,self.directory,Client(),identity,[waiting]))
+        submitted = [args for name, args in calls if name == 'complete_task']
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(submitted[0]['content'], '{}')
+        self.assertEqual(submitted[0]['action'], 'APPROVE')
+        run['smf_source'] = {'uri':'s3://fixture-bucket/smf/'}
+        self.assertFalse(flow.continue_without_activity_records(run,self.directory,Client(),identity,[waiting]))
+
+    def test_filled_activity_metrics_path_is_not_replaced(self):
+        run, identity, _task = self.source_location_fixture()
+        waiting = self.activity_metrics_task()
+        class Client:
+            def calls(self, requests):
+                return [{}, {'task': waiting, 'agentArtifactContent': {'properties': {
+                    'sourceCodeS3Path':'s3://fixture-bucket/smf/','scrtFileS3Path':''}}}]
+        with self.assertRaisesRegex(flow.Blocked, 'already names'):
+            flow.continue_without_activity_records(run,self.directory,Client(),identity,[waiting])
+
     def test_source_task_submits_recorded_zip_once_without_other_options(self):
         run,identity,task=self.source_location_fixture();calls=[]
         class Client:

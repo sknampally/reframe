@@ -664,6 +664,64 @@ def configure_source_task(run, directory, client, identity, tasks):
     return True
 
 
+def continue_without_activity_records(run, directory, client, identity, tasks):
+    """Leave activity metrics empty when this source has no SMF or SCRT records.
+
+    The form is already blank. Confirming it does not invent records and does
+    not replace a path AWS already filled in.
+    """
+    candidates = [task for task in tasks if isinstance(task, dict)
+                  and task.get('uxComponentId') == 'MainframeSMFConfigureComponent'
+                  and task.get('blockingType') == 'BLOCKING'
+                  and task.get('status') in {'AWAITING_HUMAN_INPUT', 'PENDING_HUMAN_INPUT', 'IN_PROGRESS'}]
+    if not candidates or run.get('smf_source') or run.get('scrt_source'):
+        return False
+    require(len(candidates) == 1, 'Multiple activity-metrics tasks; inspect privately rather than guessing')
+    task_id = candidates[0].get('taskId')
+    require(task_id, 'Activity-metrics task has no identity')
+    state = run.setdefault('activity_metrics', {})
+    if state.get('task_id') == task_id and state.get('receipt'):
+        run.update(status='WAITING_FOR_ASSESSMENT',
+                   reason='Activity metrics continued without SMF or SCRT records; waiting for AWS.')
+        return True
+    if state.get('pending'):
+        receipt = directory / 'activity-metrics-submit-receipt.json'
+        if state.get('task_id') == task_id and receipt.is_file():
+            state.update(pending=False, receipt=receipt.name)
+            run.update(status='WAITING_FOR_ASSESSMENT',
+                       reason='Recovered activity-metrics confirmation; waiting for AWS.')
+            private_save(directory / 'run.json', run)
+            return True
+        run.update(status='NEEDS_RECONCILIATION',
+                   reason='Activity-metrics confirmation outcome is uncertain; reconcile before retrying.')
+        return True
+    record = client.calls([('load_instructions', identity),
+                           ('get_resource', {**identity, 'resource': 'task', 'taskId': task_id})])[-1]
+    private_save(directory / 'activity-metrics-task.json', record)
+    task = record.get('task', {})
+    props = (record.get('agentArtifactContent') or {}).get('properties') or {}
+    require(task.get('taskId') == task_id and task.get('uxComponentId') == 'MainframeSMFConfigureComponent'
+            and task.get('status') in {'AWAITING_HUMAN_INPUT', 'PENDING_HUMAN_INPUT', 'IN_PROGRESS'}
+            and task.get('category') == 'REGULAR' and task.get('taskType') == 'NORMAL'
+            and all(task.get('jobMetadata', {}).get(key) == value for key, value in identity.items()),
+            'Activity-metrics task identity changed; no response submitted')
+    require(props.get('sourceCodeS3Path') == '' and props.get('scrtFileS3Path') == '',
+            'Activity metrics already names a file location; inspect before continuing')
+    private_save(directory / 'activity-metrics-submit-intent.json',
+                 {'task_id': task_id, 'content': {}, 'decision': 'No SMF or SCRT records were supplied'})
+    state.update(task_id=task_id, pending=True)
+    private_save(directory / 'run.json', run)
+    response = client.calls([('load_instructions', identity), ('complete_task', {
+        **identity, 'taskId': task_id, 'content': '{}', 'action': 'APPROVE'})])[-1]
+    receipt = directory / 'activity-metrics-submit-receipt.json'
+    private_save(receipt, response)
+    state.update(pending=False, receipt=receipt.name)
+    run.update(status='WAITING_FOR_ASSESSMENT',
+               reason='Activity metrics continued without SMF or SCRT records; waiting for AWS.')
+    private_save(directory / 'run.json', run)
+    return True
+
+
 def assessment_step(run, directory, client=None):
     if run['assessment_ready']:
         return
@@ -756,6 +814,8 @@ def assessment_step(run, directory, client=None):
     task_container = snapshot.get('tasks', {})
     tasks = task_container.get('hitlTasks', []) if isinstance(task_container, dict) else task_container if isinstance(task_container, list) else []
     if configure_source_task(run, directory, client, identity, tasks):
+        return
+    if continue_without_activity_records(run, directory, client, identity, tasks):
         return
     pending = any(isinstance(task, dict) and task.get('blockingType') != 'NON_BLOCKING'
                   and task.get('status') in {'AWAITING_HUMAN_INPUT','PENDING_HUMAN_INPUT','AWAITING_APPROVAL'} for task in tasks)
