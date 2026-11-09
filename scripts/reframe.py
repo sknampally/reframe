@@ -391,6 +391,7 @@ def bind_run_pins(project):
         'reviewer_model': project['settings'].get('reviewer_model'),
         'prompt_hash': preparation_protocol_hash(),
         'aws_job_id': None,
+        'assessment_label': None,
     }
 
 
@@ -402,10 +403,15 @@ def require_run_pins(project, job_id=None):
     require(recorded.get('reviewer_model') == project['settings'].get('reviewer_model'), 'Run pin changed: reviewer_model')
     require(recorded.get('prompt_hash') == preparation_protocol_hash(), 'Run pin changed: prompt_hash')
     pinned_job = recorded.get('aws_job_id')
+    label = project.get('active_assessment')
     if job_id and pinned_job and pinned_job != job_id:
-        raise Blocked('Run pin changed: aws_job_id')
+        if recorded.get('assessment_label') == label:
+            raise Blocked('Run pin changed: aws_job_id')
+        recorded['aws_job_id'] = job_id
+        recorded['assessment_label'] = label
     if job_id and not pinned_job:
         recorded['aws_job_id'] = job_id
+        recorded['assessment_label'] = label
 
 
 def require_dollar_cap(project, role):

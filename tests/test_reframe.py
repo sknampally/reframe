@@ -230,6 +230,15 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(pilot.Blocked, 'executor_model'):
             app.pipeline(self.work, self.project, self.args('resume'), lambda *a: self.fail('no model'))
 
+    def test_replacement_assessment_can_use_its_own_job(self):
+        self.project['pins']['aws_job_id'] = 'old-job'
+        self.project['active_assessment'] = 'run-2'
+        app.require_run_pins(self.project, 'new-job')
+        self.assertEqual(self.project['pins']['aws_job_id'], 'new-job')
+        self.assertEqual(self.project['pins']['assessment_label'], 'run-2')
+        with self.assertRaisesRegex(app.Blocked, 'aws_job_id'):
+            app.require_run_pins(self.project, 'other-job')
+
     def test_dollar_cap_stops_the_next_model_call(self):
         self.baseline()
         self.project['settings']['max_model_dollars'] = 0
