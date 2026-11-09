@@ -404,6 +404,15 @@ class WorkflowTests(unittest.TestCase):
         result = flow.drive(self.directory, transform=Client())
         self.assertEqual(result['status'], 'WAITING_FOR_HUMAN')
 
+    def test_failed_aws_job_stops_without_saying_it_continues(self):
+        self.prepare_job()
+        class Client:
+            def calls(self, requests):
+                return [{}, {'job':{'jobId':'fixture-job','status':'FAILED'}}]
+        result = flow.drive(self.directory, transform=Client())
+        self.assertEqual(result['status'], 'ASSESSMENT_FAILED')
+        self.assertNotIn('continues', result['reason'])
+
     def test_unknown_creation_never_retries_create(self):
         run = self.prepare_job(); run['job_id'] = None; run['create_pending'] = True; self.store(run)
         class Client:

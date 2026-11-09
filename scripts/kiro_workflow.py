@@ -751,6 +751,7 @@ def assessment_step(run, directory, client=None):
         run['reason'] = 'AWS Transform requires a human task decision. Complete it in the authorized UI, then resume this run.'
     elif status in {'FAILED', 'STOPPED', 'CANCELLED'}:
         run['status'] = 'ASSESSMENT_FAILED'
+        run['reason'] = 'AWS stopped this assessment before it finished. Start a new assessment for the same source after the recorded cause is fixed.'
     elif start_assessment_plan(run, directory, client, identity, snapshot):
         return
     elif bootstrap_assessment_plan(run, directory, client, identity, snapshot):
