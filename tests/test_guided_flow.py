@@ -116,6 +116,26 @@ class GuidedFlowTests(unittest.TestCase):
                          ['model-budget', '--max-calls', '12', '--by', 'Owner', '--note', 'Cover the paired programs'])
         self.assertEqual(ui.invoke.call_args_list[2].args[0], ['validate'])
 
+    def test_spent_calls_ask_to_raise_the_cap_above_what_was_used(self):
+        first = {'stage':'ASSESSMENT_APPROVED', 'approvals':{'assessment':True}}
+        blocked = {'stage':'PREPARATION_PLANNED', 'approvals':{'assessment':True}, 'pipeline':{
+            'calls':3, 'reason':'Insufficient call budget for remaining checkpoint plan',
+            'minimum_additional_calls':142, 'remaining_calls':139}}
+        ready = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}}
+        ui = self.ui(first, ['continue', 'review', 'Satish', 'Need more to run'])
+        ui.project.side_effect = [first, first, blocked, ready]
+        ui.invoke.side_effect = [2, 0, 0]
+        ui.yes.side_effect = [True, True, False]
+        lines = self.said(ui)
+        run(ui)
+        text = '\n'.join(lines)
+        self.assertIn('at least 142 more model calls', text)
+        self.assertIn('3 model calls were already used', text)
+        self.assertEqual(ui.yes.call_args_list[1].args[0], 'Raise the model-call cap to 145 and start the review?')
+        self.assertEqual(ui.invoke.call_args_list[1].args[0],
+                         ['model-budget', '--max-calls', '145', '--by', 'Satish', '--note', 'Need more to run'])
+        self.assertEqual(ui.invoke.call_args_list[2].args[0], ['validate'])
+
     def test_review_word_runs_validation(self):
         ui = self.ui({'stage':'ASSESSMENT_APPROVED','approvals':{'assessment':True}}, ['continue','review'])
         ui.yes.return_value = True

@@ -611,8 +611,8 @@ def next_step(project):
     stage = project['stage']
     if stage == 'PREPARATION_PLANNED':
         state = project.get('pipeline') or {}
-        if state.get('reason') == 'Insufficient call budget for remaining checkpoint plan' and not state.get('calls'):
-            return 'Use /flow, choose review, and answer the question before any model call is made.'
+        if state.get('reason') == 'Insufficient call budget for remaining checkpoint plan':
+            return 'Use /flow and choose review. The next question asks before the cap is raised.'
         return 'Review reframe prepare-plan and the call budget, then reframe validate'
     if project.get('pending_action'): return 'reframe resume'
     if stage == 'PACKAGED': return 'Inspect the generated package and its deferred work boundaries.'

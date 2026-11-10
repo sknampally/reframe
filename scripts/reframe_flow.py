@@ -205,8 +205,8 @@ def run(ui):
             code = ui.invoke(['validate'])
             updated = ui.project() or {}
             state = updated.get('pipeline') or {}
-            # A short cap returns a blocked status before any model call. The question below is the continuation.
-            if code != 0 and (state.get('reason') != 'Insufficient call budget for remaining checkpoint plan' or state.get('calls', 0)):
+            # A short cap returns a blocked status. Calls already spent still reach the question below.
+            if code != 0 and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan':
                 return
             if updated.get('stage') != 'AWAITING_VALIDATION_APPROVAL':
                 updated = offer_review_budget(ui, updated)
