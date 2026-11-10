@@ -373,6 +373,9 @@ def run(work, project, args, runtime, app):
         record = project['checkpoints']['units'].setdefault(unit['id'], {'status':'PENDING', 'attempt':1, 'role':'executor'})
         if record['status'] == 'PASS':
             continue
+        # The saved candidate gets one more review after the round limit. A block without a candidate still stops.
+        if record['status'] == 'REWORK_LIMIT' and record.get('candidate_path') and not record.get('limit_rereviewed'):
+            record.update(status='PENDING', role='reviewer', limit_rereviewed=True)
         require(record['status'] not in {'BLOCKED', 'REWORK_LIMIT'}, 'Resolve the blocked evidence unit before resuming')
         while record['status'] != 'PASS':
             if state['calls'] >= project['settings']['max_model_calls']:
@@ -475,10 +478,19 @@ def run(work, project, args, runtime, app):
                     record.update(status='BLOCKED' if reply['decision'] == 'BLOCKED' else 'REWORK_LIMIT', reason=reply['report'])
                     state.update(status=record['status'], reason=record['reason']); project['stage']=record['status']
                     app.persist(work, project)
-                    return {'status':record['status'], 'unit':unit['id'], 'reason':record['reason']}
+                    if record['status'] == 'BLOCKED':
+                        return {'status':record['status'], 'unit':unit['id'], 'reason':record['reason']}
+                    break
                 else:
                     record.update(role='executor', attempt=record['attempt']+1, previous_review=reply)
             app.persist(work, project)
+    unfinished = [unit['id'] for unit in plan['units']
+                  if project['checkpoints']['units'].get(unit['id'], {}).get('status') != 'PASS']
+    if unfinished:
+        state.update(status='REWORK_LIMIT', reason=state.get('reason') or 'A program reached its review limit')
+        project['stage'] = 'REWORK_LIMIT'
+        app.persist(work, project)
+        return {'status':'REWORK_LIMIT', 'unit': unfinished[0], 'reason': state['reason']}
     project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
     state.update(status='RUNNING', role='executor')
     state.pop('reason', None)

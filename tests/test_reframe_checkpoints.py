@@ -252,6 +252,26 @@ class CheckpointTests(unittest.TestCase):
             app.pipeline(self.work,self.project,self.args('validate'),lambda *a:self.fail('No oversized provider call'))
         self.assertEqual(self.project['pipeline']['calls'],0)
 
+    def test_rework_limit_still_reviews_the_next_program_and_retries_once(self):
+        self.plan()
+        seen = {'U0001': 0}
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if context.get('unit_id') == 'U0001' and role == 'reviewer':
+                seen['U0001'] += 1
+                if seen['U0001'] < 3:
+                    return {'kind':'review', 'decision':'REWORK', 'report':'Add the omitted branch',
+                            'findings':['Record the omitted branch']}
+            return self.runtime(provider, run, directory, role, message)
+        first = app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(first['status'], 'REWORK_LIMIT')
+        self.assertEqual(self.project['checkpoints']['units']['U0002']['status'], 'PASS')
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['status'], 'REWORK_LIMIT')
+        second = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['status'], 'PASS')
+        self.assertEqual(seen['U0001'], 3)
+        self.assertEqual(second['status'], 'AWAITING_VALIDATION_APPROVAL')
+
     def test_invalid_schema_stops_after_three_calls(self):
         self.plan()
         result=app.pipeline(self.work,self.project,self.args('validate'),lambda *a:{'kind':'checkpoint','summary':'Missing coverage'})
