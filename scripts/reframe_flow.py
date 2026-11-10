@@ -200,9 +200,12 @@ def run(ui):
                 return
             if not ui.yes('Run independent verification using the saved model-call budget?'):
                 return
-            if ui.invoke(['validate']) != 0:
+            code = ui.invoke(['validate'])
+            updated = ui.project() or {}
+            state = updated.get('pipeline') or {}
+            # A short cap returns a blocked status before any model call. The question below is the continuation.
+            if code != 0 and (state.get('reason') != 'Insufficient call budget for remaining checkpoint plan' or state.get('calls', 0)):
                 return
-            updated = ui.project()
             if updated.get('stage') != 'AWAITING_VALIDATION_APPROVAL':
                 updated = offer_review_budget(ui, updated)
                 if updated is None or updated.get('stage') != 'AWAITING_VALIDATION_APPROVAL':

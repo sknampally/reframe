@@ -107,6 +107,7 @@ class GuidedFlowTests(unittest.TestCase):
         ready = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}}
         ui = self.ui(first, ['continue', 'review', 'Owner', 'Cover the paired programs'])
         ui.project.side_effect = [first, first, blocked, ready]
+        ui.invoke.side_effect = [2, 0, 0]
         ui.yes.side_effect = [True, True, False]
         lines = self.said(ui)
         run(ui)
