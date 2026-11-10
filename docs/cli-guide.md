@@ -60,7 +60,7 @@ assessment/approval exists, setup can explicitly confirm a new framework baselin
 while keeping the pinned source unchanged. Existing assessment baselines are never
 repinned.
 
-After setup, stay on menu **1**. Confirm the upload when asked. That is the job. When the findings are sealed, approve them with your name, a short rationale, and confirmation that they match the pinned source. The next prompt is `skip` or `review`. Enter selects **skip**, which writes the HTML wireframes and the AI-DLC ZIP. `review` is the longer route below.
+After setup, stay on menu **1**. Confirm the upload when asked. That is the job. When the findings are sealed, approve them with your name, a short rationale, and confirmation that they match the pinned source. Before each approval question, and after the skip draft and the approved package are written, the CLI lists every file to review, its format, and its path. The next prompt is `skip` or `review`. Enter selects **skip**, which writes the HTML wireframes and the AI-DLC ZIP. `review` is the longer route below.
 
 The same result from the shell, after assessment approval:
 
@@ -205,7 +205,7 @@ Use `--transform-workspace <id>` during init or `setup --attach-workspace <id>` 
 a workspace. Use `setup --attach-connector <id>` to reuse a connector. These private
 identifiers must never go into the framework repository.
 
-A new AWS assessment reads three private settings: `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`. The CLI refuses to start that assessment when any of them is empty, before it calls AWS. Guided start sets the upload path to `s3://<bucket>/reframe` from the sandbox it creates. The role can read and write objects anywhere in that bucket and denies object and bucket reads outside it. Comment on story 40 that the production deny check passed. Do not commit the account ID, the role ARN, or the bucket name.
+A new AWS assessment reads three private settings: `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`. The CLI refuses to start that assessment when any of them is empty, before it calls AWS. Guided start creates a bucket, a workspace, and a connector that share one name: `reframe-`, the repository name, the UTC date, and a short id. The role name adds `-role`. The upload path is `s3://<bucket>/reframe`. Continuing that source reuses them. A fresh source gets a new set. The role can read and write objects anywhere in its bucket and denies object and bucket reads outside it. Comment on story 40 that the production deny check passed. Do not commit the account ID, the role ARN, or the bucket name.
 
 **AWS login is not necessarily a Transform application connection.** The official
 MCP `configure` operation supports its own authentication flow. If it is not already

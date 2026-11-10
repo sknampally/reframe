@@ -21,6 +21,111 @@ def record_framework_update(ui, project):
     return True
 
 
+def workspace_path():
+    """Return the active assessment folder, or nothing when no run is selected."""
+    from pilot import Blocked
+    from reframe_setup import workspace
+    try:
+        return workspace()
+    except Blocked:
+        return None
+
+
+def say_review(ui, heading, rows):
+    """Print each review file with its format and location."""
+    ui.say(heading)
+    for what, kind, location in rows:
+        ui.say(what + ' — ' + kind + ' — ' + location)
+
+
+def assessment_rows(project):
+    """The assessment review page, the sealed findings, and the report index."""
+    label = project.get('active_assessment') or project.get('selected')
+    record = (project.get('assessments') or {}).get(label or '', {})
+    directory = Path(record['directory']) if record.get('directory') else None
+    if directory:
+        work = directory.parent.parent if directory.parent.name == 'runs' else directory.parent
+        return [
+            ('Assessment review page', 'HTML', str(directory / 'assessment-review.html')),
+            ('Sealed findings', 'ZIP, CSV, JSON, and PDF', str(directory / 'assessment')),
+            ('Report index', 'HTML', str(work / 'reports' / 'index.html')),
+        ]
+    return [
+        ('Assessment review page', 'HTML', 'runs/<run>/assessment-review.html'),
+        ('Sealed findings', 'ZIP, CSV, JSON, and PDF', 'runs/<run>/assessment'),
+        ('Report index', 'HTML', 'reports/index.html'),
+    ]
+
+
+def validation_rows(project):
+    """The preparation review and the executor and reviewer JSON."""
+    work = workspace_path()
+    prefix = str(work) + '/' if work else ''
+    spec = project.get('specification') or {}
+    candidate = spec.get('path') or 'preparation/candidate-*.json'
+    review = spec.get('review_path') or 'preparation/review-*.json'
+    return [
+        ('SME and architect review', 'HTML', prefix + 'preparation/review.html'),
+        ('Executor candidate', 'JSON', prefix + candidate),
+        ('Independent reviewer report', 'JSON', prefix + review),
+    ]
+
+
+def specification_rows(project):
+    """The business wireframes and the screen and API JSON."""
+    work = workspace_path()
+    site = (project.get('site') or {}).get('directory')
+    if work and site:
+        directory = work / site
+        return [
+            ('Business review wireframes', 'HTML', str(directory / 'index.html')),
+            ('Screen content', 'JSON', str(directory / 'screens.json')),
+            ('API contracts', 'JSON', str(directory / 'api-contracts.json')),
+        ]
+    return [
+        ('Business review wireframes', 'HTML', 'previews/business-*/index.html'),
+        ('Screen content', 'JSON', 'previews/business-*/screens.json'),
+        ('API contracts', 'JSON', 'previews/business-*/api-contracts.json'),
+    ]
+
+
+def draft_rows(name):
+    """The skip wireframes, the handoff records, and the draft ZIP."""
+    work = workspace_path()
+    if not work:
+        return [
+            ('Wireframes', 'HTML', 'previews/' + name + '/handoff/index.html'),
+            ('Imported rules', 'HTML', 'previews/' + name + '/handoff/rules.html'),
+            ('Handoff records', 'JSON and Markdown', 'previews/' + name + '/handoff'),
+            ('AI-DLC draft package', 'ZIP', 'packages/' + name + '/ai-dlc-draft.zip'),
+        ]
+    from reframe_workspace import preview_directory
+    handoff = preview_directory(work, name) / 'handoff'
+    archive = work / 'packages' / name / 'ai-dlc-draft.zip'
+    return [
+        ('Wireframes', 'HTML', str(handoff / 'index.html')),
+        ('Imported rules', 'HTML', str(handoff / 'rules.html')),
+        ('Handoff records', 'JSON and Markdown', str(handoff)),
+        ('AI-DLC draft package', 'ZIP', str(archive)),
+    ]
+
+
+def package_rows(project):
+    """The approved ZIP and the folder of HTML, JSON, and Markdown beside it."""
+    work = workspace_path()
+    recorded = (project.get('package') or {}).get('path')
+    if work and recorded:
+        archive = work / recorded
+        return [
+            ('Approved AI-DLC package', 'ZIP', str(archive)),
+            ('Package files', 'HTML, JSON, and Markdown', str(archive.with_suffix(''))),
+        ]
+    return [
+        ('Approved AI-DLC package', 'ZIP', 'packages/package-<version>.zip'),
+        ('Package files', 'HTML, JSON, and Markdown', 'packages/package-<version>'),
+    ]
+
+
 def run(ui):
     """Walk a saved project from setup through assessment, skip or review, approvals, and the package."""
     from reframe_setup import workspace
@@ -63,9 +168,11 @@ def run(ui):
                 require(provider in {'claude', 'codex'}, 'Choose claude or codex')
                 if not ui.yes('Generate or resume this AWS-assumed draft wireframe site and AI-DLC ZIP?'):
                     return
-                ui.invoke(['preview', '--skip-validation', '--by', owner, '--note', note,
-                           '--provider', provider, '--name', name])
-                ui.say('Use /artifacts for saved reports and packages (/privacy reveals local paths). Use /flow to resume.')
+                if ui.invoke(['preview', '--skip-validation', '--by', owner, '--note', note,
+                              '--provider', provider, '--name', name]) != 0:
+                    ui.say('The draft was not written. /flow retries it. No approval was recorded.')
+                    return
+                say_review(ui, 'Review these draft files. They are not an approval.', draft_rows(name))
                 return
             if not ui.yes('Run independent verification using the saved model-call budget?'):
                 return
@@ -76,13 +183,15 @@ def run(ui):
                 ui.say('Verification paused. Inspect status and any budget or evidence blocker before continuing.')
                 return
             stage = updated['stage']
+            project = updated
         if stage in {'AWAITING_ASSESSMENT_APPROVAL', 'AWAITING_VALIDATION_APPROVAL', 'AWAITING_SPECIFICATIONS_APPROVAL'}:
             phase = {'AWAITING_ASSESSMENT_APPROVAL':'assessment', 'AWAITING_VALIDATION_APPROVAL':'validation', 'AWAITING_SPECIFICATIONS_APPROVAL':'specifications'}[stage]
             if phase == 'assessment' and ui.invoke(['assessment-report']) != 0:
                 return
-            ui.say('Review the saved reports before approval. /artifacts lists them when privacy is off. Unresolved decisions remain enforced.')
+            rows = {'assessment': assessment_rows, 'validation': validation_rows, 'specifications': specification_rows}[phase](project)
+            say_review(ui, 'Review these ' + phase + ' files before you approve. Unresolved decisions remain enforced.', rows)
             if not ui.yes('Have you reviewed the ' + phase + ' outputs and want to record approval now?'):
-                ui.say('Paused for human review. Return with /flow; no approval was recorded.')
+                ui.say('Paused for human review. The files listed above are unchanged. Return with /flow; no approval was recorded.')
                 return
             if ui.invoke(['approve', phase]) != 0:
                 return
@@ -92,10 +201,13 @@ def run(ui):
                 return
             continue
         if stage == 'SPECIFICATIONS_APPROVED':
-            ui.invoke(['package'])
+            if ui.invoke(['package']) != 0:
+                ui.say('The approved package was not written. /flow retries it.')
+                return
+            say_review(ui, 'The approved package is ready to review.', package_rows(ui.project()))
             return
         if stage == 'PACKAGED':
-            ui.say('Approved package already exists. Use /artifacts to find it.')
+            say_review(ui, 'The approved package is already written.', package_rows(project))
             return
         if not approved:
             command = 'resume' if project.get('active_assessment') else 'assess'
