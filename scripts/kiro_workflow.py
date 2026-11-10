@@ -454,9 +454,11 @@ def plan_confirmation(text):
 def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     """Select the agreed capabilities through job chat, never approve a deliverable.
 
-    Only recognized onboarding prompts trigger this adapter. The message is built
-    from the pinned run, not from instructions in source files or AWS chat text.
-    An uncertain send must be reconciled before another mutation is attempted.
+    A new job often has no plan and no chat yet. That is the prompt: send the
+    assessment objective once. Later replies still require a recognized AWS
+    message. The message is built from the pinned run, not from instructions in
+    source files or AWS chat text. An uncertain send must be reconciled before
+    another mutation is attempted.
     """
     if snapshot.get('plan', {}).get('steps'):
         return False
@@ -464,17 +466,25 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     system = [m for m in messages if m.get('messageOrigin') == 'SYSTEM'
               and m.get('processingInfo', {}).get('messageType') == 'FINAL_RESPONSE']
     if not system:
-        return False
-    latest = max(system, key=lambda m: str(m.get('createdAt', '')))
-    text = latest.get('text', '').lower()
-    recognized = (('custom' in text and ('capabilities' in text or 'job plan' in text))
-                  or ('please confirm' in text and 'assessment-only' in text)
-                  or plan_confirmation(text))
-    if not recognized:
-        return False
+        latest = {'messageId': 'initial-no-plan', 'text': ''}
+        text = ''
+        recognized = True
+    else:
+        latest = max(system, key=lambda m: str(m.get('createdAt', '')))
+        text = latest.get('text', '').lower()
+        recognized = (('custom' in text and ('capabilities' in text or 'job plan' in text))
+                      or ('please confirm' in text and 'assessment-only' in text)
+                      or plan_confirmation(text))
+        if not recognized:
+            return False
     progress = run.setdefault('plan_bootstrap', {'sent_messages': [], 'attempts': 0})
     message_id = latest.get('messageId')
     require(message_id, 'Plan onboarding response has no message identity; inspect privately')
+    if (message_id == 'initial-no-plan' and message_id not in progress['sent_messages']
+            and (directory / 'plan-bootstrap-1-receipt.json').is_file()):
+        progress['sent_messages'].append(message_id)
+        progress['attempts'] = max(progress.get('attempts') or 0, 1)
+        progress['pending'] = False
     if progress.get('pending') and progress.get('pending_attempt') and progress.get('pending_message'):
         receipt = directory / f"plan-bootstrap-{progress['pending_attempt']}-receipt.json"
         if receipt.is_file():
@@ -486,6 +496,10 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
         run['reason'] = 'Assessment plan message outcome is uncertain. Reconcile job chat before sending again.'
         return True
     if message_id in progress['sent_messages']:
+        if message_id == 'initial-no-plan' and not system:
+            run.update(status='WAITING_FOR_ASSESSMENT',
+                       reason='Assessment-only plan selection sent; waiting for AWS to generate the plan.')
+            return True
         return False
     config = run['settings']['transform']
     connector = config.get('connector_id')
@@ -551,13 +565,18 @@ def assessment_plan_complete(snapshot):
     return bool(steps) and assessment_plan_authorized(steps) and all(step.get('status') == 'SUCCEEDED' for step in steps)
 
 
+def plain_chat(text):
+    """Match AWS wording after markdown emphasis is removed."""
+    return ' '.join(text.lower().replace('*', ' ').replace('_', ' ').split())
+
+
 def assessment_start_offered(text):
     """True when AWS has finished the plan and is asking to run it.
 
     The wording changes between jobs. A finished plan asks to start, to proceed
     with execution, or what to do next. Match those offers, not one sentence.
     """
-    lower = text.lower()
+    lower = plain_chat(text)
     planned = ('plan generated' in lower or 'plan has been generated' in lower or 'plan is ready' in lower)
     ready = ('ready to execute' in lower or 'ready to start' in lower
              or 'start the execution' in lower or 'what would you like to do next' in lower
@@ -570,10 +589,12 @@ def assessment_plan_announced(text):
 
     The next sentence is not stable. One job asks to start, another asks what
     to do next, and another asks to configure the recorded source. A request to
-    approve findings is not this announcement.
+    approve findings is not this announcement. Mentioning that approval is
+    preserved does not make the announcement an approval request.
     """
-    lower = text.lower()
-    if 'approve' in lower and 'finding' in lower:
+    lower = plain_chat(text)
+    words = set(lower.split())
+    if 'approve' in words and ('finding' in words or 'findings' in words):
         return False
     return ('plan has been generated' in lower or 'plan generated' in lower
             or 'plan is ready' in lower or assessment_start_offered(text))
