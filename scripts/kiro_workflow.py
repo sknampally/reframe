@@ -34,11 +34,13 @@ TEXT_SUFFIXES = {'.json', '.md', '.txt', '.csv', '.yaml', '.yml'}
 
 
 def private_save(path, value):
+    """Save JSON and restrict the file to the owner."""
     save(path, value)
     path.chmod(0o600)
 
 
 def source_ok(run):
+    """Confirm the pinned source and this Reframe checkout have not changed."""
     root = Path(run['source']['root'])
     if run['source'].get('kind') == 's3-zip':
         require(git(root, 'write-tree') == run['source']['commit'], 'Pinned source tree changed')
@@ -48,18 +50,23 @@ def source_ok(run):
         require(git(root, 'rev-parse', 'HEAD') == run['source']['commit'], 'Pinned source commit changed')
         require(not git(root, 'status', '--porcelain'), 'Source checkout is not clean')
     require(git(root, 'remote', 'get-url', 'origin') == run['source']['repository'], 'Source origin changed')
-    require(git(FRAMEWORK, 'rev-parse', 'HEAD') == run['framework_commit'], 'Framework revision changed')
+    if git(FRAMEWORK, 'rev-parse', 'HEAD') != run['framework_commit']:
+        error = Blocked('Framework revision changed')
+        error.hint = 'Use /flow. It records this Reframe update, then offers skip for wireframes and the AI-DLC package, or review for a second check.'
+        raise error
     require(not git(FRAMEWORK, 'status', '--porcelain'), 'Framework checkout is not clean')
     return root
 
 
 def safe_name(name):
+    """True when a relative path is safe to store. Hidden names, parent segments, and key files are rejected."""
     p = Path(name)
     return (not p.is_absolute() and '..' not in p.parts and not any(x.startswith('.') for x in p.parts)
             and p.name not in DENIED_NAMES and p.suffix.lower() not in {'.pem', '.key', '.p12', '.pfx'})
 
 
 def settings(path):
+    """Load settings, fill the defaults, and reject an unknown or invalid value."""
     config = copy.deepcopy(DEFAULTS)
     if path:
         supplied = json.loads(Path(path).read_text())
@@ -83,6 +90,7 @@ def settings(path):
 
 
 def initialize(args):
+    """Create a new run directory and its run record. No AWS call happens here."""
     source = Path(args.source).resolve()
     workspace = Path(args.workspace).resolve()
     require(source.is_dir() and workspace.is_dir(), 'Source and workspace must exist')
@@ -120,6 +128,7 @@ def collect_assessment(run, directory, location):
         bucket, prefix = parsed.netloc, parsed.path.lstrip('/')
         require(bucket and prefix, 'S3 input must identify an object or nonempty prefix')
         def aws(*args):
+            """Call the AWS CLI and return JSON."""
             result = subprocess.run(['aws', *args], capture_output=True, text=True, timeout=120)
             require(result.returncode == 0, 'S3 operation failed; inspect AWS credentials/access privately')
             return json.loads(result.stdout) if result.stdout.strip() else {}
@@ -178,6 +187,7 @@ class RuntimeUnavailable(Blocked):
 
 
 def blocked_cause(error):
+    """Find a Blocked error inside a group of exceptions."""
     if isinstance(error, Blocked): return error
     for child in getattr(error, 'exceptions', ()):
         found = blocked_cause(child)
@@ -186,6 +196,7 @@ def blocked_cause(error):
 
 
 def mcp_transport(directory=None):
+    """Load the MCP client libraries, or stop with an install hint."""
     try:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
@@ -202,10 +213,13 @@ def mcp_transport(directory=None):
 class Transform:
     """Official AWS MCP SDK transport. Optional dependency imported only when used."""
     def __init__(self, config, directory):
+        """Remember the Transform settings and the private directory for this connection."""
         self.config, self.directory = config, directory
 
     def calls(self, requests):
+        """Send one batch of Transform tool requests and return their results."""
         async def timed():
+            """Stop the batch if Transform does not answer within the configured time."""
             return await asyncio.wait_for(self._calls(requests), timeout=self.config.get('timeout_seconds', 180))
         try:
             return asyncio.run(timed())
@@ -218,6 +232,7 @@ class Transform:
             raise Blocked('AWS MCP transport failed; inspect the private mcp-error.json and reconcile uncertain creation') from error
 
     async def _calls(self, requests):
+        """Open the Transform MCP server, call each named tool, and unwrap the reply."""
         ClientSession, StdioServerParameters, stdio_client = mcp_transport(self.directory)
         command = self.config.get('command', ['uvx', 'awslabs.aws-transform-mcp-server@latest'])
         require(isinstance(command, list) and command, 'MCP command must be an argv array')
@@ -259,6 +274,7 @@ class Transform:
 
 
 def unwrap_mcp(value):
+    """Remove the nested result envelope and reject a failed Transform reply."""
     for _ in range(8):
         require(isinstance(value, dict), 'Unsupported AWS tool response')
         require(not value.get('isError') and not value.get('error') and value.get('success') is not False,
@@ -417,6 +433,7 @@ def recorded_job_id(receipt):
 
 
 def nested_job(value):
+    """Find the job object inside a nested Transform response."""
     for _ in range(5):
         if isinstance(value, dict) and ('jobId' in value or 'status' in value and 'job' not in value):
             return value
@@ -430,6 +447,7 @@ def nested_job(value):
 
 
 def select_orchestrator(run, client):
+    """Use the configured Transform orchestrator, or the one mainframe orchestrator the service lists."""
     config = run['settings']['transform']
     if config.get('orchestrator_agent'):
         return config['orchestrator_agent']
@@ -454,9 +472,11 @@ def plan_confirmation(text):
 def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     """Select the agreed capabilities through job chat, never approve a deliverable.
 
-    Only recognized onboarding prompts trigger this adapter. The message is built
-    from the pinned run, not from instructions in source files or AWS chat text.
-    An uncertain send must be reconciled before another mutation is attempted.
+    A new job often has no plan and no chat yet. That is the prompt: send the
+    assessment objective once. Later replies still require a recognized AWS
+    message. The message is built from the pinned run, not from instructions in
+    source files or AWS chat text. An uncertain send must be reconciled before
+    another mutation is attempted.
     """
     if snapshot.get('plan', {}).get('steps'):
         return False
@@ -464,17 +484,25 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     system = [m for m in messages if m.get('messageOrigin') == 'SYSTEM'
               and m.get('processingInfo', {}).get('messageType') == 'FINAL_RESPONSE']
     if not system:
-        return False
-    latest = max(system, key=lambda m: str(m.get('createdAt', '')))
-    text = latest.get('text', '').lower()
-    recognized = (('custom' in text and ('capabilities' in text or 'job plan' in text))
-                  or ('please confirm' in text and 'assessment-only' in text)
-                  or plan_confirmation(text))
-    if not recognized:
-        return False
+        latest = {'messageId': 'initial-no-plan', 'text': ''}
+        text = ''
+        recognized = True
+    else:
+        latest = max(system, key=lambda m: str(m.get('createdAt', '')))
+        text = latest.get('text', '').lower()
+        recognized = (('custom' in text and ('capabilities' in text or 'job plan' in text))
+                      or ('please confirm' in text and 'assessment-only' in text)
+                      or plan_confirmation(text))
+        if not recognized:
+            return False
     progress = run.setdefault('plan_bootstrap', {'sent_messages': [], 'attempts': 0})
     message_id = latest.get('messageId')
     require(message_id, 'Plan onboarding response has no message identity; inspect privately')
+    if (message_id == 'initial-no-plan' and message_id not in progress['sent_messages']
+            and (directory / 'plan-bootstrap-1-receipt.json').is_file()):
+        progress['sent_messages'].append(message_id)
+        progress['attempts'] = max(progress.get('attempts') or 0, 1)
+        progress['pending'] = False
     if progress.get('pending') and progress.get('pending_attempt') and progress.get('pending_message'):
         receipt = directory / f"plan-bootstrap-{progress['pending_attempt']}-receipt.json"
         if receipt.is_file():
@@ -486,6 +514,10 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
         run['reason'] = 'Assessment plan message outcome is uncertain. Reconcile job chat before sending again.'
         return True
     if message_id in progress['sent_messages']:
+        if message_id == 'initial-no-plan' and not system:
+            run.update(status='WAITING_FOR_ASSESSMENT',
+                       reason='Assessment-only plan selection sent; waiting for AWS to generate the plan.')
+            return True
         return False
     config = run['settings']['transform']
     connector = config.get('connector_id')
@@ -551,13 +583,18 @@ def assessment_plan_complete(snapshot):
     return bool(steps) and assessment_plan_authorized(steps) and all(step.get('status') == 'SUCCEEDED' for step in steps)
 
 
+def plain_chat(text):
+    """Match AWS wording after markdown emphasis is removed."""
+    return ' '.join(text.lower().replace('*', ' ').replace('_', ' ').split())
+
+
 def assessment_start_offered(text):
     """True when AWS has finished the plan and is asking to run it.
 
     The wording changes between jobs. A finished plan asks to start, to proceed
     with execution, or what to do next. Match those offers, not one sentence.
     """
-    lower = text.lower()
+    lower = plain_chat(text)
     planned = ('plan generated' in lower or 'plan has been generated' in lower or 'plan is ready' in lower)
     ready = ('ready to execute' in lower or 'ready to start' in lower
              or 'start the execution' in lower or 'what would you like to do next' in lower
@@ -570,10 +607,12 @@ def assessment_plan_announced(text):
 
     The next sentence is not stable. One job asks to start, another asks what
     to do next, and another asks to configure the recorded source. A request to
-    approve findings is not this announcement.
+    approve findings is not this announcement. Mentioning that approval is
+    preserved does not make the announcement an approval request.
     """
-    lower = text.lower()
-    if 'approve' in lower and 'finding' in lower:
+    lower = plain_chat(text)
+    words = set(lower.split())
+    if 'approve' in words and ('finding' in words or 'findings' in words):
         return False
     return ('plan has been generated' in lower or 'plan generated' in lower
             or 'plan is ready' in lower or assessment_start_offered(text))
@@ -834,6 +873,7 @@ def continue_without_activity_records(run, directory, client, identity, tasks):
 
 
 def assessment_step(run, directory, client=None):
+    """Advance the same Transform job by one saved step. A finished assessment is left unchanged."""
     if run['assessment_ready']:
         return
     if run['assessment_input']:
@@ -963,6 +1003,7 @@ def assessment_step(run, directory, client=None):
 
 
 def json_reply(text):
+    """Parse one agent JSON object. A fenced JSON block is accepted."""
     stripped = text.strip()
     if stripped.startswith('```json') and stripped.endswith('```'):
         stripped = stripped[7:-3].strip()
@@ -973,6 +1014,7 @@ def json_reply(text):
 
 
 def kiro_call(run, directory, role, message):
+    """Ask Kiro for one role reply. The agent is started with no tools."""
     config = run['settings']
     executable = config['kiro_command'][0]
     if not shutil.which(executable) or not os.environ.get('KIRO_API_KEY'):
@@ -1014,6 +1056,7 @@ def kiro_call(run, directory, role, message):
 
 
 def inventory(run):
+    """List the tracked source files that are safe to name in a prompt."""
     root = source_ok(run)
     names = [name for name in git(root, 'ls-files').splitlines() if safe_name(name)]
     require(len(json.dumps(names).encode()) <= run['settings']['max_context_bytes'] // 2,
@@ -1022,6 +1065,7 @@ def inventory(run):
 
 
 def source_read(run, directory, role, request):
+    """Return numbered lines from the pinned source or the sealed assessment."""
     paths = request.get('paths')
     require(isinstance(paths, list) and 0 < len(paths) <= 5 and all(isinstance(x, str) for x in paths),
             'Read request must name one to five paths')
@@ -1054,6 +1098,7 @@ def source_read(run, directory, role, request):
 
 
 def agent_step(run, directory, runtime=kiro_call):
+    """Give the executor or reviewer one turn, then store a read, a candidate, or a review."""
     root = source_ok(run)
     role, number = run['role'], run['round']
     require(run['model_calls'] < run['settings']['max_model_calls'], 'Total model-call budget exhausted')
@@ -1128,12 +1173,14 @@ def agent_step(run, directory, runtime=kiro_call):
 
 
 def summary(run, directory):
+    """Return the saved run status. Human approval is never implied."""
     return {'run': str(directory), 'run_id': run['run_id'], 'status': run['status'],
             'round': run['round'], 'model_calls': run['model_calls'], 'reason': run.get('reason'),
             'human_approved': False}
 
 
 def drive(directory, wait=False, authorize=False, runtime=kiro_call, transform=None, assessment=None):
+    """Hold the run lock and advance assessment or agent work until a person or AWS must act."""
     directory = Path(directory).resolve()
     with (directory / '.workflow.lock').open('a') as lock:
         try:
@@ -1184,6 +1231,7 @@ def drive(directory, wait=False, authorize=False, runtime=kiro_call, transform=N
 
 
 def main():
+    """Parse the workflow command and print the saved run summary."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     start = commands.add_parser('start')

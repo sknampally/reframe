@@ -15,6 +15,7 @@ def json_projection(value):
     """Lossless pointer records; repeated object/array values become explicit references."""
     lines, seen = [], {}
     def visit(item, pointer):
+        """Record one JSON value, and point at an earlier copy when the same value repeats."""
         if isinstance(item, (dict, list)) and item:
             fingerprint = digest(item)
             if fingerprint in seen:
@@ -33,6 +34,7 @@ def json_projection(value):
 
 
 def evidence_lines(raw, area):
+    """Split evidence into lines. JSON assessment files become pointer records so structure is kept."""
     text = raw.decode('utf-8')
     if area == 'assessment':
         try:
@@ -46,6 +48,7 @@ def evidence_lines(raw, area):
 
 
 def segments(area, name, path, expected):
+    """Split one evidence file into bounded segments. A line that is too long is marked opaque."""
     require(sha(path) == expected, 'Evidence changed while planning')
     raw = path.read_bytes()
     base = {'area': area, 'path': name, 'sha256': expected}
@@ -77,6 +80,7 @@ def segments(area, name, path, expected):
 
 
 def make_plan(project, assessment_dir, run, catalog):
+    """Group source and assessment evidence into units a reviewer can check one at a time."""
     records = []
     root = Path(project['source']['root'])
     # Do not filter tracked files by extension or silently discard unsafe names.
@@ -100,6 +104,7 @@ def make_plan(project, assessment_dir, run, catalog):
     unit_limit = min(90000, max(1000, project['settings']['max_context_bytes'] - CHECKPOINT_BYTES - 65000))
     labels = {x['path']:x.get('label',x['path']) for x in catalog}
     def focus(record):
+        """Name the source file an assessment record belongs to."""
         if record['area'] == 'source': return record['path']
         label = re.sub(r'-(cbl|jcl|cpy|bms|sql|proc)\.json$', r'.\1', labels[record['path']], flags=re.IGNORECASE)
         if label in source_names: return label
@@ -112,6 +117,7 @@ def make_plan(project, assessment_dir, run, catalog):
     records.sort(key=lambda r:(r['focus']=='@assessment', r['focus'], r['area'] != 'source', r['path'], r['start']))
     units, batch, size = [], [], 0
     def same_rule(existing, record):
+        """True when two segments belong in the same review unit."""
         if existing['focus'] != record['focus']:
             return False
         return not (existing['area'] == 'source' and record['area'] == 'source' and existing['path'] != record['path'])
@@ -136,6 +142,7 @@ def make_plan(project, assessment_dir, run, catalog):
 
 
 def evidence(unit, project, assessment_dir):
+    """Load the sealed lines for one unit."""
     result = []
     for part in unit['segments']:
         root = Path(project['source']['root']) if part['area'] == 'source' else assessment_dir / 'assessment'
@@ -152,6 +159,7 @@ def evidence(unit, project, assessment_dir):
 
 
 def validate_checkpoint(reply, unit, supplied):
+    """Reject a checkpoint that does not cover the evidence it was given."""
     require(reply.get('kind') == 'checkpoint' and isinstance(reply.get('summary'), str)
             and reply['summary'].strip(), 'Return checkpoint with a nonempty summary')
     require(len(json.dumps(reply).encode()) <= CHECKPOINT_BYTES, 'Checkpoint exceeds 14000 bytes; return concise cited findings')
@@ -198,6 +206,7 @@ def validate_checkpoint(reply, unit, supplied):
 
 
 def validate_synthesis(spec, capsules):
+    """Reject a specification that drops a rule or question from the reviewed units."""
     required_rules = {f['id'] for c in capsules for f in c['checkpoint']['findings'] if f['kind'] == 'business_rule'}
     required_questions = {q['id'] for c in capsules for q in c['checkpoint']['questions']}
     require(required_rules <= {r['id'] for r in spec['rules']}, 'Synthesis omitted checkpoint business rules')
@@ -208,6 +217,7 @@ def validate_synthesis(spec, capsules):
 
 
 def verified_capsules(work, project, app):
+    """Load checkpoints whose hashes still match the evidence."""
     state = project['checkpoints']
     plan_path = work / state['plan_path']
     require(sha(plan_path) == state['plan_sha256'], 'Preparation plan changed')
@@ -229,6 +239,7 @@ def verified_capsules(work, project, app):
 
 
 def run(work, project, args, runtime, app):
+    """Review each evidence unit until they are accepted or the call budget stops."""
     app.verify_source(project)
     app.validate_model_pair(project['providers']['executor'], project['settings'])
     assessment_dir, assessment_run = app.verified_assessment(project, project['selected'])

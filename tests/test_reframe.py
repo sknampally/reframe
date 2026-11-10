@@ -213,6 +213,13 @@ class PreparationTests(unittest.TestCase):
             self.assertNotIn('source.zip', archive.namelist())
             self.assertTrue(all(not x.endswith(('.cs', '.tf')) for x in archive.namelist()))
             self.assertEqual(json.loads(archive.read('traceability.json'))['tests'][0]['status'], 'NOT RUN')
+            self.assertTrue(all(step['status']=='NOT_STARTED' for step in json.loads(archive.read('modernization-sequence.json'))))
+            self.assertTrue(all(item['disposition']=='unassigned' for item in json.loads(archive.read('capability-map.json'))['capabilities']))
+            self.assertEqual(json.loads(archive.read('parallel-validation.json'))['status'], 'NOT RUN')
+            self.assertEqual(json.loads(archive.read('governance.json'))['retirement_status'], 'NOT_READY')
+            self.assertTrue(json.loads(archive.read('extraction-reading.json'))['source_stays_pinned'])
+            self.assertEqual(json.loads(archive.read('rule-coverage.json'))['status'], 'COMPLETE')
+            self.assertEqual(json.loads(archive.read('capability-map.json'))['acceptance'], 'PROPOSAL')
         self.assertEqual(self.project['stage'], 'PACKAGED')
         with zipfile.ZipFile(result['archive']) as archive:
             self.assertEqual(json.loads(archive.read('provenance.json'))['pins']['prompt_hash'], app.preparation_protocol_hash())
@@ -414,6 +421,8 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn('<script>',page)
         self.assertIn('assessment/rules.json',page)
         self.assertIn('Awaiting human review',page)
+        self.assertIn('COPY-expanded source',page)
+        self.assertIn('does not: Rewrite a member',page)
         self.assertFalse(self.project['approvals'])
 
     def test_aws_facts_count_export_rows_and_preserve_descriptions_without_model(self):

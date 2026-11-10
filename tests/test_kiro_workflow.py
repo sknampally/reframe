@@ -215,6 +215,36 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(flow.bootstrap_assessment_plan(recovered,self.directory,Client(),identity,snapshot))
         self.assertEqual(recovered['status'],'NEEDS_RECONCILIATION')
 
+    def test_empty_chat_without_a_plan_sends_the_objective_once(self):
+        run, snapshot, identity = self.onboarding()
+        snapshot['messages'] = {'messages': []}
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests)
+                return [{}, {'accepted': True}]
+        self.assertTrue(flow.bootstrap_assessment_plan(run, self.directory, Client(), identity, snapshot))
+        sent = [args['text'] for name, args in calls if name == 'send_message']
+        self.assertEqual(len(sent), 1)
+        self.assertIn('Analyze code', sent[0])
+        self.assertIn('Do not include Analyze activity metrics', sent[0])
+        for value in ('fixture-job', 'fixture-connector', 's3://fixture-bucket/source.zip'):
+            self.assertNotIn(value, sent[0])
+        calls.clear()
+        self.assertTrue(flow.bootstrap_assessment_plan(run, self.directory, Client(), identity, snapshot))
+        self.assertEqual(calls, [])
+        self.assertIn('waiting for AWS to generate the plan', run['reason'])
+
+    def test_saved_initial_plan_receipt_is_not_sent_again(self):
+        run, snapshot, identity = self.onboarding()
+        snapshot['messages'] = {'messages': []}
+        run['plan_bootstrap'] = {'sent_messages': [], 'attempts': 0}
+        flow.private_save(self.directory / 'plan-bootstrap-1-receipt.json', {'accepted': True})
+        class Client:
+            def calls(self, requests): raise AssertionError('Recorded plan message must not be repeated')
+        self.assertTrue(flow.bootstrap_assessment_plan(run, self.directory, Client(), identity, snapshot))
+        self.assertIn('initial-no-plan', run['plan_bootstrap']['sent_messages'])
+
     def test_existing_plan_and_unrecognized_chat_never_trigger_selection(self):
         run, snapshot, identity = self.onboarding()
         class Client:
@@ -362,6 +392,25 @@ class WorkflowTests(unittest.TestCase):
         snapshot['messages']['messages'][0]['text'] = 'The plan is ready. I can start the execution.'
         (self.directory / 'source-chat-receipt.json').unlink()
         self.assertFalse(flow.supply_recorded_source(run,self.directory,Client(),identity,snapshot))
+
+    def test_markdown_plan_announcement_starts_without_treating_approval_as_a_request(self):
+        run, snapshot, identity = self.execution_fixture()
+        snapshot['messages']['messages'][0]['text'] = (
+            'Perfect. Your assessment plan has been **generated** with the following capabilities: '
+            'Analyze code, Analyze data, Generate technical documentation, and Extract business logic. '
+            'Not included: Analyze activity metrics. '
+            'Plan scope: Assess the entire supplied repository with human approval of findings preserved. '
+            'What would you like to do next?')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.assessment_plan_announced(snapshot['messages']['messages'][0]['text']))
+        self.assertFalse(flow.assessment_plan_announced('Please approve the findings before anything else.'))
+        self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        sent = [args['text'] for name,args in calls if name=='send_message']
+        self.assertEqual(len(sent),1)
+        self.assertIn('start the existing assessment plan now', sent[0])
 
     def test_generated_plan_that_asks_for_inputs_starts(self):
         run, snapshot, identity = self.execution_fixture()

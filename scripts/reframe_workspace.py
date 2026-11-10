@@ -12,6 +12,7 @@ from pilot import require, sha
 
 
 def repository_name(source):
+    """Derive a filesystem-safe name from a Git URL, a local path, or a ZIP name."""
     value = str(source).replace('\\', '/').rstrip('/')
     path = urlsplit(value).path if '://' in value else value
     name = path.rsplit('/', 1)[-1].removesuffix('.git')
@@ -22,6 +23,7 @@ def repository_name(source):
 
 
 def default_parent(source, framework):
+    """Choose the folder for a new assessment. A command started inside the framework uses the parent of that checkout."""
     cwd = Path.cwd().resolve()
     if cwd.is_relative_to(framework.resolve()): return framework.resolve().parent
     if '://' not in source:
@@ -31,10 +33,12 @@ def default_parent(source, framework):
 
 
 def output_directory(parent, source):
+    """Return the assessment folder named after the repository."""
     return Path(parent).expanduser().resolve() / (repository_name(source) + '_assessment')
 
 
 def preview_directory(work, name):
+    """Return the draft folder for a name. An older preview-* folder is kept when that is the one already in use."""
     legacy=work/('preview-'+name)
     target=work/'previews'/name
     if legacy.exists() and not target.exists(): return legacy
@@ -43,6 +47,7 @@ def preview_directory(work, name):
 
 
 def report_index(work):
+    """Write a private HTML index of the reports, wireframes, and packages in this workspace."""
     paths=[]
     for pattern in ('runs/*/assessment-review.html','preparation/review.html',
                     'previews/*/handoff/index.html','previews/business-*/index.html','preview-*/handoff/index.html','review-site-*/index.html'):
@@ -65,6 +70,7 @@ def report_index(work):
 
 
 def rebase(value, old, new):
+    """Rewrite saved paths from the old workspace root to the new one."""
     if isinstance(value,dict): return {k:rebase(v,old,new) for k,v in value.items()}
     if isinstance(value,list): return [rebase(v,old,new) for v in value]
     if isinstance(value,str) and (value==str(old) or value.startswith(str(old)+'/')):
@@ -73,6 +79,7 @@ def rebase(value, old, new):
 
 
 def relocate(work, project, parent, app):
+    """Copy a workspace to its repository-named folder, verify every file, then switch the active workspace."""
     from reframe_setup import select_workspace
     work=work.resolve(); target=output_directory(parent,project['source']['repository'])
     require(target!=work, 'Workspace already has the requested repository-based location')

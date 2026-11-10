@@ -18,7 +18,7 @@ from pilot import Blocked
 
 COMMANDS = ['flow', 'help', 'menu', 'guide', 'init', 'workspace', 'status', 'assess', 'resume',
             'compare', 'approve', 'preview', 'relocate', 'prepare-plan', 'model-budget', 'validate', 'decide', 'review-site', 'feedback',
-            'artifacts', 'package', 'privacy', 'demo', 'live', 'next', 'exit']
+            'upgrade-framework', 'artifacts', 'package', 'privacy', 'demo', 'live', 'next', 'exit']
 ACTIONS = {'1':'flow', '2':'assess', '3':'status', '4':'resume', '5':'compare',
            '6':'validate', '7':'review-site', '8':'package', '9':'guide', '0':'exit'}
 DEMO_STAGES = ['READY_TO_ASSESS', 'AWAITING_ASSESSMENT_APPROVAL', 'ASSESSMENT_APPROVED',
@@ -33,16 +33,20 @@ def clean(value):
 
 class Terminal:
     def __init__(self, console=None, demo=False, session=None):
+        """Start a console. Privacy is on, and a demo console does not call AWS."""
         self.console = console or Console()
         self.demo = demo
         self.demo_index = 0
         self.private = True
         self.session = session
+        self.last_report = None
 
     def say(self, value, style=None):
+        """Print one line. Control characters in the text are removed first."""
         self.console.print(Text(clean(value), style=style))
 
     def ask(self, label, default=None):
+        """Ask for one value. Pasted JSON or several lines stop setup."""
         # prompt_toolkit brackets a multiline paste as one event rather than feeding
         # its lines into subsequent setup answers.
         value = PromptSession(history=InMemoryHistory()).prompt(clean(label)+': ',default=default or '').strip()
@@ -52,15 +56,18 @@ class Terminal:
         return value
 
     def optional(self, label, default=''):
+        """Ask for one value and allow the default."""
         return self.ask(label, default)
 
     def yes(self, label, default=False):
+        """Ask a yes or no question."""
         value = self.ask(label+' [y/n]', 'y' if default else 'n').lower()
         from pilot import require
         require(value in {'y','yes','n','no'}, 'Answer y or n; pasted content is not an answer')
         return value in {'y','yes'}
 
     def project(self):
+        """Load the active project. A demo console returns an illustrative project."""
         if self.demo:
             return {'stage': DEMO_STAGES[self.demo_index], 'scope':'Illustrative sign-on journey',
                     'providers':{'executor':'claude', 'reviewer':'claude','wireframes':'codex'},
@@ -73,6 +80,7 @@ class Terminal:
             return None
 
     def header(self):
+        """Print the title and whether this console is live or a preview."""
         content = Text('REFRAME\n', style='bold bright_cyan')
         content.append('Reverse-engineer mainframe source into an AI-DLC handoff for any language\n',style='bold white')
         content.append('Assess  →  Validate  →  Business review  →  Package',style='dim')
@@ -80,6 +88,7 @@ class Terminal:
             subtitle='PREVIEW · simulated data · no service calls' if self.demo else 'LIVE WORKSPACE · explicit human gates'))
 
     def dashboard(self):
+        """Print the current stage and the menu."""
         self.header()
         project = self.project()
         if not project:
@@ -140,6 +149,7 @@ class Terminal:
         self.console.print(Panel('\n'.join(clean(line) for line in lines), title='Project status', border_style='blue'))
 
     def assessment_status(self, project):
+        """Return the saved status of each assessment."""
         from reframe import read
         rows=[]
         for label, record in project.get('assessments',{}).items():
@@ -152,6 +162,7 @@ class Terminal:
             self.console.print(table)
 
     def menu(self):
+        """Print the numbered actions."""
         table=Table.grid(expand=True,padding=(0,2))
         table.add_column();table.add_column()
         for left,right in [('1  Guided start / continue','6  Validate findings'),('2  Start assessment','7  Generate HTML review'),
@@ -161,6 +172,7 @@ class Terminal:
         self.say('/help  commands   /approve  human gates   /demo  safe preview   Tab  complete   Ctrl+C  cancel','dim')
 
     def report(self, result):
+        """Print a command result. Paths stay hidden while privacy is on."""
         state=clean(result.get('status','RESULT'))
         failed=state in {'BLOCKED','REWORK_LIMIT','ASSESSMENT_FAILED','NEEDS_RECONCILIATION','SETUP_INCOMPLETE','CANCELLED'}
         table=Table.grid(padding=(0,2));table.add_column(style='bold');table.add_column(overflow='fold')
@@ -170,16 +182,18 @@ class Terminal:
             if self.private and key not in {'next_step','model_calls','calls','round','changed_files','semantic_review','hint','units','minimum_calls','calls_consumed','calls_remaining','reviewed_units','opaque_segments','remaining_calls','minimum_additional_calls','total_cap'}:
                 value='Details hidden by presentation privacy; /privacy reveals local results.'
             table.add_row(clean(key.replace('_',' ').title()),clean(value))
+        self.last_report = dict(result)
         self.console.print(Panel(table,title=Text(state.replace('_',' ')),border_style='red' if failed else 'green'))
 
     def help(self):
+        """Print the command list."""
         table=Table('Command','Purpose',box=box.SIMPLE,expand=True)
         for command,purpose in [('flow','Guided assessment, verification choice and draft/package generation'),('init','Guided setup; continue incomplete setup'),('workspace','Select an existing private project'),
              ('status / resume','Inspect saved state / continue interrupted work'),('assess','Authorize source upload and start another assessment'),
              ('preview --skip-validation --by NAME --note REASON','Generate an AWS-assumed draft UI and AI-DLC package'),('relocate --output-parent PATH','Move outputs into a verified repository-named assessment folder'),('prepare-plan','Preview evidence units and minimum model calls; no AI calls'),('model-budget','Record an explicitly approved total call cap'),('compare','Compare two preserved assessment snapshots'),('approve','Record assessment, validation or business approval'),
              ('validate','Run executor and independent reviewer'),('decide / feedback','Record SME answers or request a revision'),
              ('review-site','Generate stakeholder HTML using the chosen provider'),('artifacts','List saved preparation and review files'),
-             ('package','Create the approved implementation package'),('guide [setup|workflow|comparison]','Read built-in documentation'),
+             ('package','Create the approved implementation package'),('upgrade-framework --note TEXT','Record a Reframe update on this saved run'),('guide [setup|workflow|comparison]','Read built-in documentation'),
              ('privacy','Toggle project/result detail visibility'),('demo / live','Switch simulated preview / saved live project'),
              ('menu / exit','Refresh dashboard / leave the console')]:table.add_row('/'+command,purpose)
         self.console.print(table)
@@ -187,6 +201,7 @@ class Terminal:
         self.say('No arbitrary shell commands are executed. Preview never creates genuine approvals or workflow records.')
 
     def guide(self, topic='workflow'):
+        """Print one setup, workflow, or comparison guide."""
         from reframe import FRAMEWORK
         files={'setup':'engineer-setup.md','workflow':'cli-guide.md','comparison':'assessment-comparison.md'}
         if topic not in files:
@@ -194,6 +209,7 @@ class Terminal:
         self.console.print(Markdown((FRAMEWORK/'docs'/files[topic]).read_text()))
 
     def invoke(self, args):
+        """Run one reframe command and use this console for its questions."""
         import reframe as app
         import reframe_setup as setup
         # UI input adapters are local to this synchronous console action.
@@ -205,6 +221,7 @@ class Terminal:
             setup.ask, setup.yes, setup.optional = original_ask, original_yes, original_optional
 
     def artifacts(self):
+        """List saved reports and packages. Paths stay hidden while privacy is on."""
         from reframe_setup import workspace
         if self.demo:
             self.say('Preview outputs: specification.json · decisions.json · review.html · implementation-backlog.json','cyan');return
@@ -217,6 +234,7 @@ class Terminal:
         if not paths:self.say('No preparation or review outputs yet.')
 
     def dispatch(self, line):
+        """Run one typed command or menu number."""
         tokens=shlex.split(line.strip().lstrip('/'))
         if not tokens:return True
         cmd=ACTIONS.get(tokens[0],tokens[0]);args=tokens[1:]
@@ -229,6 +247,8 @@ class Terminal:
             return True
         if cmd=='privacy':
             self.private=not self.private
+            if self.last_report:
+                self.report(self.last_report)
             self.show_status()
             return True
         if cmd=='menu':
@@ -254,7 +274,7 @@ class Terminal:
             path=Path(self.ask('Existing private workspace path')).expanduser().resolve()
             require((path/'project.json').is_file(),'No saved project at that path')
             select_workspace(path);self.dashboard();return True
-        if cmd not in {'init','assess','resume','compare','approve','preview', 'relocate','prepare-plan','model-budget','validate','review-site','package','decide','feedback'}:
+        if cmd not in {'init','assess','resume','compare','approve','preview', 'relocate','prepare-plan','model-budget','validate','review-site','package','decide','feedback','upgrade-framework'}:
             self.say('Unknown command. Type /help or choose a menu number.','yellow');return True
         if cmd=='compare' and not args:
             args=['--left',self.ask('First assessment label'),'--right',self.ask('Second assessment label')]
@@ -264,6 +284,8 @@ class Terminal:
             args=['--question',self.ask('SME question ID'),'--by',self.ask('Decision owner'),'--answer',self.ask('Answer and rationale'),
                   '--disposition',Prompt.ask('Disposition',choices=['resolved','deferred'],console=self.console)]
         if cmd=='feedback' and not args:args=['--by',self.ask('Feedback owner'),'--note',self.ask('Requested change')]
+        if cmd=='upgrade-framework' and '--note' not in args:
+            args=['--note', self.ask('Note for this Reframe update'), *args]
         if cmd in {'assess','resume'} and '--wait' not in args and '--detach' not in args:
             args=[*args,'--wait']
         if cmd in {'assess','resume','validate','review-site','package'}:
@@ -272,6 +294,7 @@ class Terminal:
         return True
 
     def run(self, initial=None):
+        """Show the dashboard and read commands until the person exits."""
         self.dashboard()
         if self.demo:self.say('Use /next to walk through simulated stages. No live readiness or modernization result is implied.','yellow')
         if initial:
@@ -298,6 +321,7 @@ class Terminal:
 
 
 def launch(demo=False, initial=None):
+    """Open the console. A non-interactive terminal is told to use the scriptable commands."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print('The terminal console needs an interactive terminal. Use reframe --help for scriptable commands.',file=sys.stderr)
         return 2

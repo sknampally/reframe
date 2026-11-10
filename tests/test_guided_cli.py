@@ -64,6 +64,15 @@ class GuidedTests(unittest.TestCase):
         with patch.object(guide.shutil,'which',return_value='/fixture'),patch.object(guide,'command_ok',return_value=True),patch('sys.stdout',new_callable=io.StringIO) as output:
             guide.checks(self.project)
         self.assertNotIn('Account',output.getvalue())
+    def test_source_prompt_has_no_sample_repository(self):
+        def ask(label, default=None):
+            self.assertNotIn('carddemo', label.lower())
+            self.assertIsNone(default)
+            raise Blocked('stop after source prompt')
+        with patch.object(sys.stdin, 'isatty', return_value=True), patch.object(guide, 'ask', side_effect=ask):
+            with self.assertRaisesRegex(Blocked, 'stop after source prompt'):
+                guide.guided_init(self.args('init'))
+
     def test_guided_setup_resumes_existing_project_and_checks_environment(self):
         project=dict(self.project,setup={'connector_approved_by':'Fixture admin'})
         app.write(self.work/'project.json',project)
@@ -85,9 +94,12 @@ class GuidedTests(unittest.TestCase):
             self.assertEqual(args.bucket,'fixture-bucket')
             app.write(work/'project.json',project)
         def setup(work,project,args,client):
+            bucket_name = outputs.call_args.args[5]
+            self.assertRegex(bucket_name, r'^reframe-source-\d{8}-[0-9a-f]{4}$')
             self.assertFalse(args.create_bucket)
             self.assertEqual(args.role_arn,'fixture-role-arn')
-            self.assertEqual(args.create_workspace,'reframe-sandbox')
+            self.assertEqual(args.create_workspace, bucket_name)
+            self.assertEqual(args.create_connector, bucket_name)
             self.assertEqual(args.connector_approved,'Fixture admin')
             self.assertEqual(project['settings']['transform']['sandbox_role'],'fixture-sandbox-role')
             self.assertEqual(project['settings']['transform']['upload_prefix'],'s3://fixture-bucket/reframe')
@@ -101,10 +113,60 @@ class GuidedTests(unittest.TestCase):
              patch.object(guide,'confirm_production_deny') as deny,patch.object(guide,'connect_transform',return_value=object()), \
              patch.object(app,'setup',side_effect=setup):
             result=guide.guided_init(self.args('init'))
-        outputs.assert_called_once_with('fixture','us-east-1',True)
-        deny.assert_called_once_with('fixture', 'us-east-1')
+        self.assertEqual(outputs.call_args.args[:3], ('fixture', 'us-east-1', True))
+        self.assertEqual(Path(outputs.call_args.args[3]), (self.work / 'sandbox' / 'terraform.tfstate').resolve())
+        self.assertEqual(Path(outputs.call_args.args[4]), (self.work / 'sandbox' / '.terraform').resolve())
+        self.assertEqual(outputs.call_args.args[6], outputs.call_args.args[5] + '-role')
+        deny.assert_called_once_with('fixture', 'us-east-1', (self.work / 'sandbox' / '.terraform').resolve())
         self.assertEqual(result['status'],'READY_TO_ASSESS')
         self.assertEqual(result['next_step'],'reframe assess')
+
+    def test_opentofu_session_drops_the_profile(self):
+        exported = 'export AWS_ACCESS_KEY_ID=fixture-key\nexport AWS_SECRET_ACCESS_KEY=fixture-secret\nexport AWS_SESSION_TOKEN=fixture-token\n'
+        with patch.object(guide.subprocess, 'run', return_value=argparse.Namespace(returncode=0, stdout=exported, stderr='')):
+            values = guide.opentofu_session('fixture')
+        self.assertEqual(set(values), {'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'})
+        self.assertNotIn('fixture', json.dumps({key: 'set' for key in values}))
+
+    def test_dated_names_are_reused_for_the_same_folder(self):
+        state = self.work / 'sandbox' / 'terraform.tfstate'
+        source = 'https://github.com/example/Sample_App.git'
+        first = guide.sandbox_identity(source)
+        self.assertRegex(first[0], r'^reframe-sample-app-\d{8}-[0-9a-f]{4}$')
+        self.assertEqual(first[1], first[0] + '-role')
+        self.assertLessEqual(len(first[1]), 64)
+        self.assertNotEqual(guide.sandbox_identity(source)[0], first[0])
+        long_name = guide.sandbox_identity('https://github.com/example/' + ('Very-Long-' * 12) + 'Repository')[0]
+        self.assertLessEqual(len(long_name + '-role'), 64)
+        self.assertRegex(long_name, r'^reframe-very-long-.+-\d{8}-[0-9a-f]{4}$')
+        saved = guide.sandbox_names(state, source)
+        self.assertEqual(guide.sandbox_names(state), saved)
+
+    def test_resume_reads_the_saved_sandbox(self):
+        state = self.work / 'sandbox' / 'terraform.tfstate'
+        data = self.work / 'sandbox' / '.terraform'
+        bucket_name, role_name = guide.sandbox_names(state, 'https://github.com/example/sample-app')
+        project=dict(self.project, setup={'production_deny_checked': True}, settings={'transform': {
+            'upload_prefix': 's3://' + bucket_name + '/reframe', 'sandbox_role': role_name}}, aws={
+            'profile': 'fixture', 'region': 'us-east-1', 'bucket': bucket_name,
+            'sandbox_state': str(state), 'sandbox_data': str(data)})
+        app.write(self.work / 'project.json', project)
+        def setup(work, project, args, client):
+            self.assertEqual(args.create_workspace, bucket_name)
+            project['setup']['connector_approved_by'] = args.connector_approved
+            project['stage'] = 'READY_TO_ASSESS'
+            return {'status': 'READY_TO_ASSESS'}
+        with patch.object(sys.stdin, 'isatty', return_value=True), patch('builtins.input', side_effect=[str(self.work), str(self.work), str(self.work), 'Fixture admin']), \
+             patch.object(guide, 'checks'), \
+             patch.object(guide, 'sandbox_outputs', return_value=(bucket_name, 's3://' + bucket_name + '/reframe', role_name, 'fixture-role-arn')) as outputs, \
+             patch.object(guide, 'confirm_production_deny') as deny, patch.object(guide, 'connect_transform', return_value=object()), \
+             patch.object(app, 'setup', side_effect=setup):
+            result = guide.guided_init(self.args('init'))
+        self.assertFalse(outputs.call_args.args[2])
+        self.assertEqual(outputs.call_args.args[3], str(state))
+        self.assertEqual(outputs.call_args.args[5], bucket_name)
+        deny.assert_not_called()
+        self.assertEqual(result['status'], 'READY_TO_ASSESS')
 
     def test_old_opentofu_stops_before_apply(self):
         bindir = self.work / 'bin'
@@ -195,6 +257,17 @@ class GuidedTests(unittest.TestCase):
         self.assertEqual(calls[2][:3], ['aws', 's3api', 'delete-bucket'])
         self.assertEqual(calls[0][4], calls[2][4])
         self.assertNotIn('listed', str(caught.exception))
+
+    def test_role_that_cannot_be_assumed_is_not_called_a_deny_failure(self):
+        def run(command, **kwargs):
+            if command[:3] == ['aws', 's3api', 'create-bucket'] or command[:3] == ['aws', 's3api', 'delete-bucket']:
+                return argparse.Namespace(returncode=0, stdout='', stderr='')
+            return argparse.Namespace(returncode=1, stdout='', stderr='The sandbox role could not be assumed for the deny check.\n')
+        with patch.object(guide, 'opentofu_binary', return_value='tofu'), patch.object(guide, 'profile_uses_sso', return_value=False), patch.object(guide.subprocess, 'run', side_effect=run):
+            with self.assertRaisesRegex(Blocked, 'could not be assumed') as caught:
+                guide.confirm_production_deny('fixture', 'us-east-1')
+        self.assertIn('could not be assumed', caught.exception.hint)
+        self.assertNotIn('not denied', str(caught.exception))
 
     def test_resume_routes_interrupted_model_work_without_aws_calls(self):
         project=dict(self.project,active_assessment='run-1',pending_action={'command':'validate'})

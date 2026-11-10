@@ -15,10 +15,12 @@ from pilot import Blocked, require
 
 
 def active_file():
+    """Return the private file that names the active workspace."""
     return Path.home() / '.config' / 'mainframe-modernize' / 'active.json'
 
 
 def select_workspace(work):
+    """Remember this workspace as the active one."""
     from kiro_workflow import private_save
     path = active_file()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -26,12 +28,14 @@ def select_workspace(work):
 
 
 def workspace():
+    """Return the active workspace, or stop when none has been selected."""
     path = active_file()
     require(path.is_file(), 'Run reframe init first, or select an existing --workspace')
     return Path(json.loads(path.read_text())['workspace']).expanduser().resolve()
 
 
 def ask(label, default=None):
+    """Ask for one required value. An empty answer keeps the default."""
     value = input(label + (f' [{default}]' if default else '') + ': ').strip()
     result = value or default
     require(result, 'A value is required: ' + label)
@@ -39,12 +43,14 @@ def ask(label, default=None):
 
 
 def yes(label, default=False):
+    """Ask a yes or no question."""
     answer = input(label + (' [Y/n]: ' if default else ' [y/N]: ')).strip().lower()
     require(answer in {'', 'y', 'yes', 'n', 'no'}, 'Answer yes or no')
     return answer in {'y', 'yes'} or (not answer and default)
 
 
 def optional(label, default=''):
+    """Ask for one optional value. JSON and multiple lines are rejected."""
     value = input(label + (f' [{default}]' if default else '') + ': ').strip() or default
     require('\n' not in value and '\r' not in value and not value.startswith(('{','[')),
             'Enter one value, not JSON or multiple lines. No setup operation was requested.')
@@ -52,6 +58,7 @@ def optional(label, default=''):
 
 
 def connect_arguments(path):
+    """Read a private Transform sign-in file. An MCP server configuration is rejected."""
     candidate = Path(path).expanduser()
     require(candidate.is_file(), 'Enter a path to an existing private configure-arguments file, not pasted JSON.')
     value = json.loads(candidate.read_text())
@@ -61,6 +68,7 @@ def connect_arguments(path):
 
 
 def sso_defaults(project):
+    """Read the Identity Center start URL and region from the selected AWS profile."""
     config = configparser.RawConfigParser()
     config.read(Path(os.environ.get('AWS_CONFIG_FILE', str(Path.home()/'.aws/config'))))
     profile = (project['aws'].get('profile') or '').strip()
@@ -72,6 +80,7 @@ def sso_defaults(project):
 
 
 def connect_transform(work, project, client=None):
+    """Confirm the Transform connection, or start the browser sign-in and check it again."""
     import kiro_workflow as flow
     client = client or flow.Transform(project['settings']['transform'], work)
     print('Checking the AWS Transform application connection...')
@@ -111,6 +120,7 @@ def connect_transform(work, project, client=None):
 
 
 def command_ok(command):
+    """True when a command exits successfully."""
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=45)
         return result.returncode == 0
@@ -119,6 +129,7 @@ def command_ok(command):
 
 
 def installation_hint(tool):
+    """Return the install page for a missing tool."""
     urls = {
         'git': 'https://git-scm.com/downloads',
         'aws': 'https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html',
@@ -132,6 +143,7 @@ def installation_hint(tool):
 
 
 def halt(message, hint):
+    """Stop setup and attach the next action the person should take."""
     error = Blocked(message)
     error.hint = hint
     raise error
@@ -204,6 +216,7 @@ def opentofu_binary():
 
 
 def profile_uses_sso(profile):
+    """True when the AWS profile is configured for Identity Center."""
     result = subprocess.run(['aws', '--profile', profile, 'configure', 'get', 'sso_role_name'], capture_output=True, text=True)
     return result.returncode == 0 and bool(result.stdout.strip())
 
@@ -229,18 +242,95 @@ def aws_profile_env(profile, region):
             shutil.rmtree(directory, ignore_errors=True)
 
 
-def sandbox_outputs(profile, region, apply):
-    """Create or read the sandbox. The role ARN stays in memory for connector activation."""
+def sandbox_label(bucket):
+    """True when a bucket name is the shared source stem or a previously saved dated id."""
+    current = r'reframe-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{8}-[0-9a-f]{4}'
+    previous = r'reframe-[0-9]{8}-[0-9a-f]{8}'
+    return bool(bucket) and len(bucket) <= 59 and (re.fullmatch(current, bucket) or re.fullmatch(previous, bucket))
+
+
+def sandbox_identity(source):
+    """Return one name for the bucket, workspace, and connector, and the matching role name."""
+    from datetime import datetime, timezone
+    from reframe_workspace import repository_name
+    slug = re.sub(r'[^a-z0-9]+', '-', repository_name(source).lower()).strip('-')
+    require(slug, 'Cannot derive a resource name from this source.')
+    date = datetime.now(timezone.utc).strftime('%Y%m%d')
+    suffix = secrets.token_hex(2)
+    room = 59 - len('reframe-') - len(date) - len(suffix) - 2
+    slug = slug[:room].rstrip('-')
+    require(slug, 'Cannot derive a resource name from this source.')
+    bucket = 'reframe-' + slug + '-' + date + '-' + suffix
+    require(sandbox_label(bucket), 'Sandbox name was not tied to the source.')
+    return bucket, bucket + '-role'
+
+
+def sandbox_names(state_path, source=None):
+    """Read the names saved beside a sandbox, or create a source-named pair and save them."""
+    path = Path(state_path).expanduser().resolve().parent / 'names.json'
+    if path.is_file():
+        payload = json.loads(path.read_text())
+        bucket, role = payload.get('bucket_name'), payload.get('role_name')
+    else:
+        require(source, 'A source is required to name the sandbox.')
+        bucket, role = sandbox_identity(source)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_text(json.dumps({'bucket_name': bucket, 'role_name': role}))
+        path.chmod(0o600)
+    require(sandbox_label(bucket), 'Saved sandbox bucket name is not tied to its source.')
+    require(role == (bucket or '') + '-role', 'Saved sandbox role name does not match its bucket.')
+    return bucket, role
+
+
+def opentofu_session(profile):
+    """Read the selected profile's session for OpenTofu. OpenTofu rejects the SSO profile itself."""
+    result = subprocess.run(
+        ['aws', '--profile', profile, 'configure', 'export-credentials', '--format', 'env'],
+        capture_output=True, text=True)
+    require(result.returncode == 0, 'The AWS profile session could not be read for OpenTofu. Sign in again.')
+    values = {}
+    for line in result.stdout.splitlines():
+        if not line.startswith('export '):
+            continue
+        key, _, raw = line[len('export '):].partition('=')
+        values[key] = raw.strip().strip('"').strip("'")
+    require(values.get('AWS_ACCESS_KEY_ID') and values.get('AWS_SECRET_ACCESS_KEY') and values.get('AWS_SESSION_TOKEN'),
+            'The AWS profile session could not be read for OpenTofu. Sign in again.')
+    return values
+
+
+def sandbox_outputs(profile, region, apply, state_path=None, data_dir=None, bucket_name=None, role_name=None):
+    """Create or read one sandbox. The role ARN stays in memory for connector activation."""
     import reframe as app
     tofu = opentofu_binary()
     require(re.fullmatch(r'[A-Za-z0-9_.=,@-]+', profile or ''), 'Enter the AWS profile name only.')
     require(re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d+', region or ''), 'Enter an AWS region name.')
+    require((state_path is None) == (data_dir is None), 'Sandbox state and its data directory are saved together.')
+    require((bucket_name is None) == (role_name is None), 'Pass the bucket and role names together.')
+    require(bucket_name is None or sandbox_label(bucket_name),
+            'Sandbox bucket name must include the source and the UTC date.')
+    require(role_name is None or role_name == (bucket_name or '') + '-role', 'Sandbox role name must match its bucket.')
     directory = app.FRAMEWORK / 'infrastructure'
     require((directory / 'main.tf').is_file(), 'The sandbox stack is not in this framework checkout.')
+    if state_path is not None:
+        state_path = Path(state_path).expanduser().resolve()
+        data_dir = Path(data_dir).expanduser().resolve()
+        require(not state_path.is_relative_to(app.FRAMEWORK) and not data_dir.is_relative_to(app.FRAMEWORK),
+                'Sandbox state stays in the private assessment folder.')
+        data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with aws_profile_env(profile, region) as env:
         env.update(TF_IN_AUTOMATION='1', TF_INPUT='0', TOFU=tofu)
         env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
+        env.update(opentofu_session(profile))
+        env.pop('AWS_PROFILE', None)
+        env.pop('AWS_DEFAULT_PROFILE', None)
+        env.pop('AWS_SHARED_CREDENTIALS_FILE', None)
+        env['AWS_EC2_METADATA_DISABLED'] = 'true'
+        if data_dir is not None:
+            env['TF_DATA_DIR'] = str(data_dir)
         def run(args, capture=False):
+            """Run one OpenTofu command and stop setup if it does not finish."""
             print('Running ' + tofu + ' ' + args[0] + '...')
             result = subprocess.run([tofu, '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
             if result.returncode != 0:
@@ -248,12 +338,18 @@ def sandbox_outputs(profile, region, apply):
                      'Sign in to the selected AWS profile again, then choose 1. /privacy shows the local detail.')
             return result
         if apply:
-            run(['init', '-input=false'])
-            run(['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile])
+            init = ['init', '-input=false']
+            if state_path is not None:
+                init += ['-reconfigure', '-backend-config=path=' + str(state_path)]
+            run(init)
+            apply_args = ['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region]
+            if bucket_name:
+                apply_args += ['-var', 'bucket_name=' + bucket_name, '-var', 'role_name=' + role_name]
+            run(apply_args)
         result = subprocess.run([tofu, '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
     if result.returncode != 0:
         require(not apply, 'OpenTofu outputs were not available. Setup stopped before an assessment.')
-        return sandbox_outputs(profile, region, True)
+        return sandbox_outputs(profile, region, True, state_path, data_dir, bucket_name, role_name)
     outputs = json.loads(result.stdout)
     prefix = outputs['upload_prefix']['value']
     role = outputs['sandbox_role']['value']
@@ -263,10 +359,12 @@ def sandbox_outputs(profile, region, apply):
     bucket = prefix.removeprefix('s3://').removesuffix('/reframe')
     require(bucket and '/' not in bucket and isinstance(role, str) and role and isinstance(role_arn, str) and role_arn,
             'OpenTofu outputs were incomplete. Setup stopped before an assessment.')
+    if bucket_name:
+        require(bucket == bucket_name and role == role_name, 'OpenTofu returned a different sandbox than this source.')
     return bucket, prefix, role, role_arn
 
 
-def confirm_production_deny(profile, region):
+def confirm_production_deny(profile, region, data_dir=None):
     """Prove the sandbox role cannot list some other bucket. The user does not name one."""
     import reframe as app
     probe = 'reframe-deny-probe-' + secrets.token_hex(4)
@@ -276,20 +374,26 @@ def confirm_production_deny(profile, region):
     with aws_profile_env(profile, region) as env:
         env.update(TOFU=tofu)
         env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
+        if data_dir is not None:
+            env['SANDBOX_DATA_DIR'] = str(Path(data_dir).expanduser().resolve())
+            env['TF_DATA_DIR'] = env['SANDBOX_DATA_DIR']
         create = ['aws', 's3api', 'create-bucket', '--bucket', probe, '--region', region]
         if region != 'us-east-1':
             create += ['--create-bucket-configuration', 'LocationConstraint=' + region]
         made = subprocess.run(create, capture_output=True, text=True, env=env)
         if made.returncode != 0:
             halt('The permission check could not create its temporary bucket. Setup stopped before a Transform workspace was created.',
-                 'Choose 1 again. /privacy shows the local detail.')
+                 'Choose 1 again. The permission check could not create its temporary bucket.')
         try:
             result = subprocess.run([str(script), probe], capture_output=True, text=True, env=env)
         finally:
             subprocess.run(['aws', 's3api', 'delete-bucket', '--bucket', probe, '--region', region], capture_output=True, text=True, env=env)
     if result.returncode != 0:
-        halt('The sandbox role was not denied for another bucket. Setup stopped before a Transform workspace was created.',
-             'Choose 1 again. /privacy shows the local detail.')
+        if 'could not be assumed' in (result.stderr or ''):
+            message = 'The sandbox role could not be assumed for the deny check. Setup stopped before a Transform workspace was created.'
+        else:
+            message = 'The sandbox role was not denied for another bucket. Setup stopped before a Transform workspace was created.'
+        halt(message, 'Choose 1 again. ' + message)
     print('Read of another bucket was denied.')
 
 
@@ -304,6 +408,7 @@ def choose_aws_profile():
 
 
 def ensure_aws_login(project):
+    """Confirm the selected AWS profile can call AWS, and say how to sign in when it cannot."""
     try:
         return _ensure_aws_login(project)
     except Blocked:
@@ -365,6 +470,7 @@ def checks(project, work=None):
 
 
 def guided_init(args):
+    """Ask for the source, the AWS profile, and the sandbox, then save the project."""
     import reframe as app
     require(sys.stdin.isatty(), 'Interactive setup needs a terminal; supply --workspace, --source and --scope for scripted init')
     print('Reframe setup. A new project creates the sandbox, checks the production deny, and connects Transform.')
@@ -374,7 +480,7 @@ def guided_init(args):
     parent = getattr(args, 'output_parent', None)
     if not default and not parent and not args.source and active_file().exists(): default = str(workspace())
     if not default:
-        args.source = args.source or ask('Local Git checkout or GitHub repository URL', 'https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git')
+        args.source = args.source or ask('Local Git checkout or GitHub repository URL')
         parent = parent or ask('Engineer workspace directory (assessment folder is created inside it)', str(default_parent(args.source, app.FRAMEWORK)))
         default = str(output_directory(parent, args.source))
         print('Assessment output folder: ' + default)
@@ -385,7 +491,7 @@ def guided_init(args):
     if (work / 'project.json').exists():
         print('Resuming setup for the saved source and configuration; existing evidence will be preserved.')
     else:
-        args.source = args.source or ask('Local Git checkout or GitHub repository URL', 'https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git')
+        args.source = args.source or ask('Local Git checkout or GitHub repository URL')
         if args.source.startswith('https://'):
             value = optional('Git commit/ref to pin (Enter uses current default branch)')
             args.ref = args.ref or value or None
@@ -399,12 +505,16 @@ def guided_init(args):
         args.ui_provider = ask('HTML content provider: claude or codex', args.ui_provider)
         require(args.ui_provider in {'claude', 'codex'}, 'Unsupported HTML provider')
         print('Claude defaults: Sonnet 5.5 executor / Opus 5.5 reviewer. Kiro is optional.')
-        print('Reframe will save this source pin, create the private sandbox, and store its role. You do not name the bucket.')
+        print('Reframe will save this source pin and create a new private sandbox for it. The bucket, workspace, and connector share one name from the source and the UTC date. The role adds -role. You do not type the name.')
         if not yes('Continue and finish setup?', default=True):
             print('Setup paused before anything was created. Choose 1 again to continue.')
             return {'status': 'SETUP_INCOMPLETE', 'next_step': 'Choose 1 again. Nothing was created.'}
-        bucket, prefix, role, sandbox_arn = sandbox_outputs(args.aws_profile, args.region, True)
-        confirm_production_deny(args.aws_profile, args.region)
+        state_path = work / 'sandbox' / 'terraform.tfstate'
+        data_dir = work / 'sandbox' / '.terraform'
+        bucket_name, role_name = sandbox_names(state_path, args.source)
+        bucket, prefix, role, sandbox_arn = sandbox_outputs(
+            args.aws_profile, args.region, not state_path.is_file(), state_path, data_dir, bucket_name, role_name)
+        confirm_production_deny(args.aws_profile, args.region, data_dir)
         args.bucket = bucket
         app.initialize(args, work)
         project = app.read(work / 'project.json')
@@ -412,7 +522,11 @@ def guided_init(args):
         project['settings']['transform']['upload_prefix'] = prefix
         project['settings']['transform']['sandbox_role'] = role
         project['aws']['bucket'] = bucket
+        project['aws']['sandbox_state'] = str(state_path)
+        project['aws']['sandbox_data'] = str(data_dir)
         project.setdefault('setup', {})['production_deny_checked'] = True
+        project['setup']['workspace_name'] = bucket_name
+        project['setup']['connector_name'] = bucket_name
         app.persist(work, project)
     select_workspace(work)
     # From here all writes and remote setup share the regular project lock.
@@ -428,13 +542,20 @@ def guided_init(args):
         transform = project.setdefault('settings', {}).setdefault('transform', {})
         ready = bool(transform.get('upload_prefix') and transform.get('sandbox_role') and project.get('setup', {}).get('production_deny_checked'))
         if not sandbox_arn:
-            bucket, prefix, role, sandbox_arn = sandbox_outputs(project['aws']['profile'], project['aws']['region'], not ready)
+            state_path = project.get('aws', {}).get('sandbox_state')
+            data_dir = project.get('aws', {}).get('sandbox_data')
+            require(state_path and data_dir, 'This run has no sandbox state. Choose fresh for a new source.')
+            bucket_name, role_name = sandbox_names(state_path, project['source']['repository'])
+            bucket, prefix, role, sandbox_arn = sandbox_outputs(
+                project['aws']['profile'], project['aws']['region'], not ready, state_path, data_dir, bucket_name, role_name)
             if not project.get('setup', {}).get('production_deny_checked'):
-                confirm_production_deny(project['aws']['profile'], project['aws']['region'])
+                confirm_production_deny(project['aws']['profile'], project['aws']['region'], data_dir)
                 project.setdefault('setup', {})['production_deny_checked'] = True
             transform['upload_prefix'] = prefix
             transform['sandbox_role'] = role
             project['aws']['bucket'] = bucket
+            project.setdefault('setup', {})['workspace_name'] = bucket_name
+            project['setup']['connector_name'] = bucket_name
             app.persist(work, project)
         client = connect_transform(work, project)
         wid = transform.get('workspace_id') or None
@@ -444,8 +565,9 @@ def guided_init(args):
         setup.create_bucket = False
         setup.attach_workspace = wid or None
         setup.attach_connector = cid or None
-        setup.create_workspace = None if wid else 'reframe-sandbox'
-        setup.create_connector = None if cid else 'reframe-source'
+        setup.create_workspace = None if wid else project.get('setup', {}).get('workspace_name')
+        require(wid or setup.create_workspace, 'This run has no workspace name. Choose fresh for a new source.')
+        setup.create_connector = None if cid else project.get('setup', {}).get('connector_name') or project.get('setup', {}).get('workspace_name')
         setup.role_arn = sandbox_arn
         setup.connector_approved = ask('Your name, recorded on the connector confirmation')
         try:
@@ -456,6 +578,7 @@ def guided_init(args):
 
 
 def refresh_unstarted_baseline(work, project):
+    """Point an unstarted run at the current Reframe commit."""
     import reframe as app
     previous = project.get('framework_commit')
     if not previous: return
@@ -482,6 +605,7 @@ def refresh_unstarted_baseline(work, project):
 
 
 def next_step(project):
+    """Return the command a person should run for the current stage."""
     if project['stage'] == 'PROVIDER_REVIEW_REQUIRED':
         return 'Review the private provider refusal and request content; automatic model retries are stopped.'
     stage = project['stage']

@@ -11,7 +11,7 @@ reviewed implementation package. It does not implement or deploy an application.
 From your clean framework checkout, install or refresh the editable tool:
 
 ```bash
-uv tool install --force --python 3.12 --editable .
+uv tool install --force --managed-python --python 3.12 --editable .
 reframe
 ```
 
@@ -34,8 +34,11 @@ Existing controller budgets, source checks and approval gates still apply.
 
 | Command | Action |
 | --- | --- |
+| `/flow` or menu **1** | Guided setup, assessment, approval, then skip or review |
 | `/menu` or `/status` | Refresh the project dashboard and saved assessment states |
 | `/init` | Start or continue guided setup |
+| `/preview` | After assessment approval, write the wireframe site and AI-DLC ZIP |
+| `/upgrade-framework` | Record a Reframe update on this saved run |
 | `/workspace` | Select an existing private project |
 | `/assess` | Confirm a source upload and start a new assessment |
 | `/resume` | Continue saved AWS, validation or HTML work |
@@ -90,10 +93,14 @@ missing permissions, business decisions or source verification.
 ## Guided start / continue
 
 Choose menu **1** or `/flow` (also `reframe flow` from your shell). The guide
-continues saved setup/assessment, pauses for explicit assessment review, and asks
-whether to generate an AWS-assumed draft or run independent verification.
-The draft route asks for an owner, reason, provider and export name, then produces
-both HTML wireframes and an AI-DLC draft ZIP. Reuse the export name when resuming.
-No reviewer PASS or stakeholder approval is fabricated. `/privacy` and `/artifacts`
-reveal the local report and package paths. Fresh runs use a separate output parent;
-previous evidence and cloud jobs are not deleted. See the README for installation.
+continues saved setup and the same assessment. The source prompt is empty. The
+connector question asks for your name. After the findings are ready, approve them
+with your name, a short rationale, and a confirmation that they match the pinned
+source. The next prompt is `skip` or `review`. Enter selects **skip**. Skip asks
+for an owner, a reason, `claude` or `codex`, and an export name, then writes the
+HTML wireframes and the AI-DLC ZIP. **review** runs the executor and reviewer.
+Reuse the export name when resuming. No reviewer PASS or stakeholder approval is
+fabricated. `/privacy` and `/artifacts` reveal the local report and package paths.
+If the Reframe checkout changed, `/flow` records that update before approval.
+Fresh runs use a separate output parent; previous evidence and cloud jobs are not
+deleted. See the README for the question order.

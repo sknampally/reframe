@@ -24,6 +24,7 @@ LABELS = {'task': 'Task', 'review': 'Review', 'approval': 'Approval'}
 
 
 def _parse(text):
+    """Turn the contract template indentation into a tree. This is not a general YAML parser."""
     root = []
     stack = [(-1, root)]
     for raw in text.splitlines():
@@ -48,6 +49,7 @@ def _parse(text):
 
 
 def _walk(nodes, prefix=''):
+    """Collect fields the template marks REQUIRED, and mark evidence links separately."""
     found = []
     for node in nodes:
         path = prefix + node['key']
@@ -77,6 +79,7 @@ def requirements(kind):
 
 
 def _lookup(record, path):
+    """Follow a dotted path through a record. A missing step returns None."""
     current = record
     for part in path.split('.'):
         if not isinstance(current, dict) or part not in current:
@@ -86,6 +89,7 @@ def _lookup(record, path):
 
 
 def _filled(value):
+    """True when a required value is present and is not the placeholder REQUIRED."""
     if isinstance(value, str):
         return bool(value.strip()) and value.strip() != 'REQUIRED'
     if isinstance(value, bool) or value is None:
@@ -100,6 +104,7 @@ def _filled(value):
 
 
 def _evidence_link(value):
+    """True when a value points at evidence by text or by a link field."""
     if isinstance(value, str):
         return _filled(value)
     if isinstance(value, list):
@@ -113,6 +118,7 @@ def _evidence_link(value):
 
 
 def require_record(record, kind):
+    """Reject a record that omits a field its template marks REQUIRED."""
     require(isinstance(record, dict), LABELS[kind] + ' contract record must be an object')
     for path, field in requirements(kind):
         value = _lookup(record, path)

@@ -3,7 +3,7 @@
 For first installation, updates and troubleshooting on Mac or Windows/WSL2, follow
 [the platform installation guide](platform-install.md). Every install command includes the required trailing dot.
 
-Prepare this workstation once, then use `reframe init` for project setup. The POC
+Prepare this workstation once, then run `reframe` and choose **1**. The POC
 currently supports macOS and Linux; native Windows execution is not supported.
 Use your organization's approved software distribution and authentication methods.
 The commands below are alternatives when direct vendor installation is permitted.
@@ -137,7 +137,10 @@ claude auth status
 
 If `claude` is not found, fix PATH as described below before retrying. Use the approved
 subscription or provider login. Our default Claude adapter supports subscription
-login; an Anthropic API key is not required for that mode. Make sure the account can
+login; an Anthropic API key is not required for that mode. A logged-in CLI is not
+charged against Reframe's local dollar ledger. Setting `ANTHROPIC_API_KEY`,
+`CLAUDE_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` switches that call to the ledger, which
+starts at zero and blocks the call until the private cap is raised. Make sure the account can
 access both pinned models in the [CLI guide](cli-guide.md); installation alone does
 not establish model availability. See [Claude installation](https://code.claude.com/docs/en/setup)
 and [authentication](https://code.claude.com/docs/en/authentication).
