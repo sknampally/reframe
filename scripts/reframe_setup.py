@@ -242,17 +242,55 @@ def aws_profile_env(profile, region):
             shutil.rmtree(directory, ignore_errors=True)
 
 
-def sandbox_outputs(profile, region, apply):
-    """Create or read the sandbox. The role ARN stays in memory for connector activation."""
+def sandbox_identity():
+    """Return a dated bucket name and the matching role name. The short id keeps the same day unique."""
+    from datetime import datetime, timezone
+    bucket = 'reframe-' + datetime.now(timezone.utc).strftime('%Y%m%d') + '-' + secrets.token_hex(4)
+    require(re.fullmatch(r'reframe-[0-9]{8}-[0-9a-f]{8}', bucket), 'Sandbox bucket name was not dated.')
+    return bucket, bucket + '-role'
+
+
+def sandbox_names(state_path):
+    """Read the names saved beside a sandbox, or create a dated pair and save them."""
+    path = Path(state_path).expanduser().resolve().parent / 'names.json'
+    if path.is_file():
+        payload = json.loads(path.read_text())
+        bucket, role = payload.get('bucket_name'), payload.get('role_name')
+    else:
+        bucket, role = sandbox_identity()
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_text(json.dumps({'bucket_name': bucket, 'role_name': role}))
+        path.chmod(0o600)
+    require(re.fullmatch(r'reframe-[0-9]{8}-[0-9a-f]{8}', bucket or ''), 'Saved sandbox bucket name is not dated.')
+    require(role == (bucket or '') + '-role', 'Saved sandbox role name does not match its bucket.')
+    return bucket, role
+
+
+def sandbox_outputs(profile, region, apply, state_path=None, data_dir=None, bucket_name=None, role_name=None):
+    """Create or read one sandbox. The role ARN stays in memory for connector activation."""
     import reframe as app
     tofu = opentofu_binary()
     require(re.fullmatch(r'[A-Za-z0-9_.=,@-]+', profile or ''), 'Enter the AWS profile name only.')
     require(re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d+', region or ''), 'Enter an AWS region name.')
+    require((state_path is None) == (data_dir is None), 'Sandbox state and its data directory are saved together.')
+    require((bucket_name is None) == (role_name is None), 'Pass the bucket and role names together.')
+    require(bucket_name is None or re.fullmatch(r'reframe-[0-9]{8}-[0-9a-f]{8}', bucket_name),
+            'Sandbox bucket name must include the UTC date.')
+    require(role_name is None or role_name == (bucket_name or '') + '-role', 'Sandbox role name must match its bucket.')
     directory = app.FRAMEWORK / 'infrastructure'
     require((directory / 'main.tf').is_file(), 'The sandbox stack is not in this framework checkout.')
+    if state_path is not None:
+        state_path = Path(state_path).expanduser().resolve()
+        data_dir = Path(data_dir).expanduser().resolve()
+        require(not state_path.is_relative_to(app.FRAMEWORK) and not data_dir.is_relative_to(app.FRAMEWORK),
+                'Sandbox state stays in the private assessment folder.')
+        data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with aws_profile_env(profile, region) as env:
         env.update(TF_IN_AUTOMATION='1', TF_INPUT='0', TOFU=tofu)
         env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
+        if data_dir is not None:
+            env['TF_DATA_DIR'] = str(data_dir)
         def run(args, capture=False):
             """Run one OpenTofu command and stop setup if it does not finish."""
             print('Running ' + tofu + ' ' + args[0] + '...')
@@ -262,12 +300,18 @@ def sandbox_outputs(profile, region, apply):
                      'Sign in to the selected AWS profile again, then choose 1. /privacy shows the local detail.')
             return result
         if apply:
-            run(['init', '-input=false'])
-            run(['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile])
+            init = ['init', '-input=false']
+            if state_path is not None:
+                init += ['-reconfigure', '-backend-config=path=' + str(state_path)]
+            run(init)
+            apply_args = ['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile]
+            if bucket_name:
+                apply_args += ['-var', 'bucket_name=' + bucket_name, '-var', 'role_name=' + role_name]
+            run(apply_args)
         result = subprocess.run([tofu, '-chdir=' + str(directory), 'output', '-json'], env=env, capture_output=True, text=True)
     if result.returncode != 0:
         require(not apply, 'OpenTofu outputs were not available. Setup stopped before an assessment.')
-        return sandbox_outputs(profile, region, True)
+        return sandbox_outputs(profile, region, True, state_path, data_dir, bucket_name, role_name)
     outputs = json.loads(result.stdout)
     prefix = outputs['upload_prefix']['value']
     role = outputs['sandbox_role']['value']
@@ -277,10 +321,12 @@ def sandbox_outputs(profile, region, apply):
     bucket = prefix.removeprefix('s3://').removesuffix('/reframe')
     require(bucket and '/' not in bucket and isinstance(role, str) and role and isinstance(role_arn, str) and role_arn,
             'OpenTofu outputs were incomplete. Setup stopped before an assessment.')
+    if bucket_name:
+        require(bucket == bucket_name and role == role_name, 'OpenTofu returned a different sandbox than this source.')
     return bucket, prefix, role, role_arn
 
 
-def confirm_production_deny(profile, region):
+def confirm_production_deny(profile, region, data_dir=None):
     """Prove the sandbox role cannot list some other bucket. The user does not name one."""
     import reframe as app
     probe = 'reframe-deny-probe-' + secrets.token_hex(4)
@@ -290,6 +336,9 @@ def confirm_production_deny(profile, region):
     with aws_profile_env(profile, region) as env:
         env.update(TOFU=tofu)
         env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
+        if data_dir is not None:
+            env['SANDBOX_DATA_DIR'] = str(Path(data_dir).expanduser().resolve())
+            env['TF_DATA_DIR'] = env['SANDBOX_DATA_DIR']
         create = ['aws', 's3api', 'create-bucket', '--bucket', probe, '--region', region]
         if region != 'us-east-1':
             create += ['--create-bucket-configuration', 'LocationConstraint=' + region]
@@ -418,12 +467,16 @@ def guided_init(args):
         args.ui_provider = ask('HTML content provider: claude or codex', args.ui_provider)
         require(args.ui_provider in {'claude', 'codex'}, 'Unsupported HTML provider')
         print('Claude defaults: Sonnet 5.5 executor / Opus 5.5 reviewer. Kiro is optional.')
-        print('Reframe will save this source pin, create the private sandbox, and store its role. You do not name the bucket.')
+        print('Reframe will save this source pin and create a new private sandbox for it. The bucket name includes the UTC date. You do not type the bucket name.')
         if not yes('Continue and finish setup?', default=True):
             print('Setup paused before anything was created. Choose 1 again to continue.')
             return {'status': 'SETUP_INCOMPLETE', 'next_step': 'Choose 1 again. Nothing was created.'}
-        bucket, prefix, role, sandbox_arn = sandbox_outputs(args.aws_profile, args.region, True)
-        confirm_production_deny(args.aws_profile, args.region)
+        state_path = work / 'sandbox' / 'terraform.tfstate'
+        data_dir = work / 'sandbox' / '.terraform'
+        bucket_name, role_name = sandbox_names(state_path)
+        bucket, prefix, role, sandbox_arn = sandbox_outputs(
+            args.aws_profile, args.region, not state_path.is_file(), state_path, data_dir, bucket_name, role_name)
+        confirm_production_deny(args.aws_profile, args.region, data_dir)
         args.bucket = bucket
         app.initialize(args, work)
         project = app.read(work / 'project.json')
@@ -431,7 +484,10 @@ def guided_init(args):
         project['settings']['transform']['upload_prefix'] = prefix
         project['settings']['transform']['sandbox_role'] = role
         project['aws']['bucket'] = bucket
+        project['aws']['sandbox_state'] = str(state_path)
+        project['aws']['sandbox_data'] = str(data_dir)
         project.setdefault('setup', {})['production_deny_checked'] = True
+        project['setup']['workspace_name'] = bucket_name
         app.persist(work, project)
     select_workspace(work)
     # From here all writes and remote setup share the regular project lock.
@@ -447,13 +503,19 @@ def guided_init(args):
         transform = project.setdefault('settings', {}).setdefault('transform', {})
         ready = bool(transform.get('upload_prefix') and transform.get('sandbox_role') and project.get('setup', {}).get('production_deny_checked'))
         if not sandbox_arn:
-            bucket, prefix, role, sandbox_arn = sandbox_outputs(project['aws']['profile'], project['aws']['region'], not ready)
+            state_path = project.get('aws', {}).get('sandbox_state')
+            data_dir = project.get('aws', {}).get('sandbox_data')
+            require(state_path and data_dir, 'This run has no sandbox state. Choose fresh for a new source.')
+            bucket_name, role_name = sandbox_names(state_path)
+            bucket, prefix, role, sandbox_arn = sandbox_outputs(
+                project['aws']['profile'], project['aws']['region'], not ready, state_path, data_dir, bucket_name, role_name)
             if not project.get('setup', {}).get('production_deny_checked'):
-                confirm_production_deny(project['aws']['profile'], project['aws']['region'])
+                confirm_production_deny(project['aws']['profile'], project['aws']['region'], data_dir)
                 project.setdefault('setup', {})['production_deny_checked'] = True
             transform['upload_prefix'] = prefix
             transform['sandbox_role'] = role
             project['aws']['bucket'] = bucket
+            project.setdefault('setup', {})['workspace_name'] = bucket_name
             app.persist(work, project)
         client = connect_transform(work, project)
         wid = transform.get('workspace_id') or None
@@ -463,7 +525,8 @@ def guided_init(args):
         setup.create_bucket = False
         setup.attach_workspace = wid or None
         setup.attach_connector = cid or None
-        setup.create_workspace = None if wid else 'reframe-sandbox'
+        setup.create_workspace = None if wid else project.get('setup', {}).get('workspace_name')
+        require(wid or setup.create_workspace, 'This run has no workspace name. Choose fresh for a new source.')
         setup.create_connector = None if cid else 'reframe-source'
         setup.role_arn = sandbox_arn
         setup.connector_approved = ask('Your name, recorded on the connector confirmation')

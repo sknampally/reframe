@@ -3,6 +3,9 @@
 set -eu
 bucket=${1:?Pass the production bucket name. Do not commit it.}
 cd "$(dirname "$0")"
+if [ -n "${SANDBOX_DATA_DIR:-}" ]; then
+  export TF_DATA_DIR="$SANDBOX_DATA_DIR"
+fi
 role_arn=$("${TOFU:-tofu}" output -raw sandbox_role_arn)
 assume_status=1
 creds=

@@ -94,9 +94,11 @@ class GuidedTests(unittest.TestCase):
             self.assertEqual(args.bucket,'fixture-bucket')
             app.write(work/'project.json',project)
         def setup(work,project,args,client):
+            bucket_name = outputs.call_args.args[5]
+            self.assertRegex(bucket_name, r'^reframe-\d{8}-[0-9a-f]{8}$')
             self.assertFalse(args.create_bucket)
             self.assertEqual(args.role_arn,'fixture-role-arn')
-            self.assertEqual(args.create_workspace,'reframe-sandbox')
+            self.assertEqual(args.create_workspace, bucket_name)
             self.assertEqual(args.connector_approved,'Fixture admin')
             self.assertEqual(project['settings']['transform']['sandbox_role'],'fixture-sandbox-role')
             self.assertEqual(project['settings']['transform']['upload_prefix'],'s3://fixture-bucket/reframe')
@@ -110,10 +112,48 @@ class GuidedTests(unittest.TestCase):
              patch.object(guide,'confirm_production_deny') as deny,patch.object(guide,'connect_transform',return_value=object()), \
              patch.object(app,'setup',side_effect=setup):
             result=guide.guided_init(self.args('init'))
-        outputs.assert_called_once_with('fixture','us-east-1',True)
-        deny.assert_called_once_with('fixture', 'us-east-1')
+        self.assertEqual(outputs.call_args.args[:3], ('fixture', 'us-east-1', True))
+        self.assertEqual(Path(outputs.call_args.args[3]), (self.work / 'sandbox' / 'terraform.tfstate').resolve())
+        self.assertEqual(Path(outputs.call_args.args[4]), (self.work / 'sandbox' / '.terraform').resolve())
+        self.assertEqual(outputs.call_args.args[6], outputs.call_args.args[5] + '-role')
+        deny.assert_called_once_with('fixture', 'us-east-1', (self.work / 'sandbox' / '.terraform').resolve())
         self.assertEqual(result['status'],'READY_TO_ASSESS')
         self.assertEqual(result['next_step'],'reframe assess')
+
+    def test_dated_names_are_reused_for_the_same_folder(self):
+        state = self.work / 'sandbox' / 'terraform.tfstate'
+        first = guide.sandbox_identity()
+        self.assertRegex(first[0], r'^reframe-\d{8}-[0-9a-f]{8}$')
+        self.assertEqual(first[1], first[0] + '-role')
+        self.assertNotEqual(guide.sandbox_identity()[0], first[0])
+        saved = guide.sandbox_names(state)
+        self.assertEqual(guide.sandbox_names(state), saved)
+
+    def test_resume_reads_the_saved_sandbox(self):
+        state = self.work / 'sandbox' / 'terraform.tfstate'
+        data = self.work / 'sandbox' / '.terraform'
+        bucket_name, role_name = guide.sandbox_names(state)
+        project=dict(self.project, setup={'production_deny_checked': True}, settings={'transform': {
+            'upload_prefix': 's3://' + bucket_name + '/reframe', 'sandbox_role': role_name}}, aws={
+            'profile': 'fixture', 'region': 'us-east-1', 'bucket': bucket_name,
+            'sandbox_state': str(state), 'sandbox_data': str(data)})
+        app.write(self.work / 'project.json', project)
+        def setup(work, project, args, client):
+            self.assertEqual(args.create_workspace, bucket_name)
+            project['setup']['connector_approved_by'] = args.connector_approved
+            project['stage'] = 'READY_TO_ASSESS'
+            return {'status': 'READY_TO_ASSESS'}
+        with patch.object(sys.stdin, 'isatty', return_value=True), patch('builtins.input', side_effect=[str(self.work), str(self.work), str(self.work), 'Fixture admin']), \
+             patch.object(guide, 'checks'), \
+             patch.object(guide, 'sandbox_outputs', return_value=(bucket_name, 's3://' + bucket_name + '/reframe', role_name, 'fixture-role-arn')) as outputs, \
+             patch.object(guide, 'confirm_production_deny') as deny, patch.object(guide, 'connect_transform', return_value=object()), \
+             patch.object(app, 'setup', side_effect=setup):
+            result = guide.guided_init(self.args('init'))
+        self.assertFalse(outputs.call_args.args[2])
+        self.assertEqual(outputs.call_args.args[3], str(state))
+        self.assertEqual(outputs.call_args.args[5], bucket_name)
+        deny.assert_not_called()
+        self.assertEqual(result['status'], 'READY_TO_ASSESS')
 
     def test_old_opentofu_stops_before_apply(self):
         bindir = self.work / 'bin'
