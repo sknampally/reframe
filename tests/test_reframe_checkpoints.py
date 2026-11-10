@@ -277,6 +277,30 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(seen['U0001'], 3)
         self.assertEqual(second['status'], 'AWAITING_VALIDATION_APPROVAL')
 
+    def test_failed_limit_review_gets_one_executor_correction(self):
+        self.plan()
+        seen = {'U0001': 0}
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if context.get('unit_id') == 'U0001' and role == 'reviewer':
+                seen['U0001'] += 1
+                if seen['U0001'] < 4:
+                    return {'kind':'review', 'decision':'REWORK', 'report':'The cited branch is contradicted',
+                            'findings':[{'issue':'The cited branch is contradicted'}]}
+            return self.runtime(provider, run, directory, role, message)
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('validate'), runtime)['status'], 'REWORK_LIMIT')
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('resume'), runtime)['status'], 'REWORK_LIMIT')
+        self.assertEqual(seen['U0001'], 3)
+        self.project['settings']['max_model_calls'] = self.project['pipeline']['calls']
+        blocked = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(blocked['reason'], 'Insufficient call budget for remaining checkpoint plan')
+        self.assertEqual(blocked['minimum_additional_calls'], 4)
+        self.project['settings']['max_model_calls'] = self.project['pipeline']['calls'] + 8
+        third = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['status'], 'PASS')
+        self.assertEqual(seen['U0001'], 4)
+        self.assertEqual(third['status'], 'AWAITING_VALIDATION_APPROVAL')
+
     def test_invalid_schema_stops_after_three_calls(self):
         self.plan()
         result=app.pipeline(self.work,self.project,self.args('validate'),lambda *a:{'kind':'checkpoint','summary':'Missing coverage'})

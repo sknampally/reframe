@@ -358,9 +358,16 @@ def run(work, project, args, runtime, app):
     area = work / 'preparation'
     app.check_provider_refusals(area)
     plan, capsules = verified_capsules(work, project, app)
-    minimum = 2 + sum(0 if project['checkpoints']['units'].get(u['id'], {}).get('status') == 'PASS' else
-                      1 if project['checkpoints']['units'].get(u['id'], {}).get('role') == 'reviewer' else 2
-                      for u in plan['units'])
+    def remaining_calls_for(record):
+        """Calls still required for one program, including one correction after a failed extra review."""
+        if record.get('status') == 'PASS':
+            return 0
+        if (record.get('status') == 'REWORK_LIMIT' and record.get('limit_rereviewed') is True
+                and (record.get('review_path') or record.get('previous_review'))):
+            return 2
+        return 1 if record.get('role') == 'reviewer' else 2
+
+    minimum = 2 + sum(remaining_calls_for(project['checkpoints']['units'].get(u['id'], {})) for u in plan['units'])
     remaining = project['settings']['max_model_calls'] - state['calls']
     state['minimum_additional_calls'] = minimum
     state['remaining_calls'] = remaining
@@ -373,9 +380,15 @@ def run(work, project, args, runtime, app):
         record = project['checkpoints']['units'].setdefault(unit['id'], {'status':'PENDING', 'attempt':1, 'role':'executor'})
         if record['status'] == 'PASS':
             continue
-        # The saved candidate gets one more review after the round limit. A block without a candidate still stops.
+        # The saved candidate gets one more review after the round limit. If that review still
+        # names a contradiction, the executor gets one correction and then one review.
         if record['status'] == 'REWORK_LIMIT' and record.get('candidate_path') and not record.get('limit_rereviewed'):
             record.update(status='PENDING', role='reviewer', limit_rereviewed=True)
+        elif (record['status'] == 'REWORK_LIMIT' and record.get('candidate_path')
+              and record.get('limit_rereviewed') is True and (record.get('review_path') or record.get('previous_review'))):
+            if record.get('review_path'):
+                record['previous_review'] = app.read(work / record['review_path'])
+            record.update(status='PENDING', role='executor', limit_rereviewed='corrected')
         require(record['status'] not in {'BLOCKED', 'REWORK_LIMIT'}, 'Resolve the blocked evidence unit before resuming')
         while record['status'] != 'PASS':
             if state['calls'] >= project['settings']['max_model_calls']:
@@ -475,6 +488,8 @@ def run(work, project, args, runtime, app):
                 if reply['decision'] == 'PASS':
                     record['status'] = 'PASS'
                 elif reply['decision'] == 'BLOCKED' or record['attempt'] >= project['settings']['max_rounds']:
+                    if reply['decision'] == 'REWORK':
+                        record['previous_review'] = reply
                     record.update(status='BLOCKED' if reply['decision'] == 'BLOCKED' else 'REWORK_LIMIT', reason=reply['report'])
                     state.update(status=record['status'], reason=record['reason']); project['stage']=record['status']
                     app.persist(work, project)

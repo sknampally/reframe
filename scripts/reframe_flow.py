@@ -236,10 +236,16 @@ def run(ui):
             if not ui.yes('Run independent verification using the saved model-call budget?'):
                 return
             code = ui.invoke(['validate'])
-            updated = ui.project() or {}
+            updated = ui.project() or ui.project() or {}
             state = updated.get('pipeline') or {}
+            settings = updated.get('settings') or {}
+            spent = state.get('calls') or 0
+            cap = settings.get('max_model_calls') or 0
             # Spending the last call returns exhaustion. The next check restates the remaining plan.
-            if state.get('reason') == 'Total model call budget exhausted':
+            if state.get('reason') == 'Total model call budget exhausted' or (
+                    code != 0 and cap and spent >= cap
+                    and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan'):
+                ui.say('The call cap was spent. Checking how many calls the remaining programs need.')
                 code = ui.invoke(['validate'])
                 updated = ui.project() or {}
                 state = updated.get('pipeline') or {}
