@@ -1063,6 +1063,8 @@ def preparation_plan(work, project, args):
         '<style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:0 24px;color:#183046}'
         'table{border-collapse:collapse;width:100%}td,th{padding:12px;text-align:left;border-bottom:1px solid #ccd7df}</style>'
         '<main><h1>Preparation coverage plan</h1><p>This is a deterministic inventory, not a completed assessment or approval.</p>'
+        '<p>' + str(len(plan.get('unlinked_source') or [])) + ' source files were not named by a finding and do not take a model call. '
+        + str(len(plan.get('unlinked_assessment') or [])) + ' findings did not name a program and do not take a model call.</p>'
         '<p>' + str(len(plan['units'])) + ' evidence units; at least ' + str(plan['minimum_calls']) + ' model calls for a new pass. '
         'Rework and additional evidence reads cost more. Calls are not a price estimate.</p>'
         '<p>Every unit must pass independent review before synthesis. Binary, undecodable and oversized single-line content '
@@ -1104,7 +1106,15 @@ def pipeline(work, project, args, runtime=model_call):
     require_stage_contract(work, 'task')
     import reframe_checkpoints as cp
     # Existing legacy runs retain their pinned behavior until explicitly migrated.
-    if not project.get('pipeline'):
+    checkpoints = project.get('checkpoints') or {}
+    started = project.get('pipeline', {}).get('calls', 0) or any(
+        unit.get('status') == 'PASS' or unit.get('candidate_path') or unit.get('candidate_sha256')
+        for unit in checkpoints.get('units', {}).values())
+    if checkpoints and not started:
+        project.pop('checkpoints', None)
+        if project.get('stage') == 'PREPARATION_PLANNED':
+            project['stage'] = 'ASSESSMENT_APPROVED'
+    if not project.get('pipeline') or not project.get('checkpoints'):
         preparation_plan(work, project, SimpleNamespace(activate=True))
     if project.get('checkpoints') and project['checkpoints']['status'] != 'READY_FOR_SYNTHESIS':
         return cp.run(work, project, args, runtime, sys.modules[__name__])

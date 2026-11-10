@@ -99,6 +99,22 @@ class GuidedFlowTests(unittest.TestCase):
         self.assertEqual(args[0], 'preview')
         self.assertIn('--skip-validation', args)
 
+    def test_short_review_budget_states_the_count_before_raising_it(self):
+        first = {'stage':'ASSESSMENT_APPROVED', 'approvals':{'assessment':True}}
+        blocked = {'stage':'PREPARATION_PLANNED', 'approvals':{'assessment':True}, 'pipeline':{
+            'calls':0, 'reason':'Insufficient call budget for remaining checkpoint plan',
+            'minimum_additional_calls':12, 'remaining_calls':4}}
+        ready = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}}
+        ui = self.ui(first, ['continue', 'review', 'Owner', 'Cover the paired programs'])
+        ui.project.side_effect = [first, first, blocked, ready]
+        ui.yes.side_effect = [True, True, False]
+        lines = self.said(ui)
+        run(ui)
+        self.assertIn('at least 12 model calls', '\n'.join(lines))
+        self.assertEqual(ui.invoke.call_args_list[1].args[0],
+                         ['model-budget', '--max-calls', '12', '--by', 'Owner', '--note', 'Cover the paired programs'])
+        self.assertEqual(ui.invoke.call_args_list[2].args[0], ['validate'])
+
     def test_review_word_runs_validation(self):
         ui = self.ui({'stage':'ASSESSMENT_APPROVED','approvals':{'assessment':True}}, ['continue','review'])
         ui.yes.return_value = True

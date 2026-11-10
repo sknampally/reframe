@@ -43,7 +43,11 @@ def evidence_lines(raw, area):
             pass
         else:
             if isinstance(value, (dict, list)):
-                return json_projection(value), 'json-pointer-records-v1'
+                projected = json_projection(value)
+                encoded = sum(len(line.encode()) + 1 for line in projected)
+                # A projection larger than one segment keeps the original JSON. The review still sees the finding.
+                if encoded <= UNIT_BYTES and len(projected) <= MAX_LINES:
+                    return projected, 'json-pointer-records-v1'
     return text.splitlines(), 'original-lines'
 
 
@@ -79,6 +83,42 @@ def segments(area, name, path, expected):
     return result
 
 
+def match_source(label, source_names):
+    """Return the one tracked source file named by a finding, or nothing when the name is ambiguous."""
+    if not isinstance(label, str) or not label.strip():
+        return None
+    label = label.strip().replace('\\', '/')
+    if label in source_names:
+        return label
+    base = Path(label).name.lower()
+    matches = [name for name in source_names if Path(name).name.lower() == base]
+    if len(matches) == 1:
+        return matches[0]
+    stem = Path(base).stem
+    matches = [name for name in source_names if Path(name).stem.lower() == stem]
+    return matches[0] if len(matches) == 1 else None
+
+
+def stated_member(path):
+    """Read the program name a documentation finding states. Other finding shapes stay unmatched."""
+    try:
+        value = json.loads(Path(path).read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    overview = value.get('documentation')
+    if not isinstance(overview, dict):
+        return None
+    overview = overview.get('high_level_overview')
+    if not isinstance(overview, dict):
+        return None
+    program = overview.get('program_information')
+    if not isinstance(program, dict) or not isinstance(program.get('name'), str):
+        return None
+    return program['name'].strip() or None
+
+
 def make_plan(project, assessment_dir, run, catalog):
     """Group source and assessment evidence into units a reviewer can check one at a time."""
     records = []
@@ -103,17 +143,39 @@ def make_plan(project, assessment_dir, run, catalog):
             records.extend(segments('assessment', entry['path'], path, fingerprint))
     unit_limit = min(90000, max(1000, project['settings']['max_context_bytes'] - CHECKPOINT_BYTES - 65000))
     labels = {x['path']:x.get('label',x['path']) for x in catalog}
+    stated = {}
     def focus(record):
         """Name the source file an assessment record belongs to."""
         if record['area'] == 'source': return record['path']
         label = re.sub(r'-(cbl|jcl|cpy|bms|sql|proc)\.json$', r'.\1', labels[record['path']], flags=re.IGNORECASE)
-        if label in source_names: return label
-        matches = [n for n in source_names if Path(n).name.lower() == Path(label).name.lower()]
-        return matches[0] if len(matches) == 1 else '@assessment'
+        matched = match_source(label, source_names)
+        if matched:
+            return matched
+        if record['path'] not in stated:
+            stated[record['path']] = stated_member(assessment_dir / 'assessment' / record['path'])
+        return match_source(stated[record['path']], source_names) or '@assessment'
     for record in records: record['focus'] = focus(record)
     linked = {r['focus'] for r in records if r['area']=='assessment' and r['focus']!='@assessment'}
-    for record in records:
-        if record['area']=='source' and record['focus'] not in linked: record['focus']='@source-support'
+    if linked:
+        unlinked_source = sorted({r['path'] for r in records if r['area']=='source' and r['focus'] not in linked})
+        unlinked_assessment = {r['path'] for r in records if r['area']=='assessment' and r['focus']=='@assessment'}
+        file_bytes, by_focus = {}, {}
+        for record in records:
+            file_bytes[record['path']] = file_bytes.get(record['path'], 0) + record.get('bytes', 0)
+            if record['area'] == 'assessment' and record['focus'] in linked:
+                by_focus.setdefault(record['focus'], set()).add(record['path'])
+                if record['path'] not in stated:
+                    stated[record['path']] = stated_member(assessment_dir / 'assessment' / record['path'])
+        chosen = {name: min(paths, key=lambda path: (0 if stated.get(path) else 1, file_bytes[path], path))
+                  for name, paths in by_focus.items()}
+        kept = set(chosen.values())
+        unlinked_assessment.update(path for paths in by_focus.values() for path in paths if path not in kept)
+        unlinked_assessment = sorted(unlinked_assessment)
+        records = [r for r in records if r['focus'] in linked and (r['area'] == 'source' or r['path'] in kept)]
+    else:
+        unlinked_source, unlinked_assessment = [], []
+        for record in records:
+            if record['area']=='source' and record['focus'] not in linked: record['focus']='@source-support'
     records.sort(key=lambda r:(r['focus']=='@assessment', r['focus'], r['area'] != 'source', r['path'], r['start']))
     units, batch, size = [], [], 0
     def same_rule(existing, record):
@@ -137,8 +199,9 @@ def make_plan(project, assessment_dir, run, catalog):
             'catalog_exclusions': excluded, 'exact_duplicate_assessments':aliases,
             'projection': 'JSON pointer records preserve values and identify repeated objects/arrays by exact-value reference. Line numbers in these records are projection lines, not original JSON lines.',
             'exclusion_policy': 'Operational logs, duplicate HTML and provenance metadata; originals remain sealed.',
+            'unlinked_source': unlinked_source, 'unlinked_assessment': unlinked_assessment,
             'minimum_calls': len(units) * 2 + 2,
-            'estimate_note': 'Lower bound: executor and reviewer per unit, plus synthesis and integration review. Rework and reads cost more.'}
+            'estimate_note': 'Lower bound: executor and reviewer for each paired program, plus synthesis and integration review. Source files and findings that do not name a program are listed and do not take a model call. Rework and reads cost more.'}
 
 
 def evidence(unit, project, assessment_dir):
@@ -252,6 +315,8 @@ def run(work, project, args, runtime, app):
                       1 if project['checkpoints']['units'].get(u['id'], {}).get('role') == 'reviewer' else 2
                       for u in plan['units'])
     remaining = project['settings']['max_model_calls'] - state['calls']
+    state['minimum_additional_calls'] = minimum
+    state['remaining_calls'] = remaining
     if remaining < minimum:
         state.update(status='BLOCKED', reason='Insufficient call budget for remaining checkpoint plan')
         project['stage'] = 'PREPARATION_PLANNED'; app.persist(work, project)

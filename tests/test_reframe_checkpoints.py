@@ -76,6 +76,33 @@ class CheckpointTests(unittest.TestCase):
         self.assertIn('reviewed_evidence_units', self.seen[-2][1])
         self.assertTrue((self.work/self.project['preparation_report']['path']).is_file())
 
+    def test_finding_program_name_joins_that_source_file(self):
+        (self.source / 'APP').mkdir()
+        (self.source / 'APP' / 'MEMBER.TXT').write_text('IDENTIFICATION DIVISION.\n')
+        (self.source / 'APP' / 'COPY.TXT').write_text('01 ITEM.\n')
+        self.source_files += ['APP/MEMBER.TXT', 'APP/COPY.TXT']
+        folder = self.root / 'sealed' / 'assessment'
+        folder.mkdir(parents=True)
+        (folder / 'finding-1.json').write_text(json.dumps({
+            'documentation': {'high_level_overview': {'program_information': {'name': 'MEMBER.TXT', 'type': 'cobol'}}}}))
+        (folder / 'rules.json').write_text('{"rules":["reject zero amount"]}')
+        (folder / 'extract.json').write_text(json.dumps({'rules': ['x' * 4000]}))
+        index = [{'path': name, 'sha256': sha(folder / name)} for name in ('finding-1.json', 'rules.json', 'extract.json')]
+        self.project['selected'] = 'a'
+        self.project['assessments']['a']['sha256'] = 'fixture'
+        catalog = [{'path': item['path'], 'label': 'APP/MEMBER-cbl.json' if item['path'] == 'extract.json' else item['path']}
+                   for item in index]
+        plan = cp.make_plan(self.project, folder.parent, {'assessment_index': index}, catalog)
+        focuses = {unit['focus'] for unit in plan['units']}
+        self.assertIn('APP/MEMBER.TXT', focuses)
+        self.assertNotIn('APP/COPY.TXT', focuses)
+        self.assertIn('APP/COPY.TXT', plan['unlinked_source'])
+        self.assertIn('rule.cbl', plan['unlinked_source'])
+        self.assertEqual(plan['unlinked_assessment'], ['extract.json', 'rules.json'])
+        paired = next(unit for unit in plan['units'] if unit['focus'] == 'APP/MEMBER.TXT')
+        self.assertEqual({part['path'] for part in paired['segments']}, {'APP/MEMBER.TXT', 'finding-1.json'})
+        self.assertEqual(focuses, {'APP/MEMBER.TXT'})
+
     def test_preview_does_not_activate_or_change_budget(self):
         result = app.preparation_plan(self.work, self.project, argparse.Namespace(activate=False))
         self.assertEqual(result['minimum_calls'],6)
