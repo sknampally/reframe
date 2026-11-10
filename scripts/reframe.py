@@ -501,8 +501,6 @@ def upgrade_framework(work, project, args):
     require(not (set(project.get('approvals', {})) - {'assessment'}) and not project.get('specification')
             and not project.get('pipeline', {}).get('candidate_sha256'),
             'Framework upgrades require no candidate or downstream approvals')
-    require(not any(u.get('candidate_sha256') for u in project.get('checkpoints', {}).get('units', {}).values()),
-            'Framework upgrades require no checkpoint candidates')
     if project.get('approvals', {}).get('assessment'):
         require(project.get('selected') in project['assessments'], 'Approved assessment identity is missing')
         verified_assessment(project, project['selected'])

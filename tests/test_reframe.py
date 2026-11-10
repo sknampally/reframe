@@ -80,6 +80,7 @@ class PreparationTests(unittest.TestCase):
         self.baseline()
         before = copy.deepcopy(self.project['approvals'])
         self.project['pipeline'] = {'calls':2,'contexts':{'executor':[]}}
+        self.project['checkpoints'] = {'units': {'U0001': {'status': 'REWORK_LIMIT', 'candidate_sha256': 'a' * 64}}}
         app.upgrade_framework(self.work,self.project,argparse.Namespace(note='Controller fix'))
         self.assertEqual(self.project['approvals'],before)
         self.assertEqual(self.project['pipeline']['calls'],2)
