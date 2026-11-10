@@ -10,18 +10,22 @@ SECTIONS = ('architecture', 'ui', 'services', 'data', 'infrastructure', 'securit
 
 
 def digest(value):
+    """Return a stable SHA-256 of a JSON value."""
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def text(value):
+    """True when a value is a non-empty string."""
     return isinstance(value, str) and bool(value.strip())
 
 
 def strings(value):
+    """True when a value is a list of non-empty strings."""
     return isinstance(value, list) and all(text(x) for x in value)
 
 
 def validate_spec(spec, source):
+    """Reject a specification that omits scope, a traced rule, a section, a question, an unrun test, or ordered work."""
     require(isinstance(spec, dict), 'Specification must be an object')
     require(text(spec.get('scope')) and text(spec.get('excluded_scope')), 'Explicit scope and exclusions required')
     rules = spec.get('rules')
@@ -74,6 +78,7 @@ def validate_spec(spec, source):
 
 
 def validate_screens(value, spec):
+    """Reject a screen or API contract that is incomplete or cites an unknown rule."""
     require(isinstance(value, dict) and isinstance(value.get('screens'), list) and value['screens'], 'Screens required')
     rules = {r['id'] for r in spec['rules']}
     require(isinstance(value.get('apis'), list), 'Structured API contracts required; use an empty list only when no APIs are proposed')
@@ -165,6 +170,7 @@ def render_assessment_facts(run, directory, link):
     if not datasets and not descriptions:
         return '<section><h2>AWS Transform facts</h2><p>No supported AWS inventory or supplied overview was found in the sealed evidence. No summary has been inferred.</p></section>'
     def table(title, counts):
+        """Render one count table from labels supplied by AWS."""
         return ('<h3>' + title + '</h3><table><thead><tr><th>AWS label</th><th>Count</th></tr></thead><tbody>'
                 + ''.join('<tr><td>' + html.escape(str(k)) + '</td><td>' + str(v) + '</td></tr>'
                           for k,v in sorted(counts.items(), key=lambda pair:(-pair[1],str(pair[0])))) + '</tbody></table>')

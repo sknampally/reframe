@@ -34,11 +34,13 @@ TEXT_SUFFIXES = {'.json', '.md', '.txt', '.csv', '.yaml', '.yml'}
 
 
 def private_save(path, value):
+    """Save JSON and restrict the file to the owner."""
     save(path, value)
     path.chmod(0o600)
 
 
 def source_ok(run):
+    """Confirm the pinned source and this Reframe checkout have not changed."""
     root = Path(run['source']['root'])
     if run['source'].get('kind') == 's3-zip':
         require(git(root, 'write-tree') == run['source']['commit'], 'Pinned source tree changed')
@@ -57,12 +59,14 @@ def source_ok(run):
 
 
 def safe_name(name):
+    """True when a relative path is safe to store. Hidden names, parent segments, and key files are rejected."""
     p = Path(name)
     return (not p.is_absolute() and '..' not in p.parts and not any(x.startswith('.') for x in p.parts)
             and p.name not in DENIED_NAMES and p.suffix.lower() not in {'.pem', '.key', '.p12', '.pfx'})
 
 
 def settings(path):
+    """Load settings, fill the defaults, and reject an unknown or invalid value."""
     config = copy.deepcopy(DEFAULTS)
     if path:
         supplied = json.loads(Path(path).read_text())
@@ -86,6 +90,7 @@ def settings(path):
 
 
 def initialize(args):
+    """Create a new run directory and its run record. No AWS call happens here."""
     source = Path(args.source).resolve()
     workspace = Path(args.workspace).resolve()
     require(source.is_dir() and workspace.is_dir(), 'Source and workspace must exist')
@@ -123,6 +128,7 @@ def collect_assessment(run, directory, location):
         bucket, prefix = parsed.netloc, parsed.path.lstrip('/')
         require(bucket and prefix, 'S3 input must identify an object or nonempty prefix')
         def aws(*args):
+            """Call the AWS CLI and return JSON."""
             result = subprocess.run(['aws', *args], capture_output=True, text=True, timeout=120)
             require(result.returncode == 0, 'S3 operation failed; inspect AWS credentials/access privately')
             return json.loads(result.stdout) if result.stdout.strip() else {}
@@ -181,6 +187,7 @@ class RuntimeUnavailable(Blocked):
 
 
 def blocked_cause(error):
+    """Find a Blocked error inside a group of exceptions."""
     if isinstance(error, Blocked): return error
     for child in getattr(error, 'exceptions', ()):
         found = blocked_cause(child)
@@ -189,6 +196,7 @@ def blocked_cause(error):
 
 
 def mcp_transport(directory=None):
+    """Load the MCP client libraries, or stop with an install hint."""
     try:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
@@ -205,10 +213,13 @@ def mcp_transport(directory=None):
 class Transform:
     """Official AWS MCP SDK transport. Optional dependency imported only when used."""
     def __init__(self, config, directory):
+        """Remember the Transform settings and the private directory for this connection."""
         self.config, self.directory = config, directory
 
     def calls(self, requests):
+        """Send one batch of Transform tool requests and return their results."""
         async def timed():
+            """Stop the batch if Transform does not answer within the configured time."""
             return await asyncio.wait_for(self._calls(requests), timeout=self.config.get('timeout_seconds', 180))
         try:
             return asyncio.run(timed())
@@ -221,6 +232,7 @@ class Transform:
             raise Blocked('AWS MCP transport failed; inspect the private mcp-error.json and reconcile uncertain creation') from error
 
     async def _calls(self, requests):
+        """Open the Transform MCP server, call each named tool, and unwrap the reply."""
         ClientSession, StdioServerParameters, stdio_client = mcp_transport(self.directory)
         command = self.config.get('command', ['uvx', 'awslabs.aws-transform-mcp-server@latest'])
         require(isinstance(command, list) and command, 'MCP command must be an argv array')
@@ -262,6 +274,7 @@ class Transform:
 
 
 def unwrap_mcp(value):
+    """Remove the nested result envelope and reject a failed Transform reply."""
     for _ in range(8):
         require(isinstance(value, dict), 'Unsupported AWS tool response')
         require(not value.get('isError') and not value.get('error') and value.get('success') is not False,
@@ -420,6 +433,7 @@ def recorded_job_id(receipt):
 
 
 def nested_job(value):
+    """Find the job object inside a nested Transform response."""
     for _ in range(5):
         if isinstance(value, dict) and ('jobId' in value or 'status' in value and 'job' not in value):
             return value
@@ -433,6 +447,7 @@ def nested_job(value):
 
 
 def select_orchestrator(run, client):
+    """Use the configured Transform orchestrator, or the one mainframe orchestrator the service lists."""
     config = run['settings']['transform']
     if config.get('orchestrator_agent'):
         return config['orchestrator_agent']
@@ -858,6 +873,7 @@ def continue_without_activity_records(run, directory, client, identity, tasks):
 
 
 def assessment_step(run, directory, client=None):
+    """Advance the same Transform job by one saved step. A finished assessment is left unchanged."""
     if run['assessment_ready']:
         return
     if run['assessment_input']:
@@ -987,6 +1003,7 @@ def assessment_step(run, directory, client=None):
 
 
 def json_reply(text):
+    """Parse one agent JSON object. A fenced JSON block is accepted."""
     stripped = text.strip()
     if stripped.startswith('```json') and stripped.endswith('```'):
         stripped = stripped[7:-3].strip()
@@ -997,6 +1014,7 @@ def json_reply(text):
 
 
 def kiro_call(run, directory, role, message):
+    """Ask Kiro for one role reply. The agent is started with no tools."""
     config = run['settings']
     executable = config['kiro_command'][0]
     if not shutil.which(executable) or not os.environ.get('KIRO_API_KEY'):
@@ -1038,6 +1056,7 @@ def kiro_call(run, directory, role, message):
 
 
 def inventory(run):
+    """List the tracked source files that are safe to name in a prompt."""
     root = source_ok(run)
     names = [name for name in git(root, 'ls-files').splitlines() if safe_name(name)]
     require(len(json.dumps(names).encode()) <= run['settings']['max_context_bytes'] // 2,
@@ -1046,6 +1065,7 @@ def inventory(run):
 
 
 def source_read(run, directory, role, request):
+    """Return numbered lines from the pinned source or the sealed assessment."""
     paths = request.get('paths')
     require(isinstance(paths, list) and 0 < len(paths) <= 5 and all(isinstance(x, str) for x in paths),
             'Read request must name one to five paths')
@@ -1078,6 +1098,7 @@ def source_read(run, directory, role, request):
 
 
 def agent_step(run, directory, runtime=kiro_call):
+    """Give the executor or reviewer one turn, then store a read, a candidate, or a review."""
     root = source_ok(run)
     role, number = run['role'], run['round']
     require(run['model_calls'] < run['settings']['max_model_calls'], 'Total model-call budget exhausted')
@@ -1152,12 +1173,14 @@ def agent_step(run, directory, runtime=kiro_call):
 
 
 def summary(run, directory):
+    """Return the saved run status. Human approval is never implied."""
     return {'run': str(directory), 'run_id': run['run_id'], 'status': run['status'],
             'round': run['round'], 'model_calls': run['model_calls'], 'reason': run.get('reason'),
             'human_approved': False}
 
 
 def drive(directory, wait=False, authorize=False, runtime=kiro_call, transform=None, assessment=None):
+    """Hold the run lock and advance assessment or agent work until a person or AWS must act."""
     directory = Path(directory).resolve()
     with (directory / '.workflow.lock').open('a') as lock:
         try:
@@ -1208,6 +1231,7 @@ def drive(directory, wait=False, authorize=False, runtime=kiro_call, transform=N
 
 
 def main():
+    """Parse the workflow command and print the saved run summary."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     start = commands.add_parser('start')

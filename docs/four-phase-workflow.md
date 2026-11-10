@@ -72,8 +72,19 @@ reframe resume
 The versioned ZIP includes specifications, decisions, traceability, acceptance
 scenarios, API contracts, both HTML reports, a dependency-ordered backlog, section
 prompts, proposed repository layout, AI-DLC metadata, AGENTS.md and SKILL.md.
-Kiro, Claude Code, Codex and Cursor can consume the package. Actual implementation,
-deployment and executed equivalence testing remain engineering work.
+The skip draft is a separate ZIP. Both ZIPs also carry these handoff records:
+
+- `modernization-sequence.json`, with every step `NOT_STARTED`
+- `capability-map.json`, with every capability `unassigned` and acceptance `PROPOSAL`
+- `parallel-validation.json`, with every case `NOT RUN`
+- `field-inventory.json` and `batch-inventory.json`, from member paths the assessment named
+- `api-boundary.json` and `governance.json`, with retirement `NOT_READY`
+- `extraction-reading.json` and `skill-extraction.md`, for reading a finding while the source stays pinned
+- `rule-coverage.json`, one row for every imported rule
+- `legacy-requirements.json`, with requirement and traceability files copied unchanged when the assessment included them
+- `skill-discovery.md`, `skill-rules.md`, `skill-data.md`, `skill-api.md`, `skill-screens.md`, `skill-batch.md`, `skill-tests.md`, and `skill-risk.md`
+
+Kiro, Claude Code, Codex and Cursor can consume the package. The sequence records work that has not started. A capability boundary stays a proposal until a person accepts it. Only this approved package passes the specification gates. Actual implementation, deployment and executed equivalence testing remain engineering work.
 
 ## Acceptance status
 
