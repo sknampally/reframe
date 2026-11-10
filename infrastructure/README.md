@@ -1,6 +1,6 @@
 # Sandbox
 
-This stack creates one private S3 bucket and one IAM role for fixture AWS Transform runs. The role can read and write objects anywhere in that bucket. Analysis output is not limited to the `reframe/` upload prefix. It denies object and bucket reads everywhere else, including production mainframe data in the same account.
+Guided start applies this stack once per source. The bucket, workspace, and connector share one name: `reframe-`, the repository name, the UTC date, and a short id. The role name adds `-role`. OpenTofu state stays in that source's private assessment folder. The role can read and write objects anywhere in its bucket. Analysis output is not limited to the `reframe/` upload prefix. It denies object and bucket reads everywhere else, including production mainframe data in the same account.
 
 OpenTofu does not create the Transform workspace. Guided start does that after apply. The `.tf` files are the shared configuration language OpenTofu runs. Apply writes `.terraform.lock.hcl` beside this stack. That file stays on the machine that applied it, so the framework checkout stays clean for workspace initialization.
 
@@ -12,7 +12,7 @@ The CLI reads these settings and refuses to start a new AWS assessment when any 
 
 ## Apply
 
-Guided start runs this apply when the sandbox settings are empty. To run it yourself, configure an AWS CLI profile in your terminal, then run:
+Guided start runs this apply for a new source. To run it yourself, configure an AWS CLI profile in your terminal, then run:
 
 ```bash
 export AWS_PROFILE=your-sandbox-profile

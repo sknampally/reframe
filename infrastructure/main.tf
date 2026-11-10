@@ -9,8 +9,8 @@ resource "random_id" "suffix" {
 }
 
 locals {
-  bucket_name = "${var.name_prefix}-${random_id.suffix.hex}"
-  role_name   = "${var.name_prefix}-role"
+  bucket_name = var.bucket_name != "" ? var.bucket_name : "${var.name_prefix}-${random_id.suffix.hex}"
+  role_name   = var.role_name != "" ? var.role_name : "${var.name_prefix}-role"
   prefix      = "reframe"
 }
 
