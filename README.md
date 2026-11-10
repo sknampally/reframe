@@ -67,7 +67,7 @@ Stay on menu **1**. These are the questions, in order:
 
 If Reframe's own checkout changed after the run was saved, menu **1** asks for a short note, records that update, and then continues this same job. The findings stay as they are.
 
-**Skipping verification does not approve the design.** Draft findings are marked AWS-assumed, independent verification is skipped, stakeholder decisions remain pending, and acceptance tests are NOT RUN. The ZIP adds a modernization sequence, an unassigned capability map, an unrun comparison plan, inventories of members the assessment named, a governance checklist, and a guide for reading extraction findings without changing the source. Every imported rule is listed once, and a requirement file from the assessment is copied unchanged. Each capability boundary stays a proposal until a person accepts it. A design-generation model call is distinct from executor and reviewer verification. A logged-in Claude CLI uses your Claude login and is not charged against Reframe's local dollar ledger. An API key is. If Claude is not logged in, generation stops and tells you to run `claude auth login`. No target application is built.
+**Skipping verification does not approve the design.** Draft findings are marked AWS-assumed, independent verification is skipped, stakeholder decisions remain pending, and acceptance tests are NOT RUN. The ZIP adds a modernization sequence, an unassigned capability map, an unrun comparison plan, inventories of members the assessment named, an API boundary note, a governance checklist, and a guide for reading extraction findings without changing the source. Every imported rule is listed once, and a requirement file from the assessment is copied unchanged. Each capability boundary stays a proposal until a person accepts it. A design-generation model call is distinct from executor and reviewer verification. A logged-in Claude CLI uses your Claude login and is not charged against Reframe's local dollar ledger. An API key is. If Claude is not logged in, generation stops and tells you to run `claude auth login`. No target application is built.
 
 A saved project offers **continue** or **fresh**. Fresh uses a separate output parent and does not delete the previous run. `reframe`, then **1** or `/flow`, continues a saved run.
 
@@ -209,10 +209,14 @@ reframe/
 │   ├── automated/                   # Legacy single-rule protocols
 │   │   ├── executor.md
 │   │   └── reviewer.md
+│   ├── checkpoints/
+│   │   ├── executor.md
+│   │   └── reviewer.md
 │   └── pipeline/
 │       ├── executor.md
 │       ├── reviewer.md
 │       ├── wireframes.md
+│       ├── transform-preview.md
 │       └── comparison.md
 ├── agents/
 │   ├── orchestrator.md
@@ -249,6 +253,7 @@ reframe/
 │   ├── reframe_workspace.py
 │   ├── reframe_checkpoints.py
 │   ├── reframe_preview.py
+│   ├── reframe_handoff.py          # Sequence, coverage, and inventories in the ZIP
 │   ├── reframe_contracts.py
 │   ├── reframe_source.py
 │   ├── reframe_models.py
@@ -259,7 +264,14 @@ reframe/
 │   ├── test_mcp_transport.py
 │   ├── test_terminal.py
 │   ├── test_guided_cli.py
+│   ├── test_guided_flow.py
 │   ├── test_reframe.py
+│   ├── test_reframe_preview.py
+│   ├── test_reframe_handoff.py
+│   ├── test_reframe_workspace.py
+│   ├── test_reframe_source.py
+│   ├── test_reframe_checkpoints.py
+│   ├── test_contracts.py
 │   └── fixtures/
 │       └── mcp_server.py
 └── docs/
@@ -279,7 +291,7 @@ reframe/
     └── running-a-pilot.md
 ```
 
-Installed `skills/` and `docs/lessons-learned.md` remain future additions; they are not part of the current tree. Lessons learned require actual reviewed execution evidence.
+The repository does not install a `skills/` directory, and `docs/lessons-learned.md` is not part of the tree. The draft ZIP and the approved package write their own `skill-*.md` files at export. Lessons learned require actual reviewed execution evidence.
 
 | Path | Purpose |
 | --- | --- |
