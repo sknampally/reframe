@@ -41,6 +41,26 @@ def check_provider_refusals(directory):
             raise ProviderSafetyRefusal('Claude refused a request under its safeguards. Review the private provider receipt and request content before any further model calls; no candidate approval is implied.')
 
 
+CLAUDE_API_KEY_NAMES = ('ANTHROPIC_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
+
+
+def claude_uses_api_key():
+    """True when Claude will bill an API key instead of the CLI subscription login."""
+    return any(os.environ.get(name, '').strip() for name in CLAUDE_API_KEY_NAMES)
+
+
+def require_claude_login():
+    """The Claude CLI subscription must already be signed in. Reframe does not collect credentials."""
+    if not shutil.which('claude'):
+        raise RuntimeUnavailable('Install the Claude CLI, run claude auth login, then resume')
+    try:
+        result = subprocess.run(['claude', 'auth', 'status'], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeUnavailable('Run claude auth login, then resume') from error
+    if result.returncode != 0:
+        raise RuntimeUnavailable('Run claude auth login, then resume')
+
+
 def call(provider, run, directory, role, message):
     require(provider in {'kiro', 'claude', 'codex'}, 'Unknown provider')
     if provider == 'kiro':
@@ -49,6 +69,8 @@ def call(provider, run, directory, role, message):
     executable = 'claude' if provider == 'claude' else 'codex'
     if not shutil.which(executable):
         raise RuntimeUnavailable(f'Install and authenticate {executable}, then resume')
+    if provider == 'claude' and not claude_uses_api_key():
+        require_claude_login()
     work = directory / 'runtime' / role
     work.mkdir(parents=True, exist_ok=True, mode=0o700)
     model = run['settings'].get(role + '_model')

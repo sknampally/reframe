@@ -459,7 +459,16 @@ def require_run_pins(project, job_id=None):
         recorded['assessment_label'] = label
 
 
-def require_dollar_cap(project, role):
+def require_dollar_cap(project, role, provider=None):
+    """Charge the local ledger only when Claude is using an API key.
+
+    A logged-in Claude CLI uses the engineer's subscription. That path checks
+    the CLI login and does not spend this ledger. An API key is the billed path.
+    """
+    provider = provider or (project.get('providers') or {}).get(role)
+    from reframe_models import claude_uses_api_key
+    if provider == 'claude' and not claude_uses_api_key():
+        return
     settings = project['settings']
     rates = settings.get('model_rates') or {}
     price = rates.get(role, 0.02)
@@ -1242,7 +1251,7 @@ def review_site(work, project, args, runtime=model_call):
                           'specification': spec, 'decisions': project['decisions']})
     require(len(message.encode()) <= project['settings']['max_context_bytes'], 'UI context exceeds budget')
     require_stage_contract(work, 'task')
-    require_dollar_cap(project, 'wireframes')
+    require_dollar_cap(project, 'wireframes', provider)
     persist(work, project)
     run = {'settings': project['settings'], 'model_calls': project['ui_calls']}
     screens = runtime(provider, run, directory, 'wireframes', message)
@@ -1455,7 +1464,7 @@ def semantic_compare(work, project, args, runtime=model_call):
         require(len(message.encode()) <= project['settings']['max_context_bytes'], 'Comparison context limit reached; no silent truncation')
         require_stage_contract(work, 'task')
         require_stage_contract(work, 'review')
-        require_dollar_cap(project, 'reviewer')
+        require_dollar_cap(project, 'reviewer', args.provider)
         persist(work, project)
         state['calls'] += 1
         write(state_path, state)
