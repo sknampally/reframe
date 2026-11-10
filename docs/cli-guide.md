@@ -586,7 +586,11 @@ API contracts, and exports a private AI-DLC draft ZIP. It includes architecture,
 UI, services, data, infrastructure, security, migration, testing, operations and
 delivery prompts, a backlog, monorepo layout, skills and engineering instructions.
 Wireframe mappings are illustrative rather than exhaustive. All imported rules stay
-marked `AWS_ASSUMED`; acceptance criteria stay `NOT RUN`.
+marked `AWS_ASSUMED`; acceptance criteria stay `NOT RUN`. The ZIP also carries
+`modernization-sequence.json`, an unassigned capability map, an unrun
+parallel-validation plan, inventories of the copybook and batch members the
+assessment named, a governance checklist, and one skill for discovery, rules,
+data, API, screens, batch, tests, and risk.
 
 The named owner, reason and assessment fingerprint are recorded as
 `SKIPPED_BY_OWNER`, never reviewer PASS. Assessment approval is required. Existing
