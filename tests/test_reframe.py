@@ -217,6 +217,7 @@ class PreparationTests(unittest.TestCase):
             self.assertTrue(all(item['disposition']=='unassigned' for item in json.loads(archive.read('capability-map.json'))['capabilities']))
             self.assertEqual(json.loads(archive.read('parallel-validation.json'))['status'], 'NOT RUN')
             self.assertEqual(json.loads(archive.read('governance.json'))['retirement_status'], 'NOT_READY')
+            self.assertTrue(json.loads(archive.read('extraction-reading.json'))['source_stays_pinned'])
         self.assertEqual(self.project['stage'], 'PACKAGED')
         with zipfile.ZipFile(result['archive']) as archive:
             self.assertEqual(json.loads(archive.read('provenance.json'))['pins']['prompt_hash'], app.preparation_protocol_hash())
@@ -418,6 +419,8 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn('<script>',page)
         self.assertIn('assessment/rules.json',page)
         self.assertIn('Awaiting human review',page)
+        self.assertIn('COPY-expanded source',page)
+        self.assertIn('does not: Rewrite a member',page)
         self.assertFalse(self.project['approvals'])
 
     def test_aws_facts_count_export_rows_and_preserve_descriptions_without_model(self):

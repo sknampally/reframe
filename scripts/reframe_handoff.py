@@ -1,4 +1,8 @@
-"""Deterministic handoff files. These record a plan; they do not run it or choose a language."""
+"""Deterministic handoff files.
+
+Each function builds a record for the next team. None of them runs a comparison,
+chooses a language, or edits the pinned source.
+"""
 import json
 import re
 from pathlib import Path
@@ -54,25 +58,49 @@ SKILLS = {
         '---\nname: review-retirement-gates\n'
         'description: Keep rewrite and retirement blocked until a person records the gates.\n---\n\n'
         'Read governance.json. Unassigned capabilities are do-not-rewrite-yet. Retirement stays NOT_READY until business, compliance, engineering, data, operations, UAT, and rollback are recorded.\n'),
+    'skill-extraction.md': (
+        '---\nname: read-extraction-findings\n'
+        'description: Read a Transform extraction finding without changing the pinned source.\n---\n\n'
+        'Read extraction-reading.json before opening a code-issue or missing-dependency file. '
+        'A reported line is counted on the COPY-expanded source. An unknown label that follows another error is a symptom of that earlier error. '
+        'Leave the member unchanged.\n'),
 }
 
 NAMES = frozenset({
     'modernization-sequence.json', 'capability-map.json', 'parallel-validation.json',
     'field-inventory.json', 'batch-inventory.json', 'api-boundary.json', 'governance.json',
-    *SKILLS,
+    'extraction-reading.json', *SKILLS,
 })
 
 
+def extraction_reading():
+    """Return the guide for a Transform extraction finding. The source stays pinned."""
+    return {
+        'source_stays_pinned': True,
+        'line_numbers': 'A line number in a Transform finding is counted on the COPY-expanded source. A number past the end of the member usually points inside an included copybook. Do not edit the raw member at that number.',
+        'cascading_symptom': 'An unknown label or unknown field that follows another error in the same member is a symptom of the earlier failure. Read the earlier finding first.',
+        'judgment': 'A format-only finding can be accepted or left unresolved. Anything that needs a guessed value, a new name, or a control-flow change stays with a person.',
+        'refused_actions': [
+            'Rewrite a member',
+            'Remove a member from the pinned source',
+            'Submit a replacement archive',
+        ],
+    }
+
+
 def slug(value):
+    """Turn a program name into a stable capability id."""
     cleaned = re.sub(r'[^a-z0-9]+', '-', str(value).lower()).strip('-')
     return cleaned or 'program'
 
 
 def sequence():
+    """Return the six modernization steps, each still not started."""
     return [{'id': ident, 'summary': text, 'status': 'NOT_STARTED'} for ident, text in STEPS]
 
 
 def capabilities(rules):
+    """Group imported rules by program and leave every disposition unassigned."""
     groups, order = {}, []
     for rule in rules:
         program = str(rule.get('program') or rule.get('source_path') or rule.get('id'))
@@ -95,6 +123,7 @@ def capabilities(rules):
 
 
 def _kind(path):
+    """Classify a path as a copybook, a batch member, or neither. Other files are ignored."""
     member = Path(str(path))
     suffix = member.suffix.lower()
     parent = member.parent.name.lower()
@@ -106,6 +135,7 @@ def _kind(path):
 
 
 def _members(paths):
+    """Collect each named copybook and batch member once. Field layouts are not invented."""
     copybooks, batches, seen = [], [], set()
     for path in paths:
         if not isinstance(path, str) or not path or path in seen:
@@ -120,6 +150,7 @@ def _members(paths):
 
 
 def inventories(paths):
+    """Build the field and batch inventories from member names only."""
     copybooks, batches = _members(paths)
     return (
         {
@@ -134,6 +165,7 @@ def inventories(paths):
 
 
 def validation_plan(rules):
+    """Attach five unrun comparison cases to each imported rule."""
     return {
         'status': 'NOT RUN',
         'oracle': ORACLE,
@@ -145,6 +177,7 @@ def validation_plan(rules):
 
 
 def boundary(apis, paths):
+    """Flag a public contract that uses a copybook member name. The contract is not rewritten."""
     copybooks, _ = _members(paths)
     stems = sorted({Path(item['path']).stem.lower() for item in copybooks if len(Path(item['path']).stem) >= 4})
     violations = []
@@ -163,6 +196,7 @@ def boundary(apis, paths):
 
 
 def governance(caps):
+    """Keep unassigned capabilities blocked and retirement pending."""
     return {
         'synthetic_data_only': True,
         'do_not_rewrite_yet': [item['id'] for item in caps if item['disposition'] == 'unassigned'],
@@ -172,6 +206,7 @@ def governance(caps):
 
 
 def documents(rules, paths, apis):
+    """Assemble every handoff file from the imported rules, paths, and proposed APIs."""
     caps = capabilities(rules)
     fields, batches = inventories(paths)
     payload = {
@@ -182,12 +217,14 @@ def documents(rules, paths, apis):
         'batch-inventory.json': batches,
         'api-boundary.json': boundary(apis, paths),
         'governance.json': governance(caps),
+        'extraction-reading.json': extraction_reading(),
     }
     payload.update(SKILLS)
     return payload
 
 
 def entry_points(existing):
+    """Add the handoff files to an existing AI-DLC entry-point map."""
     points = dict(existing)
     points.update({
         'sequence': 'modernization-sequence.json',
@@ -197,11 +234,13 @@ def entry_points(existing):
         'batch': 'batch-inventory.json',
         'api_boundary': 'api-boundary.json',
         'governance': 'governance.json',
+        'extraction': 'extraction-reading.json',
     })
     return points
 
 
 def write_into(destination, rules, paths, apis, save):
+    """Write the handoff files. JSON goes through save; skills are plain text."""
     for name, value in documents(rules, paths, apis).items():
         if name.endswith('.json'):
             save(destination / name, value)

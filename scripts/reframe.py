@@ -627,6 +627,14 @@ def verified_assessment(project, label):
     return directory, run
 
 
+def extraction_guide():
+    """Render the reading guide for a Transform extraction finding. It does not change source."""
+    note = handoff.extraction_reading()
+    items = ''.join('<li>' + html.escape(note[key]) + '</li>' for key in ('line_numbers', 'cascading_symptom', 'judgment'))
+    refused = '<li>Reframe does not: ' + html.escape('; '.join(note['refused_actions'])) + '.</li>'
+    return '<section><h2>How to read extraction findings</h2><ul>' + items + refused + '</ul></section>'
+
+
 def assessment_report(work, project, args):
     """Build a private, inert index of the sealed assessment evidence."""
     from urllib.parse import quote
@@ -704,7 +712,7 @@ def assessment_report(work, project, args):
                 add('Technical reference', 'assessment/' + path, path)
     blocks = []
     explanations = {
-        'Review issues first':'Resolve or explicitly accept missing inputs and analysis issues before approving the assessment.',
+        'Review issues first':'Resolve or explicitly accept missing inputs and analysis issues before approving the assessment. Read "How to read extraction findings" before treating a line number or an unknown label as a defect.',
         'Business rules':'Review the generated business descriptions against expected behavior. The bundle contains the original HTML reports.',
         'Data definitions':'Inspect field definitions, layouts and data relationships with the data owner.',
         'Program documentation':'Open the PDF for the program or job you are reviewing. Duplicate machine-readable versions are omitted.',
@@ -726,7 +734,8 @@ def assessment_report(work, project, args):
         'summary{font-size:20px;font-weight:600;cursor:pointer}li{margin:8px 0;overflow-wrap:anywhere}'
         '.notice{background:#fff4dc;padding:18px;border-left:4px solid #b87900}a{color:#145dad}</style>'
         '<h1>Assessment review</h1><p class="notice">Awaiting human review. Generated findings require verification; no validation or implementation is approved by this report.</p>'
-        '<h2>Scope</h2><p>' + html.escape(run['objective']) + '</p>' + render_assessment_facts(run, directory, link) + ''.join(blocks)
+        + extraction_guide()
+        + '<h2>Scope</h2><p>' + html.escape(run['objective']) + '</p>' + render_assessment_facts(run, directory, link) + ''.join(blocks)
         + '<h2>Your decision</h2><p>Confirm the scope and source coverage, review the issues above, and record any accepted limitations before approving phase 1. Approval starts the separate validation phase; it does not establish runtime equivalence.</p>'
         '<details><summary>Source baseline</summary><p>Source revision: <code>' + html.escape(run['source']['commit'])
         + '</code></p></details><p>Operational logs, hashes, metadata and duplicate representations are omitted from this view. The complete private evidence is retained.</p></html>')
@@ -1374,7 +1383,7 @@ def package(work, project):
         '---\nname: approved-modernization-implementation\n'
         'description: Implement the approved modernization package in dependency order with traceable tests.\n---\n\n'
         'Read AGENTS.md and ai-dlc.json. Then read skill-discovery.md, skill-rules.md, skill-data.md, skill-api.md, '
-        'skill-screens.md, skill-batch.md, skill-tests.md, and skill-risk.md. Select the next unblocked backlog item. '
+        'skill-screens.md, skill-batch.md, skill-tests.md, skill-risk.md, and skill-extraction.md. Select the next unblocked backlog item. '
         'Read its section prompt, referenced rules, decisions and acceptance scenarios. Implement only that scope, '
         'run applicable tests, and produce an evidence-backed review handoff. Never claim NOT RUN scenarios passed. '
         'Do not implement an unassigned capability.\n')

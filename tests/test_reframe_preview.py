@@ -75,6 +75,8 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual([case['status'] for case in plan['rules'][0]['cases']],['NOT RUN']*5)
             self.assertEqual(json.loads(z.read('governance.json'))['retirement_status'],'NOT_READY')
             self.assertIn('skill-risk.md',z.namelist())
+            self.assertTrue(json.loads(z.read('extraction-reading.json'))['source_stays_pinned'])
+            self.assertIn('COPY-expanded',z.read('skill-extraction.md').decode())
         second=preview.run(self.work,self.project,self.arguments,app,lambda *a:self.fail('Reuse generated design'))
         self.assertEqual(second['model_calls'],1)
 

@@ -589,8 +589,9 @@ Wireframe mappings are illustrative rather than exhaustive. All imported rules s
 marked `AWS_ASSUMED`; acceptance criteria stay `NOT RUN`. The ZIP also carries
 `modernization-sequence.json`, an unassigned capability map, an unrun
 parallel-validation plan, inventories of the copybook and batch members the
-assessment named, a governance checklist, and one skill for discovery, rules,
-data, API, screens, batch, tests, and risk.
+assessment named, a governance checklist, a guide for reading extraction
+findings without changing the source, and one skill for discovery, rules,
+data, API, screens, batch, tests, risk, and extraction findings.
 
 The named owner, reason and assessment fingerprint are recorded as
 `SKIPPED_BY_OWNER`, never reviewer PASS. Assessment approval is required. Existing

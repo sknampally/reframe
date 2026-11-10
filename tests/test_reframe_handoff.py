@@ -44,3 +44,8 @@ class HandoffTests(unittest.TestCase):
             self.assertIsNone(re.search(r'(?<![a-z])' + word + r'(?![a-z])', text))
         self.assertIn('skill-discovery.md', payload)
         self.assertIn('skill-tests.md', payload)
+        guide = payload['extraction-reading.json']
+        self.assertTrue(guide['source_stays_pinned'])
+        self.assertIn('COPY-expanded', guide['line_numbers'])
+        self.assertIn('Remove a member from the pinned source', guide['refused_actions'])
+        self.assertIn('COPY-expanded', payload['skill-extraction.md'])
