@@ -120,6 +120,13 @@ class GuidedTests(unittest.TestCase):
         self.assertEqual(result['status'],'READY_TO_ASSESS')
         self.assertEqual(result['next_step'],'reframe assess')
 
+    def test_opentofu_session_drops_the_profile(self):
+        exported = 'export AWS_ACCESS_KEY_ID=fixture-key\nexport AWS_SECRET_ACCESS_KEY=fixture-secret\nexport AWS_SESSION_TOKEN=fixture-token\n'
+        with patch.object(guide.subprocess, 'run', return_value=argparse.Namespace(returncode=0, stdout=exported, stderr='')):
+            values = guide.opentofu_session('fixture')
+        self.assertEqual(set(values), {'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'})
+        self.assertNotIn('fixture', json.dumps({key: 'set' for key in values}))
+
     def test_dated_names_are_reused_for_the_same_folder(self):
         state = self.work / 'sandbox' / 'terraform.tfstate'
         first = guide.sandbox_identity()

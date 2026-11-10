@@ -266,6 +266,23 @@ def sandbox_names(state_path):
     return bucket, role
 
 
+def opentofu_session(profile):
+    """Read the selected profile's session for OpenTofu. OpenTofu rejects the SSO profile itself."""
+    result = subprocess.run(
+        ['aws', '--profile', profile, 'configure', 'export-credentials', '--format', 'env'],
+        capture_output=True, text=True)
+    require(result.returncode == 0, 'The AWS profile session could not be read for OpenTofu. Sign in again.')
+    values = {}
+    for line in result.stdout.splitlines():
+        if not line.startswith('export '):
+            continue
+        key, _, raw = line[len('export '):].partition('=')
+        values[key] = raw.strip().strip('"').strip("'")
+    require(values.get('AWS_ACCESS_KEY_ID') and values.get('AWS_SECRET_ACCESS_KEY') and values.get('AWS_SESSION_TOKEN'),
+            'The AWS profile session could not be read for OpenTofu. Sign in again.')
+    return values
+
+
 def sandbox_outputs(profile, region, apply, state_path=None, data_dir=None, bucket_name=None, role_name=None):
     """Create or read one sandbox. The role ARN stays in memory for connector activation."""
     import reframe as app
@@ -289,6 +306,11 @@ def sandbox_outputs(profile, region, apply, state_path=None, data_dir=None, buck
     with aws_profile_env(profile, region) as env:
         env.update(TF_IN_AUTOMATION='1', TF_INPUT='0', TOFU=tofu)
         env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
+        env.update(opentofu_session(profile))
+        env.pop('AWS_PROFILE', None)
+        env.pop('AWS_DEFAULT_PROFILE', None)
+        env.pop('AWS_SHARED_CREDENTIALS_FILE', None)
+        env['AWS_EC2_METADATA_DISABLED'] = 'true'
         if data_dir is not None:
             env['TF_DATA_DIR'] = str(data_dir)
         def run(args, capture=False):
@@ -304,7 +326,7 @@ def sandbox_outputs(profile, region, apply, state_path=None, data_dir=None, buck
             if state_path is not None:
                 init += ['-reconfigure', '-backend-config=path=' + str(state_path)]
             run(init)
-            apply_args = ['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region, '-var', 'aws_profile=' + profile]
+            apply_args = ['apply', '-input=false', '-auto-approve', '-var', 'aws_region=' + region]
             if bucket_name:
                 apply_args += ['-var', 'bucket_name=' + bucket_name, '-var', 'role_name=' + role_name]
             run(apply_args)
