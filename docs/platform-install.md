@@ -142,8 +142,9 @@ rather than continuing through failed installation.
 Updating editable source alone may leave newly added dependencies missing. Rerun the
 full installation command after pulling a release that changes dependencies. Install
 updates **before** initializing an experiment. Existing runs pin the framework
-revision: keep their checkout unchanged until they finish, or start a new private
-workspace for a new revision. Do not delete evidence or edit pinned revision records
+revision. Menu **1** can record a newer checkout before approval when no preparation
+candidate exists. Otherwise keep that checkout unchanged until the run finishes, or
+start a new private workspace. Do not delete evidence or edit pinned revision records
 to bypass this check.
 
 ## Verify tools before setup
@@ -198,9 +199,10 @@ account/role choices, credentials and private settings out of the public reposit
 AWS login does not prove Transform application connection or connector authorization;
 `init` guides those separately and stops until requirements are satisfied.
 
-Once setup reports readiness, `/assess` is the next step. For a service-free interface
-walkthrough use `reframe demo`. WSL setup is documented, not a claim that the live
-CardDemo/AWS workflow has been verified on Windows.
+Once setup reports readiness, stay on menu **1**. Confirm the upload, approve the
+findings, and accept **skip** for the wireframes and the AI-DLC ZIP. For a
+service-free interface walkthrough use `reframe demo`. WSL setup is documented, not
+a claim that a live AWS workflow has been verified on Windows.
 
 ## Common errors
 

@@ -19,12 +19,12 @@ checks. A manually recovered cloud run is not a CLI-only acceptance result.
 
 ## Start here: guided CLI
 
-Prefer a menu interface? Launch `reframe` for the [Reframe terminal console](terminal-console.md).
-Use `reframe demo` for a clearly labeled, service-free presentation preview.
+The first run is the menu, not a script. Launch `reframe`, choose **1** or `/flow`, and stay there through the wireframes. The [terminal console](terminal-console.md) lists the keys. `reframe demo` is a labeled preview with no service calls.
 
 First install the required tools and configure your AWS profile using the
 [engineer workstation guide](engineer-setup.md). It includes uv/Python, AWS CLI v2,
-Claude Code, optional Codex/Kiro, authentication and PATH troubleshooting.
+OpenTofu, Claude Code, optional Codex/Kiro, authentication and PATH troubleshooting.
+Run `claude auth login` before you ask for wireframes. Codex is required only when you keep it as the HTML provider.
 
 Install once from a clean checkout with Python 3.10+ and uv available:
 
@@ -39,9 +39,7 @@ installation is required in this POC: the CLI loads versioned prompts and source
 contracts from its Git checkout. Keep that checkout available and unchanged during
 an active run. This is not yet a standalone distributable wheel.
 
-`init` guides you through the private workspace, local Git checkout or GitHub URL,
-source revision, business scope, AWS profile/region/bucket, executor runtime and HTML
-provider. It saves choices outside Git and checks required executables, Claude login,
+`init` guides you through the private workspace, a GitHub URL or local checkout you type yourself, the source revision, business scope, AWS profile and region, executor runtime and HTML provider. It does not fill in a sample repository and it does not ask you to name the sandbox bucket. It saves choices outside Git and checks required executables, Claude login,
 AWS credentials and selected runtime authentication. AWS profile access is checked
 after profile/region selection; setup offers SSO configuration or sign-in when
 needed and rechecks access before advancing. Declined/failed login stops setup.
@@ -62,7 +60,15 @@ assessment/approval exists, setup can explicitly confirm a new framework baselin
 while keeping the pinned source unchanged. Existing assessment baselines are never
 repinned.
 
-Normal commands now reuse the saved active workspace:
+After setup, stay on menu **1**. Confirm the upload when asked. That is the job. When the findings are sealed, approve them with your name, a short rationale, and confirmation that they match the pinned source. The next prompt is `skip` or `review`. Enter selects **skip**, which writes the HTML wireframes and the AI-DLC ZIP. `review` is the longer route below.
+
+The same result from the shell, after assessment approval:
+
+```bash
+reframe preview --skip-validation --by "Your name" --note "Use the AWS findings for wireframes and the AI-DLC draft" --provider claude --name guided-draft
+```
+
+`review`, and the commands a script would run for that route, are separate. They do not produce the skip ZIP:
 
 ```bash
 reframe assess --source <same-github-url-or-local-path>
@@ -83,11 +89,7 @@ source-upload/job authorization. Approvals prompt for owner, rationale and sourc
 provenance confirmation; they are never inferred. Validation approval after SME
 questions remains an explicit gate before HTML generation.
 
-When a new job asks for its initial custom plan, the controller sends the four
-assessment capability names with the saved source, connector and scope. It records
-each message before sending and retains its receipt. Resume uses the same job;
-uncertain sends require reconciliation. Plan selection never approves generated
-deliverables, and unknown onboarding prompts are not automatically answered.
+When a new job has no chat yet, the controller sends the assessment objective once. It asks for Analyze code, Analyze data, Generate technical documentation, and Extract business logic, and it leaves out Analyze activity metrics. That message does not include the workspace, job, connector, or archive location. When AWS says the plan was generated, including a markdown sentence that says approval of the findings is preserved, the controller starts that plan. The recorded archive location is sent only after AWS asks where the source is. Resume uses the same job. Uncertain sends require reconciliation. Plan selection never approves generated deliverables, and unknown onboarding prompts are not automatically answered.
 
 For newly authorized uploads, the recognized kickoff source-location task is
 filled with the recorded ZIP URI after its task identity, response schema and
@@ -147,13 +149,15 @@ Authenticate Git if using a private GitHub repository. Authenticate AWS in your 
 terminal, for example `aws sso login --profile <your-profile>` for a previously
 configured SSO profile. The framework does not collect passwords or store AWS keys.
 
+Guided start does not use this command. It asks for the URL and creates the bucket. This is the scripted form when you already have those values:
+
 ```bash
 ./reframe --workspace /path/to/private-poc init \
-  --source https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git \
+  --source https://github.com/<owner>/<repository>.git \
   --ref <full-reviewed-source-commit> \
-  --scope "CardDemo sign-on journey; exclude other application journeys" \
+  --scope "Assess the entire supplied repository" \
   --aws-profile <your-profile> --region <your-region> --bucket <your-private-bucket> \
-  --executor claude --ui-provider codex
+  --executor claude --ui-provider claude
 ```
 
 For local source, pass its clean Git checkout path and omit `--ref`. Source is not
@@ -178,7 +182,7 @@ maximum invocations/rounds, MCP command and optional findings output location.
 Default executor and reviewer use Claude Code in separate sessions, pinned to `claude-sonnet-5-5` and `claude-opus-5-5` respectively. The CLI rejects identical model IDs and aliases for this pair, passes each ID explicitly, and rejects replies whose model-usage metadata does not match. Available versions depend on provider/account access. Kiro remains an optional executor via `--executor kiro`; it is not required for AWS MCP. The reviewer is always Claude Code in this POC. The executor
 may also be `claude` or `codex`. Different sessions/providers do not prove independence
 of reasoning or correctness. Limits bound CLI invocations, not total provider tokens
-or cloud dollars. There is no hard financial cap.
+or the AWS bill. A logged-in Claude CLI uses that login and is not charged against Reframe's local dollar ledger. If `ANTHROPIC_API_KEY`, `CLAUDE_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` is set, each model call is charged against `max_model_dollars`. That cap starts at 0, so an API-key call stops until the private cap is raised. If `claude auth status` fails, generation stops and tells you to run `claude auth login`. Reframe does not start that login.
 
 ## 2. Prepare AWS assessment access
 
@@ -201,7 +205,7 @@ Use `--transform-workspace <id>` during init or `setup --attach-workspace <id>` 
 a workspace. Use `setup --attach-connector <id>` to reuse a connector. These private
 identifiers must never go into the framework repository.
 
-A new AWS assessment reads three private settings: `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`. The CLI refuses to start that assessment when any of them is empty, before it calls AWS. Guided start sets the upload path to `s3://<bucket>/reframe` from the sandbox it creates. The role allows that prefix and denies object and bucket reads outside that bucket. Comment on story 40 that the production deny check passed. Do not commit the account ID, the role ARN, or the bucket name.
+A new AWS assessment reads three private settings: `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`. The CLI refuses to start that assessment when any of them is empty, before it calls AWS. Guided start sets the upload path to `s3://<bucket>/reframe` from the sandbox it creates. The role can read and write objects anywhere in that bucket and denies object and bucket reads outside it. Comment on story 40 that the production deny check passed. Do not commit the account ID, the role ARN, or the bucket name.
 
 **AWS login is not necessarily a Transform application connection.** The official
 MCP `configure` operation supports its own authentication flow. If it is not already
@@ -218,7 +222,7 @@ calls the supported activation operation. Confirm readiness explicitly:
 
 ```bash
 ./reframe --workspace /path/to/private-poc setup \
-  --connector-approved "Named AWS administrator"
+  --connector-approved "Your name"
 ```
 
 Run setup with the MCP-enabled Python environment each time it needs the MCP transport.
@@ -396,8 +400,8 @@ errors for private troubleshooting and safe reconciliation.
 
 ### Applying a controller fix during an assessment
 
-Stop the local watcher before updating Reframe; the AWS job remains intact. From a
-clean committed framework checkout, before a preparation candidate or downstream approval exists, run:
+Stop the local watcher before updating Reframe; the AWS job remains intact. Menu **1** asks for a note and runs this update before approval when the checkout has moved. From a
+clean committed framework checkout, before a preparation candidate or downstream approval exists, you can also run:
 
 ```bash
 reframe upgrade-framework --note "Describe the controller fix being applied"
@@ -565,14 +569,13 @@ coverage gaps remain necessary.
 
 ### Use Transform findings directly for a draft
 
-An engineer who trusts the completed AWS assessment can explicitly skip independent
-executor/reviewer validation for a preview:
+Menu **1** calls this **skip**. It is the path to the wireframes and the AI-DLC ZIP. An engineer who trusts the completed AWS assessment can also run it directly:
 
 ```bash
 reframe preview --skip-validation --by "Assessment owner" --note "Accept AWS findings as assumptions for design review" --provider codex
 ```
 
-Use `--provider claude` to generate the same structured draft with Claude instead.
+Menu **1** offers the HTML provider saved at setup. That default is Codex unless you typed `claude` during setup. Use `--provider claude` here to generate the same structured draft with Claude instead.
 This calls the selected provider for design/wireframe content; it does **not** run
 the executor/reviewer verification loop. Up to three generation attempts are counted
 in a separate preview ledger. It does not reset or increase the validation call cap.
@@ -608,7 +611,7 @@ so private findings stay outside the public framework repository. An explicit
 The default scope is the entire supplied repository.
 
 ```bash
-reframe init --source https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git --output-parent "$HOME/workspace"
+reframe init --source https://github.com/<owner>/<repository>.git --output-parent "$HOME/workspace"
 ```
 
 The layout is:
@@ -616,7 +619,7 @@ The layout is:
 ```text
 workspace/
   reframe/  # framework code only
-  aws-mainframe-modernization-carddemo_assessment/
+  <repository>_assessment/
     project.json                            # saved run and approval state
     source/                                 # managed source clone, if applicable
     runs/                                   # AWS runs, originals, evidence and assessment reports

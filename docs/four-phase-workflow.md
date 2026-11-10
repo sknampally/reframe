@@ -1,5 +1,7 @@
 # Four-phase assessment and engineering preparation
 
+For wireframes and the AI-DLC draft, run `reframe`, choose **1**, approve the findings, and accept **skip**. The four phases below are the **review** route. That route still ends at `package`, and the skip ZIP is not that package.
+
 The source upload defines assessment coverage. For this POC, S3 input is a ZIP
 object, with a bounded local snapshot for independent source inspection. GitHub
 and clean local Git sources remain supported. S3 object versions or ETags pin the
@@ -7,12 +9,12 @@ download; the local content-tree fingerprint is not presented as a source commit
 
 ## 1. Assessment
 
-The default AWS profile selects Analyze code, Analyze data, Generate technical
-documentation and Extract business logic. Kickoff is included by AWS. Decomposition
-editing and test-plan refinement are not included in this profile: proposed domain
+The assessment plan is Analyze code, Analyze data, Generate technical
+documentation, and Extract business logic, plus the AWS kickoff step. Analyze activity metrics is left out. The plan chat does not include the workspace, job, connector, or archive location. The recorded archive location is sent when AWS asks for it. Decomposition
+editing and test-plan refinement are not included: proposed domain
 boundaries and acceptance scenarios are prepared in phase 2 for SME review.
 
-The controller supplies the recorded source location, retains current file
+The controller retains current file
 classifications, selects all eligible uploaded files for detailed documentation
 and rule extraction, and acknowledges known report-only checkpoints. Final findings
 remain unapproved. Unknown task contracts and execution failures stop with private
@@ -28,8 +30,9 @@ reframe assess --allow-new-assessment --wait
 
 AWS access and connector activation must be configured before starting the job.
 For Git sources the CLI uploads the pinned source; S3 sources are downloaded and
-snapshotted before preparing the assessment upload. The default expanded-source
-limit is 100 MB. ZIP traversal, symlinks, hidden metadata and encrypted members are
+snapshotted before preparing the assessment upload. The source upload limit is
+100 MB. The expanded assessment evidence limit is 250 MB, which is also the maximum.
+ZIP traversal, symlinks, hidden metadata and encrypted members are
 rejected. The owner reviews completed findings and provenance before:
 
 ```sh

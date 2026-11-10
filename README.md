@@ -29,8 +29,8 @@ Install these on the workstation first. Reframe does not install them. When a re
 | OpenTofu 1.5 or newer, built for this computer | Always, before guided setup | `tofu version` |
 | AWS CLI v2 and a named profile | A new assessment | `aws --version` |
 | AWS Transform application access | A new assessment | Terminal AWS login is not enough |
-| Claude Code | Default executor, reviewer, and HTML provider | `claude --version` |
-| Codex CLI | Only when you select Codex for HTML or execution | `codex --version` |
+| Claude Code | Default executor and reviewer. Also the HTML provider when you choose Claude | `claude --version` and `claude auth status` |
+| Codex CLI | Default HTML provider. Also when you select Codex for execution | `codex --version` |
 | Kiro CLI | Only when you select Kiro as the executor | `kiro-cli --version` |
 
 OpenTofu is the tool that creates the private sandbox bucket and role. Install the build that matches the computer: `darwin_arm64` on Apple Silicon, `darwin_amd64` on an Intel Mac, `linux_arm64` or `linux_amd64` on Linux, and the Linux build inside Ubuntu/WSL2 on Windows. Native PowerShell is not supported. On a Mac with Homebrew, `brew install opentofu` installs it. The command is `tofu`, and `tofu version` must report 1.5 or newer. Other systems use the [OpenTofu install guide](https://opentofu.org/docs/intro/install/). If `tofu` is missing, older than 1.5, or built for a different computer, install the matching build and choose **1** again. Nothing is created until that install is in place.
@@ -52,14 +52,22 @@ reframe
 
 Choose **1 — Guided start / continue**. Guided start finds OpenTofu 1.5 or newer for the computer it is running on. You do not change `PATH`. You supply the source, a private output directory, the AWS profile, the region, and the provider. The profile has no default; `aws configure list-profiles` lists the names. The CLI verifies access and offers SSO login when required.
 
-If setup is not finished, guided start creates the private sandbox bucket and role. The role can use the `reframe/` prefix in that bucket and denies object and bucket reads everywhere else. It checks in the background that the role cannot list another bucket, and continues only when that read is denied. You do not name a second bucket. It stores `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`, then creates and activates the connector. You do not name the sandbox bucket or edit `project.json`. Keep the account ID, role ARN, and bucket name off this repository and out of issues. Comment on [story 40](https://github.com/sknampally/reframe/issues/40) that the production deny check passed. Answer **no** to the continuation question to pause before anything is created. The [sandbox notes](infrastructure/README.md) describe the same apply when you want to run it outside the menu.
+If setup is not finished, guided start creates the private sandbox bucket and role. The role can read and write objects in that bucket, including analysis output outside the `reframe/` upload prefix. It denies object and bucket reads everywhere else. It checks in the background that the role cannot list another bucket, and continues only when that read is denied. A new role can take a few tries before it can be assumed; the check waits and the console says why if it stops. You do not name a second bucket. It stores `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`, then creates and activates the connector. You do not name the sandbox bucket or edit `project.json`. Keep the account ID, role ARN, and bucket name off this repository and out of issues. Comment on [story 40](https://github.com/sknampally/reframe/issues/40) that the production deny check passed. Answer **no** to the continuation question to pause before anything is created. The [sandbox notes](infrastructure/README.md) describe the same apply when you want to run it outside the menu.
 
-1. **Assess.** Confirm the source upload when asked. That is the first time a job starts. `reframe status` and `reframe resume` continue it. A new assessment stops before any AWS call when `workspace_id`, `upload_prefix`, or `sandbox_role` is empty. Authentication, connector activation, or a service task can still require action.
-2. **Review the assessment.** Inspect the saved assessment report, then explicitly record approval and confirm that the findings match the source. Answer **no** to pause.
-3. **Choose preparation.** Select **draft** to skip independent Claude verification, record the accountable owner and reason, and choose Claude or Codex for design generation. Or select **verify** to run the executor and reviewer within the saved budget. Unresolved decisions and review gates remain enforced.
-4. **Collect the handoff.** The draft route generates HTML wireframes, proposed API and design specifications, and an AI-DLC draft ZIP. Use `/privacy` and then `/artifacts` to see the local report and package paths. Review the draft with the SME, architect, business owner, and technical lead before engineering use.
+Stay on menu **1**. These are the questions, in order:
 
-**Skipping verification does not approve the design.** Draft findings are marked AWS-assumed, independent verification is skipped, stakeholder decisions remain pending, and acceptance tests are NOT RUN. A design-generation model call is distinct from executor and reviewer verification. No target application is built.
+1. **Source.** Type a GitHub URL or a clean local checkout. The prompt does not fill in a sample repository. Enter on the commit question uses the default branch. Enter on the scope question uses "Assess the entire supplied repository."
+2. **Where to write.** Confirm the parent directory and the `<repository>_assessment` folder. That folder stays outside this Git checkout.
+3. **AWS.** Type the profile name. The region defaults to `us-east-1`. The executor defaults to `claude`. The HTML provider defaults to `codex`; type `claude` if that is the only login you want to use for wireframes.
+4. **Sandbox.** Confirm setup. Reframe creates the bucket and role, runs the deny check, and connects Transform. No job starts yet.
+5. **Connector confirmation.** Type your own name. That records who confirmed the connector. It is not an AWS user, role, or profile. AWS must show the connector active.
+6. **Upload.** Enter accepts the 250000000 byte evidence limit, which is also the maximum. Confirm the upload. That starts the one assessment job. Reframe stays with it. Do not type in the Transform chat, and do not start a second assessment.
+7. **Approval.** When the findings are ready, inspect the report. `/privacy` and then `/artifacts` show the local files. Record your name, a short rationale in your own words, and confirm the findings match the pinned source. Answer yes only after you have looked.
+8. **Wireframes and the AI-DLC draft.** The next question is `skip` or `review`. Enter selects **skip**. Skip asks for a draft name (`guided-draft`), your name, why you are trusting the AWS findings for design, and `claude` or `codex`. It then writes the HTML wireframes and `ai-dlc-draft.zip`. **review** runs the executor and an independent reviewer instead, and still has its own approval gates before `package`.
+
+If Reframe's own checkout changed after the run was saved, menu **1** asks for a short note, records that update, and then continues this same job. The findings stay as they are.
+
+**Skipping verification does not approve the design.** Draft findings are marked AWS-assumed, independent verification is skipped, stakeholder decisions remain pending, and acceptance tests are NOT RUN. A design-generation model call is distinct from executor and reviewer verification. A logged-in Claude CLI uses your Claude login and is not charged against Reframe's local dollar ledger. An API key is. If Claude is not logged in, generation stops and tells you to run `claude auth login`. No target application is built.
 
 A saved project offers **continue** or **fresh**. Fresh uses a separate output parent and does not delete the previous run. `reframe`, then **1** or `/flow`, continues a saved run.
 
@@ -128,6 +136,8 @@ The [broader reference architecture](docs/images/reference-architecture.svg) and
 implementation/equivalence stages beyond this preparation POC.
 
 ## Next: prove the CardDemo journey
+
+The guided **skip** path above is how a first run produces wireframes and the AI-DLC draft from a repository you type in. This list is the separate acceptance experiment. CardDemo is not filled in by the source prompt.
 
 1. Apply the sandbox in [infrastructure](infrastructure/README.md), confirm the production deny check, and run `reframe init` against that bucket. A new assessment stops until `workspace_id`, `upload_prefix`, and `sandbox_role` are set.
 2. Pin one CardDemo commit and the sign-on scope. Run two independent assessments with matching inputs and recorded human task choices; preserve both snapshots.
