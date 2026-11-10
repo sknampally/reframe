@@ -252,6 +252,11 @@ class CheckpointTests(unittest.TestCase):
             app.pipeline(self.work,self.project,self.args('validate'),lambda *a:self.fail('No oversized provider call'))
         self.assertEqual(self.project['pipeline']['calls'],0)
 
+    def test_reviewer_passes_matching_claims_without_an_inventory_round(self):
+        text = (app.FRAMEWORK / 'prompts/checkpoints/reviewer.md').read_text()
+        self.assertIn('PASS when every written claim matches its citation', text)
+        self.assertNotIn('may request specific omitted behavior', text)
+
     def test_rework_limit_still_reviews_the_next_program_and_retries_once(self):
         self.plan()
         seen = {'U0001': 0}

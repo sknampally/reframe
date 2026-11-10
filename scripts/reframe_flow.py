@@ -126,6 +126,39 @@ def package_rows(project):
     ]
 
 
+def open_question_ids(project):
+    """Question ids with no recorded decision. An absent specification file means none yet."""
+    record = project.get('specification') or {}
+    work = workspace_path()
+    if not work or not record.get('path'):
+        return []
+    path = work / record['path']
+    if not path.is_file():
+        return []
+    from reframe import read, spec_path
+    spec = read(spec_path(work, project))
+    decided = project.get('decisions') or {}
+    return [q['id'] for q in spec.get('questions') or [] if isinstance(q, dict) and q.get('id') not in decided]
+
+
+def defer_open_questions(ui, project):
+    """Record an explicit deferral for every open SME question before validation approval."""
+    pending = open_question_ids(project)
+    if not pending:
+        return True
+    ui.say(str(len(pending)) + ' SME questions are still open. A deferral is recorded; it is not an answer.')
+    if not ui.yes('Defer the ' + str(len(pending)) + ' open SME questions so the package can be written for review?'):
+        ui.say('Paused. Record each SME answer with reframe decide, then return with /flow. No approval was recorded.')
+        return False
+    owner = ui.ask('Accountable owner for these deferred questions')
+    note = ui.ask('Reason for deferring the open questions')
+    for question in pending:
+        if ui.invoke(['decide', '--question', question, '--by', owner, '--answer', note, '--disposition', 'deferred']) != 0:
+            ui.say('A deferral was not recorded. /flow retries the remaining questions. No approval was recorded.')
+            return False
+    return True
+
+
 def offer_review_budget(ui, project):
     """Say when the paired review does not fit the saved cap. A larger cap is recorded only after a yes."""
     state = project.get('pipeline') or {}
@@ -205,6 +238,11 @@ def run(ui):
             code = ui.invoke(['validate'])
             updated = ui.project() or {}
             state = updated.get('pipeline') or {}
+            # Spending the last call returns exhaustion. The next check restates the remaining plan.
+            if state.get('reason') == 'Total model call budget exhausted':
+                code = ui.invoke(['validate'])
+                updated = ui.project() or {}
+                state = updated.get('pipeline') or {}
             # A short cap returns a blocked status. Calls already spent still reach the question below.
             if code != 0 and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan':
                 return
@@ -220,6 +258,8 @@ def run(ui):
                 return
             rows = {'assessment': assessment_rows, 'validation': validation_rows, 'specifications': specification_rows}[phase](project)
             say_review(ui, 'Review these ' + phase + ' files before you approve. Unresolved decisions remain enforced.', rows)
+            if phase == 'validation' and not defer_open_questions(ui, project):
+                return
             if not ui.yes('Have you reviewed the ' + phase + ' outputs and want to record approval now?'):
                 ui.say('Paused for human review. The files listed above are unchanged. Return with /flow; no approval was recorded.')
                 return

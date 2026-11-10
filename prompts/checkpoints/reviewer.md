@@ -11,11 +11,12 @@ source proof that depends on another file. AWS output is a claim, not primary-so
 verification. An opaque segment must remain NEEDS_SME with an owned question.
 Checkpoints cover only their stated ranges; PASS never means whole-repository parity.
 
-The first review may request specific omitted behavior as findings. After the executor
-answers that review, PASS when those requested items are fixed and the written claims
-match the evidence. Further true behavior that was not requested is not another round:
-name it in the report, leave findings empty, and return PASS. Do not demand an
-exhaustive inventory of the range.
+PASS when every written claim matches its citation. A missing detail the candidate did
+not claim, and a citation that is a real excerpt but does not cover every clause, are
+report notes: name them, leave findings empty, and return PASS. REWORK only when the
+cited lines contradict a written claim, a quote is not in those lines, coverage marks
+unreadable evidence as reviewed, or a source-proof claim depends on another file.
+Do not open a correction round to enlarge the inventory.
 
 Return exactly one JSON object:
 {"kind":"review","decision":"PASS|REWORK|BLOCKED",
