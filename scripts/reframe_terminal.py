@@ -18,7 +18,7 @@ from pilot import Blocked
 
 COMMANDS = ['flow', 'help', 'menu', 'guide', 'init', 'workspace', 'status', 'assess', 'resume',
             'compare', 'approve', 'preview', 'relocate', 'prepare-plan', 'model-budget', 'validate', 'decide', 'review-site', 'feedback',
-            'artifacts', 'package', 'privacy', 'demo', 'live', 'next', 'exit']
+            'upgrade-framework', 'artifacts', 'package', 'privacy', 'demo', 'live', 'next', 'exit']
 ACTIONS = {'1':'flow', '2':'assess', '3':'status', '4':'resume', '5':'compare',
            '6':'validate', '7':'review-site', '8':'package', '9':'guide', '0':'exit'}
 DEMO_STAGES = ['READY_TO_ASSESS', 'AWAITING_ASSESSMENT_APPROVAL', 'ASSESSMENT_APPROVED',
@@ -181,7 +181,7 @@ class Terminal:
              ('preview --skip-validation --by NAME --note REASON','Generate an AWS-assumed draft UI and AI-DLC package'),('relocate --output-parent PATH','Move outputs into a verified repository-named assessment folder'),('prepare-plan','Preview evidence units and minimum model calls; no AI calls'),('model-budget','Record an explicitly approved total call cap'),('compare','Compare two preserved assessment snapshots'),('approve','Record assessment, validation or business approval'),
              ('validate','Run executor and independent reviewer'),('decide / feedback','Record SME answers or request a revision'),
              ('review-site','Generate stakeholder HTML using the chosen provider'),('artifacts','List saved preparation and review files'),
-             ('package','Create the approved implementation package'),('guide [setup|workflow|comparison]','Read built-in documentation'),
+             ('package','Create the approved implementation package'),('upgrade-framework --note TEXT','Record a Reframe update on this saved run'),('guide [setup|workflow|comparison]','Read built-in documentation'),
              ('privacy','Toggle project/result detail visibility'),('demo / live','Switch simulated preview / saved live project'),
              ('menu / exit','Refresh dashboard / leave the console')]:table.add_row('/'+command,purpose)
         self.console.print(table)
@@ -258,7 +258,7 @@ class Terminal:
             path=Path(self.ask('Existing private workspace path')).expanduser().resolve()
             require((path/'project.json').is_file(),'No saved project at that path')
             select_workspace(path);self.dashboard();return True
-        if cmd not in {'init','assess','resume','compare','approve','preview', 'relocate','prepare-plan','model-budget','validate','review-site','package','decide','feedback'}:
+        if cmd not in {'init','assess','resume','compare','approve','preview', 'relocate','prepare-plan','model-budget','validate','review-site','package','decide','feedback','upgrade-framework'}:
             self.say('Unknown command. Type /help or choose a menu number.','yellow');return True
         if cmd=='compare' and not args:
             args=['--left',self.ask('First assessment label'),'--right',self.ask('Second assessment label')]
@@ -268,6 +268,8 @@ class Terminal:
             args=['--question',self.ask('SME question ID'),'--by',self.ask('Decision owner'),'--answer',self.ask('Answer and rationale'),
                   '--disposition',Prompt.ask('Disposition',choices=['resolved','deferred'],console=self.console)]
         if cmd=='feedback' and not args:args=['--by',self.ask('Feedback owner'),'--note',self.ask('Requested change')]
+        if cmd=='upgrade-framework' and '--note' not in args:
+            args=['--note', self.ask('Note for this Reframe update'), *args]
         if cmd in {'assess','resume'} and '--wait' not in args and '--detach' not in args:
             args=[*args,'--wait']
         if cmd in {'assess','resume','validate','review-site','package'}:

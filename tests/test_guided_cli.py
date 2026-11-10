@@ -64,6 +64,15 @@ class GuidedTests(unittest.TestCase):
         with patch.object(guide.shutil,'which',return_value='/fixture'),patch.object(guide,'command_ok',return_value=True),patch('sys.stdout',new_callable=io.StringIO) as output:
             guide.checks(self.project)
         self.assertNotIn('Account',output.getvalue())
+    def test_source_prompt_has_no_sample_repository(self):
+        def ask(label, default=None):
+            self.assertNotIn('carddemo', label.lower())
+            self.assertIsNone(default)
+            raise Blocked('stop after source prompt')
+        with patch.object(sys.stdin, 'isatty', return_value=True), patch.object(guide, 'ask', side_effect=ask):
+            with self.assertRaisesRegex(Blocked, 'stop after source prompt'):
+                guide.guided_init(self.args('init'))
+
     def test_guided_setup_resumes_existing_project_and_checks_environment(self):
         project=dict(self.project,setup={'connector_approved_by':'Fixture admin'})
         app.write(self.work/'project.json',project)

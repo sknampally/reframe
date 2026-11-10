@@ -48,7 +48,10 @@ def source_ok(run):
         require(git(root, 'rev-parse', 'HEAD') == run['source']['commit'], 'Pinned source commit changed')
         require(not git(root, 'status', '--porcelain'), 'Source checkout is not clean')
     require(git(root, 'remote', 'get-url', 'origin') == run['source']['repository'], 'Source origin changed')
-    require(git(FRAMEWORK, 'rev-parse', 'HEAD') == run['framework_commit'], 'Framework revision changed')
+    if git(FRAMEWORK, 'rev-parse', 'HEAD') != run['framework_commit']:
+        error = Blocked('Framework revision changed')
+        error.hint = 'Use /flow. It records this Reframe update, then offers skip for wireframes and the AI-DLC package, or review for a second check.'
+        raise error
     require(not git(FRAMEWORK, 'status', '--porcelain'), 'Framework checkout is not clean')
     return root
 

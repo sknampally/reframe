@@ -88,6 +88,35 @@ class GuidedFlowTests(unittest.TestCase):
             run(ui)
         ui.invoke.assert_not_called()
 
+    def test_skip_word_generates_the_draft_package(self):
+        ui = self.ui({'stage':'ASSESSMENT_APPROVED','approvals':{'assessment':True},
+                      'providers':{'wireframes':'claude'}},
+                     ['continue','skip','guided-draft','Owner','Accepted risk','claude'])
+        ui.yes.return_value = True
+        with tempfile.TemporaryDirectory() as root, patch('reframe_setup.workspace', return_value=Path(root)):
+            run(ui)
+        args = ui.invoke.call_args.args[0]
+        self.assertEqual(args[0], 'preview')
+        self.assertIn('--skip-validation', args)
+
+    def test_review_word_runs_validation(self):
+        ui = self.ui({'stage':'ASSESSMENT_APPROVED','approvals':{'assessment':True}}, ['continue','review'])
+        ui.yes.return_value = True
+        ui.invoke.return_value = 2
+        run(ui)
+        ui.invoke.assert_called_once_with(['validate'])
+
+    def test_framework_update_is_recorded_before_approval(self):
+        stale = {'stage':'AWAITING_ASSESSMENT_APPROVAL','framework_commit':'old','approvals':{}}
+        ui = self.ui(stale, ['continue', 'Record the controller update'])
+        ui.project.side_effect = [stale, stale]
+        ui.yes.return_value = False
+        with patch('reframe.git', return_value='new'):
+            run(ui)
+        self.assertEqual(ui.invoke.call_args_list[0].args[0],
+                         ['upgrade-framework', '--note', 'Record the controller update'])
+        self.assertEqual(ui.invoke.call_args_list[1].args[0], ['assessment-report'])
+
     def test_initial_flow_blocker_stays_in_console(self):
         from pilot import Blocked
         ui = Terminal(console=Console(file=io.StringIO()), demo=True)

@@ -377,7 +377,7 @@ def guided_init(args):
     parent = getattr(args, 'output_parent', None)
     if not default and not parent and not args.source and active_file().exists(): default = str(workspace())
     if not default:
-        args.source = args.source or ask('Local Git checkout or GitHub repository URL', 'https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git')
+        args.source = args.source or ask('Local Git checkout or GitHub repository URL')
         parent = parent or ask('Engineer workspace directory (assessment folder is created inside it)', str(default_parent(args.source, app.FRAMEWORK)))
         default = str(output_directory(parent, args.source))
         print('Assessment output folder: ' + default)
@@ -388,7 +388,7 @@ def guided_init(args):
     if (work / 'project.json').exists():
         print('Resuming setup for the saved source and configuration; existing evidence will be preserved.')
     else:
-        args.source = args.source or ask('Local Git checkout or GitHub repository URL', 'https://github.com/aws-samples/aws-mainframe-modernization-carddemo.git')
+        args.source = args.source or ask('Local Git checkout or GitHub repository URL')
         if args.source.startswith('https://'):
             value = optional('Git commit/ref to pin (Enter uses current default branch)')
             args.ref = args.ref or value or None

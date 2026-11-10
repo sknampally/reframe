@@ -5,6 +5,22 @@ from pathlib import Path
 from pilot import require
 
 
+def record_framework_update(ui, project):
+    """Record a controller commit before approval. Findings stay on the saved run."""
+    recorded = project.get('framework_commit')
+    if not recorded:
+        return True
+    from reframe import FRAMEWORK, git
+    if recorded == git(FRAMEWORK, 'rev-parse', 'HEAD'):
+        return True
+    ui.say('Reframe was updated after this run was saved. Record that update before approval. The findings stay unchanged.')
+    note = ui.ask('Note for this Reframe update')
+    if ui.invoke(['upgrade-framework', '--note', note]) != 0:
+        ui.say('The update was not recorded. /flow retries it before approval, skip, or review.')
+        return False
+    return True
+
+
 def run(ui):
     from reframe_setup import workspace
     project = ui.project()
@@ -27,11 +43,13 @@ def run(ui):
         require(project is not None, 'Setup did not save a project; use /flow to retry')
         stage = project['stage']
         approved = bool(project.get('approvals', {}).get('assessment'))
+        if not record_framework_update(ui, project):
+            return
         if approved and not project.get('approvals', {}).get('validation') and stage != 'AWAITING_VALIDATION_APPROVAL':
-            ui.say('Choose: draft = skip independent verification; verify = executor + reviewer. Drafts still need stakeholder review.')
-            choice = ui.ask('Preparation route (draft/verify)', 'draft')
-            require(choice in {'draft', 'verify'}, 'Choose draft or verify')
-            if choice == 'draft':
+            ui.say('Assessment is approved. skip generates wireframes and the AI-DLC package without a second review. review runs the executor and an independent reviewer.')
+            choice = ui.ask('Next step (skip/review)', 'skip')
+            require(choice in {'skip', 'review', 'draft', 'verify'}, 'Choose skip or review')
+            if choice in {'skip', 'draft'}:
                 ui.say('Claude or Codex will generate design content. No executor/reviewer verification or approval is implied.')
                 from reframe import name as safe_name
                 name = safe_name(ui.ask('Draft name (reuse the same name to resume)', 'guided-draft'))
