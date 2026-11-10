@@ -33,9 +33,19 @@ def json_projection(value):
     return lines
 
 
+def text_of(raw):
+    """Decode evidence. A text file with a few non-UTF-8 bytes stays readable."""
+    try:
+        return raw.decode('utf-8')
+    except UnicodeError:
+        if b'\0' in raw:
+            raise
+        return raw.decode('latin-1')
+
+
 def evidence_lines(raw, area):
     """Split evidence into lines. JSON assessment files become pointer records so structure is kept."""
-    text = raw.decode('utf-8')
+    text = text_of(raw)
     if area == 'assessment':
         try:
             value = json.loads(text)
@@ -81,6 +91,26 @@ def segments(area, name, path, expected):
     if start <= len(lines):
         result.append({**base, 'start': start, 'end': len(lines), 'bytes': size})
     return result
+
+
+def hidden_source(work, project, read):
+    """True when a saved plan marked source opaque only because it was not UTF-8."""
+    rel = (project.get('checkpoints') or {}).get('plan_path')
+    if not rel:
+        return False
+    root = Path(project['source']['root'])
+    for unit in read(work / rel).get('units', []):
+        for part in unit.get('segments', []):
+            if part.get('area') != 'source' or not part.get('opaque'):
+                continue
+            raw = (root / part['path']).read_bytes()
+            if b'\0' in raw or len(raw) > 10000000:
+                continue
+            try:
+                raw.decode('utf-8')
+            except UnicodeError:
+                return True
+    return False
 
 
 def match_source(label, source_names):

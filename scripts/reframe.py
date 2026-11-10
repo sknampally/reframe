@@ -1107,10 +1107,11 @@ def pipeline(work, project, args, runtime=model_call):
     import reframe_checkpoints as cp
     # Existing legacy runs retain their pinned behavior until explicitly migrated.
     checkpoints = project.get('checkpoints') or {}
-    started = project.get('pipeline', {}).get('calls', 0) or any(
-        unit.get('status') == 'PASS' or unit.get('candidate_path') or unit.get('candidate_sha256')
-        for unit in checkpoints.get('units', {}).values())
-    if checkpoints and not started:
+    progress = any(unit.get('status') == 'PASS' or unit.get('candidate_path') or unit.get('candidate_sha256')
+                   for unit in checkpoints.get('units', {}).values())
+    started = project.get('pipeline', {}).get('calls', 0) or progress
+    # A plan that marked readable source opaque is replaced. Accepted units stay.
+    if checkpoints and (not started or (not progress and cp.hidden_source(work, project, read))):
         project.pop('checkpoints', None)
         if project.get('stage') == 'PREPARATION_PLANNED':
             project['stage'] = 'ASSESSMENT_APPROVED'

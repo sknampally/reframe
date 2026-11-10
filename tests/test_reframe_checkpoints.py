@@ -192,6 +192,36 @@ class CheckpointTests(unittest.TestCase):
         self.assertTrue(all(p['end']-p['start']<cp.MAX_LINES for p in parts))
         path.write_bytes(b'\x00binary')
         self.assertTrue(cp.segments('source','binary',path,sha(path))[0]['opaque'])
+        path.write_bytes(b'       IDENTIFICATION DIVISION.\xb3\n')
+        parts = cp.segments('source','member.txt',path,sha(path))
+        self.assertFalse(parts[0].get('opaque'))
+        self.assertIn('\u00b3', cp.evidence_lines(path.read_bytes(), 'source')[0][0])
+
+    def test_non_utf8_source_is_replanned_without_another_call(self):
+        member = self.source / 'MEMBER.TXT'
+        member.write_bytes(b'       IDENTIFICATION DIVISION.\xb3\n')
+        self.source_files.append('MEMBER.TXT')
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = json.loads(plan_path.read_text())
+        plan['units'][0]['segments'][0] = {'area':'source', 'path':'MEMBER.TXT', 'sha256':sha(member),
+                                           'start':0, 'end':0, 'opaque':True, 'bytes':member.stat().st_size}
+        mutated = plan_path.with_name('plan-opaque.json')
+        mutated.write_text(json.dumps(plan))
+        self.project['checkpoints']['plan_path'] = str(mutated.relative_to(self.work))
+        self.project['checkpoints']['plan_sha256'] = sha(mutated)
+        self.project['checkpoints']['units'] = {'U0001': {'status':'BLOCKED', 'role':'executor', 'attempt':1}}
+        self.project['pipeline']['calls'] = 3
+        self.project['pipeline']['status'] = 'BLOCKED'
+        self.project['stage'] = 'BLOCKED'
+        self.project['settings']['max_model_calls'] = 3
+        app.persist(self.work, self.project)
+        result = app.pipeline(self.work, self.project, self.args('validate'), lambda *a: self.fail('No model call'))
+        self.assertEqual(result['status'], 'BLOCKED')
+        self.assertEqual(self.project['pipeline']['calls'], 3)
+        saved = app.read(self.work / self.project['checkpoints']['plan_path'])
+        member_parts = [part for unit in saved['units'] for part in unit['segments'] if part['path'] == 'MEMBER.TXT']
+        self.assertTrue(member_parts and not member_parts[0].get('opaque'))
 
     def test_context_overflow_stops_before_spending_call(self):
         self.plan();self.project['settings']['max_context_bytes']=100

@@ -111,7 +111,7 @@ class GuidedFlowTests(unittest.TestCase):
         ui.yes.side_effect = [True, True, False]
         lines = self.said(ui)
         run(ui)
-        self.assertIn('at least 12 model calls', '\n'.join(lines))
+        self.assertIn('at least 12 more model calls', '\n'.join(lines))
         self.assertEqual(ui.invoke.call_args_list[1].args[0],
                          ['model-budget', '--max-calls', '12', '--by', 'Owner', '--note', 'Cover the paired programs'])
         self.assertEqual(ui.invoke.call_args_list[2].args[0], ['validate'])

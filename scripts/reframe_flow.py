@@ -129,21 +129,23 @@ def package_rows(project):
 def offer_review_budget(ui, project):
     """Say when the paired review does not fit the saved cap. A larger cap is recorded only after a yes."""
     state = project.get('pipeline') or {}
-    if state.get('reason') != 'Insufficient call budget for remaining checkpoint plan' or state.get('calls', 0):
+    if state.get('reason') != 'Insufficient call budget for remaining checkpoint plan':
         ui.say('Verification paused. Inspect status and any budget or evidence blocker before continuing.')
         return None
     needed = state.get('minimum_additional_calls')
-    ui.say('The review plan needs at least ' + str(needed) + ' model calls. The saved cap leaves '
-           + str(state.get('remaining_calls')) + '. No model call was made.')
-    if not isinstance(needed, int) or not state.get('calls', 0) < needed <= 256:
+    spent = state.get('calls', 0) or 0
+    ui.say('The review plan needs at least ' + str(needed) + ' more model calls. The saved cap leaves '
+           + str(state.get('remaining_calls')) + '. ' + str(spent) + ' model calls were already used.')
+    cap = spent + needed if isinstance(needed, int) else None
+    if not isinstance(cap, int) or not spent < cap <= 256:
         ui.say('That plan needs more than 256 model calls. The cap cannot be raised that far. No model call was made.')
         return None
-    if not ui.yes('Raise the model-call cap to ' + str(needed) + ' and start the review?'):
+    if not ui.yes('Raise the model-call cap to ' + str(cap) + ' and start the review?'):
         ui.say('Review stayed within the saved cap. No model call was made.')
         return None
     owner = ui.ask('Accountable owner for this call budget')
     note = ui.ask('Reason for this call budget')
-    if ui.invoke(['model-budget', '--max-calls', str(needed), '--by', owner, '--note', note]) != 0:
+    if ui.invoke(['model-budget', '--max-calls', str(cap), '--by', owner, '--note', note]) != 0:
         return None
     if ui.invoke(['validate']) != 0:
         return None
