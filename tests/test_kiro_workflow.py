@@ -17,6 +17,9 @@ import pilot
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_default_assessment_limit_holds_a_full_export(self):
+        self.assertEqual(flow.DEFAULTS['max_assessment_bytes'], 250000000)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

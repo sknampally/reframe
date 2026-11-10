@@ -24,7 +24,7 @@ DEFAULTS = {
     'kiro_command': ['kiro-cli'], 'executor_model': None, 'reviewer_model': None, 'wireframes_model': None,
     'max_model_calls': 16, 'max_rounds': 2, 'call_timeout_seconds': 600,
     'max_context_bytes': 180000, 'max_read_bytes': 50000,
-    'max_assessment_bytes': 10000000, 'max_source_upload_bytes': 100000000,
+    'max_assessment_bytes': 250000000, 'max_source_upload_bytes': 100000000,
     'poll_seconds': 60, 'max_polls_per_resume': 120, 'allow_new_assessments': False, 'transform': {},
     'max_model_dollars': 0, 'model_dollars_spent': 0,
     'model_rates': {'executor': 0.02, 'reviewer': 0.05, 'wireframes': 0.02},
