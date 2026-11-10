@@ -13,6 +13,6 @@ Before changing code:
 2. If no story covers the change, add one and parent it to an epic. Add an epic labeled `type:epic` when none fits.
 3. Implement that story.
 4. Run the tests that cover the change and report the story link, the result, and anything not verified.
-5. Commit on a feature branch and open a pull request. Every change that reaches the repository goes through that pull request. The repository owner reviews and approves it. Do not push to main, and do not merge.
+5. Commit on `feature/bucket-per-source`. After the tests pass, open a pull request from that branch into `main`. Main accepts a change only through that pull request. The repository owner merges it. Do not push to `main`, do not merge, and do not use another integration branch.
 
 Cursor agents implement stories in this repo. Claude and Codex are model providers the `reframe` command can call during a run. They do not implement the backlog.
