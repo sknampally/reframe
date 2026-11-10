@@ -313,6 +313,41 @@ def synthesis_view(capsule):
                            'questions': checkpoint.get('questions', [])}}
 
 
+def complete_synthesis(spec, capsules, plan):
+    """Keep every reviewed business rule and the exact SME questions in the candidate."""
+    rules = spec.setdefault('rules', [])
+    present = {rule.get('id') for rule in rules if isinstance(rule, dict)}
+    paths = {unit['id']: [part['path'] for part in unit['segments']
+                          if part['area'] == 'source' and not part.get('opaque')]
+             for unit in plan['units']}
+    for capsule in capsules:
+        allowed = paths.get(capsule['unit'], [])
+        for finding in capsule['checkpoint'].get('findings') or []:
+            if finding.get('kind') != 'business_rule' or not finding.get('id') or finding['id'] in present:
+                continue
+            citation = next((item for item in finding.get('citations') or []
+                             if item.get('area') == 'source' and item.get('path') in allowed), {})
+            source_path = citation.get('path') or (allowed[0] if allowed else '')
+            start, end = citation.get('start'), citation.get('end')
+            status = finding.get('status')
+            if status not in {'SOURCE_VERIFIED', 'INFERRED', 'UNKNOWN'}:
+                status = 'UNKNOWN'
+            rules.append({'id': finding['id'], 'statement': finding.get('statement') or finding['id'],
+                          'source_path': source_path,
+                          'source_anchor': f'lines {start}-{end}' if start and end else 'reviewed checkpoint',
+                          'evidence_status': status})
+            present.add(finding['id'])
+    questions, seen = [], set()
+    for capsule in capsules:
+        for question in capsule['checkpoint'].get('questions') or []:
+            if not isinstance(question, dict) or question.get('id') in seen:
+                continue
+            questions.append(question)
+            seen.add(question['id'])
+    spec['questions'] = questions
+    return spec
+
+
 def validate_synthesis(spec, capsules):
     """Reject a specification that drops a rule or question from the reviewed units."""
     required_rules = {f['id'] for c in capsules for f in c['checkpoint']['findings'] if f['kind'] == 'business_rule'}

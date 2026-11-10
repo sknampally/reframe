@@ -302,6 +302,25 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(seen['U0001'], 4)
         self.assertEqual(third['status'], 'AWAITING_VALIDATION_APPROVAL')
 
+    def test_synthesis_restores_rules_and_questions_the_model_omitted(self):
+        question = {'id':'Q1', 'question':'What limit applies', 'impact':'Stops the case',
+                    'owner':'SME', 'blocks':'The case cannot be approved'}
+        plan = {'units':[{'id':'U0001', 'segments':[{'area':'source', 'path':'a.txt'}]}]}
+        capsules = [{'unit':'U0001', 'checkpoint':{
+            'findings':[{'id':'R1', 'kind':'business_rule', 'statement':'Reject a zero amount',
+                         'status':'SOURCE_VERIFIED',
+                         'citations':[{'area':'source', 'path':'a.txt', 'start':4, 'end':6, 'quote':'REJECT'}]}],
+            'questions':[question]}}]
+        spec = {'rules':[{'id':'local', 'statement':'Local rule', 'source_path':'a.txt',
+                          'source_anchor':'lines 1-1', 'evidence_status':'SOURCE_VERIFIED'}],
+                'questions':[{'id':'Q1', 'question':'changed'}]}
+        cp.complete_synthesis(spec, capsules, plan)
+        self.assertEqual({rule['id'] for rule in spec['rules']}, {'local', 'R1'})
+        added = next(rule for rule in spec['rules'] if rule['id'] == 'R1')
+        self.assertEqual(added['source_path'], 'a.txt')
+        self.assertEqual(added['source_anchor'], 'lines 4-6')
+        self.assertEqual(spec['questions'], [question])
+
     def test_spent_cap_before_synthesis_asks_for_two_calls(self):
         self.plan()
         ready = app.pipeline(self.work, self.project, self.args('validate'), self.runtime)
@@ -316,6 +335,18 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(blocked['reason'], 'Insufficient call budget for remaining checkpoint plan')
         self.assertEqual(blocked['minimum_additional_calls'], 2)
         self.project['settings']['max_model_calls'] = self.project['pipeline']['calls'] + 2
+        done = app.pipeline(self.work, self.project, self.args('resume'), self.runtime)
+        self.assertEqual(done['status'], 'AWAITING_VALIDATION_APPROVAL')
+
+    def test_three_invalid_synthesis_candidates_can_resume(self):
+        self.plan()
+        ready = app.pipeline(self.work, self.project, self.args('validate'), self.runtime)
+        self.assertEqual(ready['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.project.pop('specification')
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['pipeline'].update(status='BLOCKED', invalid_candidates=3,
+            reason='Three invalid synthesis candidates; inspect validation feedback')
+        self.project['stage'] = 'BLOCKED'
         done = app.pipeline(self.work, self.project, self.args('resume'), self.runtime)
         self.assertEqual(done['status'], 'AWAITING_VALIDATION_APPROVAL')
 

@@ -1138,9 +1138,11 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         persist(work, project)
         return {'status':'BLOCKED', 'reason':state['reason'], 'calls':state['calls'],
                 'remaining_calls':state['remaining_calls'], 'minimum_additional_calls':2}
-    if (state.get('reason') == 'Insufficient call budget for remaining checkpoint plan'
-            and state['calls'] < project['settings']['max_model_calls']):
+    if (state.get('reason') in {'Insufficient call budget for remaining checkpoint plan',
+                                'Three invalid synthesis candidates; inspect validation feedback'}
+            and state['calls'] < project['settings']['max_model_calls'] and not project.get('specification')):
         state['status'] = 'RUNNING'
+        state['invalid_candidates'] = 0
         state.pop('reason', None)
     require(state['status'] not in {'BLOCKED', 'REWORK_LIMIT'}, 'Resolve missing evidence via feedback before retrying')
     if project.get('specification'):
@@ -1234,6 +1236,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             require(state['reads'].get(key) or checkpoint_paths, 'Executor must inspect source')
             require(any(x['request'].get('area') == 'assessment' and x.get('response') for x in history) or capsules, 'Executor must inspect assessment findings')
             try:
+                if capsules:
+                    cp.complete_synthesis(reply['specification'], capsules, plan)
                 validate_spec(reply.get('specification'), Path(project['source']['root']))
                 if capsules:
                     cp.validate_synthesis(reply['specification'], capsules)
