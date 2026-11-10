@@ -1129,6 +1129,19 @@ def legacy_pipeline(work, project, args, runtime=model_call):
     assessment_dir, assessment_run = verified_assessment(project, label)
     approved(project, 'assessment', project['assessments'][label]['sha256'])
     state = project.setdefault('pipeline', {'round': 1, 'role': 'executor', 'calls': 0, 'contexts': {}, 'reads': {}, 'status': 'RUNNING'})
+    # A spent cap before synthesis is the same question as a short review plan. It is not a failed unit.
+    if state['calls'] >= project['settings']['max_model_calls'] and not project.get('specification'):
+        state['minimum_additional_calls'] = 2
+        state['remaining_calls'] = project['settings']['max_model_calls'] - state['calls']
+        state.update(status='BLOCKED', reason='Insufficient call budget for remaining checkpoint plan')
+        project['stage'] = 'PREPARATION_PLANNED'
+        persist(work, project)
+        return {'status':'BLOCKED', 'reason':state['reason'], 'calls':state['calls'],
+                'remaining_calls':state['remaining_calls'], 'minimum_additional_calls':2}
+    if (state.get('reason') == 'Insufficient call budget for remaining checkpoint plan'
+            and state['calls'] < project['settings']['max_model_calls']):
+        state['status'] = 'RUNNING'
+        state.pop('reason', None)
     require(state['status'] not in {'BLOCKED', 'REWORK_LIMIT'}, 'Resolve missing evidence via feedback before retrying')
     if project.get('specification'):
         return {'status': project['stage'], 'specification': project['specification']}

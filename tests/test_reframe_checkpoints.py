@@ -301,6 +301,23 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(seen['U0001'], 4)
         self.assertEqual(third['status'], 'AWAITING_VALIDATION_APPROVAL')
 
+    def test_spent_cap_before_synthesis_asks_for_two_calls(self):
+        self.plan()
+        ready = app.pipeline(self.work, self.project, self.args('validate'), self.runtime)
+        self.assertEqual(ready['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.project.pop('specification')
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['pipeline']['calls'] = self.project['settings']['max_model_calls']
+        self.project['pipeline']['status'] = 'BLOCKED'
+        self.project['pipeline']['reason'] = 'Total model call budget exhausted'
+        self.project['stage'] = 'BLOCKED'
+        blocked = app.pipeline(self.work, self.project, self.args('resume'), self.runtime)
+        self.assertEqual(blocked['reason'], 'Insufficient call budget for remaining checkpoint plan')
+        self.assertEqual(blocked['minimum_additional_calls'], 2)
+        self.project['settings']['max_model_calls'] = self.project['pipeline']['calls'] + 2
+        done = app.pipeline(self.work, self.project, self.args('resume'), self.runtime)
+        self.assertEqual(done['status'], 'AWAITING_VALIDATION_APPROVAL')
+
     def test_invalid_schema_stops_after_three_calls(self):
         self.plan()
         result=app.pipeline(self.work,self.project,self.args('validate'),lambda *a:{'kind':'checkpoint','summary':'Missing coverage'})
