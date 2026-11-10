@@ -196,6 +196,17 @@ class GuidedTests(unittest.TestCase):
         self.assertEqual(calls[0][4], calls[2][4])
         self.assertNotIn('listed', str(caught.exception))
 
+    def test_role_that_cannot_be_assumed_is_not_called_a_deny_failure(self):
+        def run(command, **kwargs):
+            if command[:3] == ['aws', 's3api', 'create-bucket'] or command[:3] == ['aws', 's3api', 'delete-bucket']:
+                return argparse.Namespace(returncode=0, stdout='', stderr='')
+            return argparse.Namespace(returncode=1, stdout='', stderr='The sandbox role could not be assumed for the deny check.\n')
+        with patch.object(guide, 'opentofu_binary', return_value='tofu'), patch.object(guide, 'profile_uses_sso', return_value=False), patch.object(guide.subprocess, 'run', side_effect=run):
+            with self.assertRaisesRegex(Blocked, 'could not be assumed') as caught:
+                guide.confirm_production_deny('fixture', 'us-east-1')
+        self.assertIn('could not be assumed', caught.exception.hint)
+        self.assertNotIn('not denied', str(caught.exception))
+
     def test_resume_routes_interrupted_model_work_without_aws_calls(self):
         project=dict(self.project,active_assessment='run-1',pending_action={'command':'validate'})
         app.write(self.work/'project.json',project)

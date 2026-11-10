@@ -282,14 +282,17 @@ def confirm_production_deny(profile, region):
         made = subprocess.run(create, capture_output=True, text=True, env=env)
         if made.returncode != 0:
             halt('The permission check could not create its temporary bucket. Setup stopped before a Transform workspace was created.',
-                 'Choose 1 again. /privacy shows the local detail.')
+                 'Choose 1 again. The permission check could not create its temporary bucket.')
         try:
             result = subprocess.run([str(script), probe], capture_output=True, text=True, env=env)
         finally:
             subprocess.run(['aws', 's3api', 'delete-bucket', '--bucket', probe, '--region', region], capture_output=True, text=True, env=env)
     if result.returncode != 0:
-        halt('The sandbox role was not denied for another bucket. Setup stopped before a Transform workspace was created.',
-             'Choose 1 again. /privacy shows the local detail.')
+        if 'could not be assumed' in (result.stderr or ''):
+            message = 'The sandbox role could not be assumed for the deny check. Setup stopped before a Transform workspace was created.'
+        else:
+            message = 'The sandbox role was not denied for another bucket. Setup stopped before a Transform workspace was created.'
+        halt(message, 'Choose 1 again. ' + message)
     print('Read of another bucket was denied.')
 
 

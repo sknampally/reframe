@@ -38,6 +38,7 @@ class Terminal:
         self.demo_index = 0
         self.private = True
         self.session = session
+        self.last_report = None
 
     def say(self, value, style=None):
         self.console.print(Text(clean(value), style=style))
@@ -170,6 +171,7 @@ class Terminal:
             if self.private and key not in {'next_step','model_calls','calls','round','changed_files','semantic_review','hint','units','minimum_calls','calls_consumed','calls_remaining','reviewed_units','opaque_segments','remaining_calls','minimum_additional_calls','total_cap'}:
                 value='Details hidden by presentation privacy; /privacy reveals local results.'
             table.add_row(clean(key.replace('_',' ').title()),clean(value))
+        self.last_report = dict(result)
         self.console.print(Panel(table,title=Text(state.replace('_',' ')),border_style='red' if failed else 'green'))
 
     def help(self):
@@ -229,6 +231,8 @@ class Terminal:
             return True
         if cmd=='privacy':
             self.private=not self.private
+            if self.last_report:
+                self.report(self.last_report)
             self.show_status()
             return True
         if cmd=='menu':

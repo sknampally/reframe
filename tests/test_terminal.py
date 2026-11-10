@@ -130,6 +130,15 @@ class TerminalTests(unittest.TestCase):
         self.assertIn('Choose 3',error.hint)
         self.assertNotIn('saved detail',error.hint)
 
+    def test_privacy_replays_the_blocked_reason_when_no_project_exists(self):
+        ui=self.ui()
+        ui.report({'status':'BLOCKED','reason':'The sandbox role could not be assumed for the deny check.','hint':'Choose 1 again.'})
+        self.assertNotIn('could not be assumed',self.output.getvalue())
+        with patch.object(ui,'project',return_value=None):
+            ui.dispatch('/privacy')
+        self.assertIn('could not be assumed',self.output.getvalue())
+        self.assertFalse(ui.private)
+
     def test_safe_remediation_visible_with_privacy_enabled(self):
         ui=self.ui()
         ui.report({'status':'BLOCKED','reason':'private/path/diagnostic','hint':'Reinstall using a managed Python'})
