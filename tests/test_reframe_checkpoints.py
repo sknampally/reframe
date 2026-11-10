@@ -180,6 +180,7 @@ class CheckpointTests(unittest.TestCase):
             item['checkpoint']['questions'][0]['id'] = item['unit'] + '-Q1'
             view = cp.synthesis_view(item)
             self.assertNotIn('coverage', view['checkpoint'])
+            self.assertNotIn('citations', view['checkpoint']['findings'][0])
             self.assertNotIn('"quote"', json.dumps(view))
             views.append(view)
         catalog = [{'path': f'finding-{i}.json', 'label': f'PROGRAM{i}.txt'} for i in range(360)]

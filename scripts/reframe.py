@@ -1170,8 +1170,9 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             'remaining_model_calls': project['settings']['max_model_calls'] - state['calls'],
             'evidence_notes': state.get('evidence_notes', {}).get(key, [])}
         if capsules:
+            context.pop('assessment_files', None)
             context['reviewed_evidence_units'] = [cp.synthesis_view(capsule) for capsule in capsules]
-            context['checkpoint_instruction'] = 'Use these cited, independently reviewed checkpoints for synthesis. Preserve every business-rule ID and SME question ID. This is full selected-scope integration, not permission to narrow scope. Validate cross-unit dependencies and assessment reconciliation; do not claim runtime equivalence.'
+            context['checkpoint_instruction'] = 'Use these independently reviewed checkpoints for synthesis. Preserve every business-rule ID and SME question ID. This is full selected-scope integration, not permission to narrow scope. Validate cross-unit dependencies and assessment reconciliation; do not claim runtime equivalence.'
         prior_reply = next((area / f'reply-{n}.json' for n in range(state['calls'], 0, -1)
                             if (area / f'reply-{n}.json').exists()), None)
         if role == 'executor' and prior_reply is not None:
@@ -1191,7 +1192,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             context['candidate'] = read(candidate_path)
         if state.get('previous_review'):
             context['previous_review'] = state['previous_review']
-        message = bounded_preparation_context(context, project['settings']['max_context_bytes'])
+        # Reviewed units are larger than one program. Synthesis may use the model window above the per-unit cap.
+        message = bounded_preparation_context(context, 600000 if capsules else project['settings']['max_context_bytes'])
         require_stage_contract(work, 'task')
         if role == 'reviewer':
             require_stage_contract(work, 'review')

@@ -307,8 +307,6 @@ def synthesis_view(capsule):
         findings.append({
             'id': finding.get('id'), 'kind': finding.get('kind'), 'statement': finding.get('statement'),
             'status': finding.get('status'),
-            'citations': [{key: citation.get(key) for key in ('area', 'path', 'start', 'end')}
-                          for citation in finding.get('citations', [])],
         })
     return {'unit': capsule['unit'], 'review_sha256': capsule.get('review_sha256'),
             'checkpoint': {'summary': checkpoint.get('summary', ''), 'findings': findings,
