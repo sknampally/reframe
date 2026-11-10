@@ -95,10 +95,11 @@ class GuidedTests(unittest.TestCase):
             app.write(work/'project.json',project)
         def setup(work,project,args,client):
             bucket_name = outputs.call_args.args[5]
-            self.assertRegex(bucket_name, r'^reframe-\d{8}-[0-9a-f]{8}$')
+            self.assertRegex(bucket_name, r'^reframe-source-\d{8}-[0-9a-f]{4}$')
             self.assertFalse(args.create_bucket)
             self.assertEqual(args.role_arn,'fixture-role-arn')
             self.assertEqual(args.create_workspace, bucket_name)
+            self.assertEqual(args.create_connector, bucket_name)
             self.assertEqual(args.connector_approved,'Fixture admin')
             self.assertEqual(project['settings']['transform']['sandbox_role'],'fixture-sandbox-role')
             self.assertEqual(project['settings']['transform']['upload_prefix'],'s3://fixture-bucket/reframe')
@@ -129,17 +130,22 @@ class GuidedTests(unittest.TestCase):
 
     def test_dated_names_are_reused_for_the_same_folder(self):
         state = self.work / 'sandbox' / 'terraform.tfstate'
-        first = guide.sandbox_identity()
-        self.assertRegex(first[0], r'^reframe-\d{8}-[0-9a-f]{8}$')
+        source = 'https://github.com/example/Sample_App.git'
+        first = guide.sandbox_identity(source)
+        self.assertRegex(first[0], r'^reframe-sample-app-\d{8}-[0-9a-f]{4}$')
         self.assertEqual(first[1], first[0] + '-role')
-        self.assertNotEqual(guide.sandbox_identity()[0], first[0])
-        saved = guide.sandbox_names(state)
+        self.assertLessEqual(len(first[1]), 64)
+        self.assertNotEqual(guide.sandbox_identity(source)[0], first[0])
+        long_name = guide.sandbox_identity('https://github.com/example/' + ('Very-Long-' * 12) + 'Repository')[0]
+        self.assertLessEqual(len(long_name + '-role'), 64)
+        self.assertRegex(long_name, r'^reframe-very-long-.+-\d{8}-[0-9a-f]{4}$')
+        saved = guide.sandbox_names(state, source)
         self.assertEqual(guide.sandbox_names(state), saved)
 
     def test_resume_reads_the_saved_sandbox(self):
         state = self.work / 'sandbox' / 'terraform.tfstate'
         data = self.work / 'sandbox' / '.terraform'
-        bucket_name, role_name = guide.sandbox_names(state)
+        bucket_name, role_name = guide.sandbox_names(state, 'https://github.com/example/sample-app')
         project=dict(self.project, setup={'production_deny_checked': True}, settings={'transform': {
             'upload_prefix': 's3://' + bucket_name + '/reframe', 'sandbox_role': role_name}}, aws={
             'profile': 'fixture', 'region': 'us-east-1', 'bucket': bucket_name,

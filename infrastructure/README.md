@@ -1,6 +1,6 @@
 # Sandbox
 
-Guided start applies this stack once per source. The bucket name is `reframe-YYYYMMDD-` plus eight hex characters, and the role name adds `-role`. OpenTofu state stays in that source's private assessment folder. The role can read and write objects anywhere in its bucket. Analysis output is not limited to the `reframe/` upload prefix. It denies object and bucket reads everywhere else, including production mainframe data in the same account.
+Guided start applies this stack once per source. The bucket, workspace, and connector share one name: `reframe-`, the repository name, the UTC date, and a short id. The role name adds `-role`. OpenTofu state stays in that source's private assessment folder. The role can read and write objects anywhere in its bucket. Analysis output is not limited to the `reframe/` upload prefix. It denies object and bucket reads everywhere else, including production mainframe data in the same account.
 
 OpenTofu does not create the Transform workspace. Guided start does that after apply. The `.tf` files are the shared configuration language OpenTofu runs. Apply writes `.terraform.lock.hcl` beside this stack. That file stays on the machine that applied it, so the framework checkout stays clean for workspace initialization.
 

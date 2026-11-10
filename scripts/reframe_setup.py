@@ -242,26 +242,42 @@ def aws_profile_env(profile, region):
             shutil.rmtree(directory, ignore_errors=True)
 
 
-def sandbox_identity():
-    """Return a dated bucket name and the matching role name. The short id keeps the same day unique."""
+def sandbox_label(bucket):
+    """True when a bucket name is the shared source stem or a previously saved dated id."""
+    current = r'reframe-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{8}-[0-9a-f]{4}'
+    previous = r'reframe-[0-9]{8}-[0-9a-f]{8}'
+    return bool(bucket) and len(bucket) <= 59 and (re.fullmatch(current, bucket) or re.fullmatch(previous, bucket))
+
+
+def sandbox_identity(source):
+    """Return one name for the bucket, workspace, and connector, and the matching role name."""
     from datetime import datetime, timezone
-    bucket = 'reframe-' + datetime.now(timezone.utc).strftime('%Y%m%d') + '-' + secrets.token_hex(4)
-    require(re.fullmatch(r'reframe-[0-9]{8}-[0-9a-f]{8}', bucket), 'Sandbox bucket name was not dated.')
+    from reframe_workspace import repository_name
+    slug = re.sub(r'[^a-z0-9]+', '-', repository_name(source).lower()).strip('-')
+    require(slug, 'Cannot derive a resource name from this source.')
+    date = datetime.now(timezone.utc).strftime('%Y%m%d')
+    suffix = secrets.token_hex(2)
+    room = 59 - len('reframe-') - len(date) - len(suffix) - 2
+    slug = slug[:room].rstrip('-')
+    require(slug, 'Cannot derive a resource name from this source.')
+    bucket = 'reframe-' + slug + '-' + date + '-' + suffix
+    require(sandbox_label(bucket), 'Sandbox name was not tied to the source.')
     return bucket, bucket + '-role'
 
 
-def sandbox_names(state_path):
-    """Read the names saved beside a sandbox, or create a dated pair and save them."""
+def sandbox_names(state_path, source=None):
+    """Read the names saved beside a sandbox, or create a source-named pair and save them."""
     path = Path(state_path).expanduser().resolve().parent / 'names.json'
     if path.is_file():
         payload = json.loads(path.read_text())
         bucket, role = payload.get('bucket_name'), payload.get('role_name')
     else:
-        bucket, role = sandbox_identity()
+        require(source, 'A source is required to name the sandbox.')
+        bucket, role = sandbox_identity(source)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.write_text(json.dumps({'bucket_name': bucket, 'role_name': role}))
         path.chmod(0o600)
-    require(re.fullmatch(r'reframe-[0-9]{8}-[0-9a-f]{8}', bucket or ''), 'Saved sandbox bucket name is not dated.')
+    require(sandbox_label(bucket), 'Saved sandbox bucket name is not tied to its source.')
     require(role == (bucket or '') + '-role', 'Saved sandbox role name does not match its bucket.')
     return bucket, role
 
@@ -291,8 +307,8 @@ def sandbox_outputs(profile, region, apply, state_path=None, data_dir=None, buck
     require(re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d+', region or ''), 'Enter an AWS region name.')
     require((state_path is None) == (data_dir is None), 'Sandbox state and its data directory are saved together.')
     require((bucket_name is None) == (role_name is None), 'Pass the bucket and role names together.')
-    require(bucket_name is None or re.fullmatch(r'reframe-[0-9]{8}-[0-9a-f]{8}', bucket_name),
-            'Sandbox bucket name must include the UTC date.')
+    require(bucket_name is None or sandbox_label(bucket_name),
+            'Sandbox bucket name must include the source and the UTC date.')
     require(role_name is None or role_name == (bucket_name or '') + '-role', 'Sandbox role name must match its bucket.')
     directory = app.FRAMEWORK / 'infrastructure'
     require((directory / 'main.tf').is_file(), 'The sandbox stack is not in this framework checkout.')
@@ -489,13 +505,13 @@ def guided_init(args):
         args.ui_provider = ask('HTML content provider: claude or codex', args.ui_provider)
         require(args.ui_provider in {'claude', 'codex'}, 'Unsupported HTML provider')
         print('Claude defaults: Sonnet 5.5 executor / Opus 5.5 reviewer. Kiro is optional.')
-        print('Reframe will save this source pin and create a new private sandbox for it. The bucket name includes the UTC date. You do not type the bucket name.')
+        print('Reframe will save this source pin and create a new private sandbox for it. The bucket, workspace, and connector share one name from the source and the UTC date. The role adds -role. You do not type the name.')
         if not yes('Continue and finish setup?', default=True):
             print('Setup paused before anything was created. Choose 1 again to continue.')
             return {'status': 'SETUP_INCOMPLETE', 'next_step': 'Choose 1 again. Nothing was created.'}
         state_path = work / 'sandbox' / 'terraform.tfstate'
         data_dir = work / 'sandbox' / '.terraform'
-        bucket_name, role_name = sandbox_names(state_path)
+        bucket_name, role_name = sandbox_names(state_path, args.source)
         bucket, prefix, role, sandbox_arn = sandbox_outputs(
             args.aws_profile, args.region, not state_path.is_file(), state_path, data_dir, bucket_name, role_name)
         confirm_production_deny(args.aws_profile, args.region, data_dir)
@@ -510,6 +526,7 @@ def guided_init(args):
         project['aws']['sandbox_data'] = str(data_dir)
         project.setdefault('setup', {})['production_deny_checked'] = True
         project['setup']['workspace_name'] = bucket_name
+        project['setup']['connector_name'] = bucket_name
         app.persist(work, project)
     select_workspace(work)
     # From here all writes and remote setup share the regular project lock.
@@ -528,7 +545,7 @@ def guided_init(args):
             state_path = project.get('aws', {}).get('sandbox_state')
             data_dir = project.get('aws', {}).get('sandbox_data')
             require(state_path and data_dir, 'This run has no sandbox state. Choose fresh for a new source.')
-            bucket_name, role_name = sandbox_names(state_path)
+            bucket_name, role_name = sandbox_names(state_path, project['source']['repository'])
             bucket, prefix, role, sandbox_arn = sandbox_outputs(
                 project['aws']['profile'], project['aws']['region'], not ready, state_path, data_dir, bucket_name, role_name)
             if not project.get('setup', {}).get('production_deny_checked'):
@@ -538,6 +555,7 @@ def guided_init(args):
             transform['sandbox_role'] = role
             project['aws']['bucket'] = bucket
             project.setdefault('setup', {})['workspace_name'] = bucket_name
+            project['setup']['connector_name'] = bucket_name
             app.persist(work, project)
         client = connect_transform(work, project)
         wid = transform.get('workspace_id') or None
@@ -549,7 +567,7 @@ def guided_init(args):
         setup.attach_connector = cid or None
         setup.create_workspace = None if wid else project.get('setup', {}).get('workspace_name')
         require(wid or setup.create_workspace, 'This run has no workspace name. Choose fresh for a new source.')
-        setup.create_connector = None if cid else 'reframe-source'
+        setup.create_connector = None if cid else project.get('setup', {}).get('connector_name') or project.get('setup', {}).get('workspace_name')
         setup.role_arn = sandbox_arn
         setup.connector_approved = ask('Your name, recorded on the connector confirmation')
         try:

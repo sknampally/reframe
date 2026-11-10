@@ -21,8 +21,12 @@ variable "bucket_name" {
   type        = string
   default     = ""
   validation {
-    condition     = var.bucket_name == "" || can(regex("^reframe-[0-9]{8}-[0-9a-f]{8}$", var.bucket_name))
-    error_message = "Bucket name must be reframe-YYYYMMDD- and eight hex characters."
+    condition = (
+      var.bucket_name == "" ||
+      can(regex("^reframe-[a-z0-9]+(-[a-z0-9]+)*-[0-9]{8}-[0-9a-f]{4}$", var.bucket_name)) ||
+      can(regex("^reframe-[0-9]{8}-[0-9a-f]{8}$", var.bucket_name))
+    )
+    error_message = "Bucket name must be reframe, the source, the UTC date, and a short id."
   }
 }
 
@@ -31,7 +35,11 @@ variable "role_name" {
   type        = string
   default     = ""
   validation {
-    condition     = var.role_name == "" || can(regex("^reframe-[0-9]{8}-[0-9a-f]{8}-role$", var.role_name))
-    error_message = "Role name must be the dated bucket name plus -role."
+    condition = (
+      var.role_name == "" ||
+      can(regex("^reframe-[a-z0-9]+(-[a-z0-9]+)*-[0-9]{8}-[0-9a-f]{4}-role$", var.role_name)) ||
+      can(regex("^reframe-[0-9]{8}-[0-9a-f]{8}-role$", var.role_name))
+    )
+    error_message = "Role name must be the shared sandbox name plus -role."
   }
 }
