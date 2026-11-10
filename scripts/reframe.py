@@ -1345,7 +1345,7 @@ def package(work, project):
     require_stage_contract(work, 'approval')
     verify_source(project)
     require_skip_acceptance(project)
-    _, assessment_run = verified_assessment(project, project['selected'])
+    assessment_dir, assessment_run = verified_assessment(project, project['selected'])
     spec = read(spec_path(work, project))
     approved(project, 'validation', digest({'specification': project['specification']['sha256'], 'decisions': project['decisions']}))
     approved(project, 'specifications', site_fingerprint(work, project))
@@ -1396,7 +1396,7 @@ def package(work, project):
     shutil.copyfile(work / project['site']['directory'] / 'api-contracts.json', destination / 'api-contracts.json')
     paths = [item['path'] for item in assessment_run.get('assessment_index', []) if isinstance(item, dict) and isinstance(item.get('path'), str)]
     paths += [rule['source_path'] for rule in spec['rules'] if isinstance(rule.get('source_path'), str)]
-    handoff.write_into(destination, spec['rules'], paths, read(destination / 'api-contracts.json'), write)
+    handoff.write_into(destination, spec['rules'], paths, read(destination / 'api-contracts.json'), write, assessment_dir)
     shutil.copyfile(work / project['preparation_report']['path'], destination / 'sme-architect-review.html')
     write(destination / 'provenance.json', {'source': {k: v for k, v in project['source'].items() if k != 'root'},
         'scope': project['scope'], 'framework_commit': project['framework_commit'],

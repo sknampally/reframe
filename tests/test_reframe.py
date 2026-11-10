@@ -218,6 +218,8 @@ class PreparationTests(unittest.TestCase):
             self.assertEqual(json.loads(archive.read('parallel-validation.json'))['status'], 'NOT RUN')
             self.assertEqual(json.loads(archive.read('governance.json'))['retirement_status'], 'NOT_READY')
             self.assertTrue(json.loads(archive.read('extraction-reading.json'))['source_stays_pinned'])
+            self.assertEqual(json.loads(archive.read('rule-coverage.json'))['status'], 'COMPLETE')
+            self.assertEqual(json.loads(archive.read('capability-map.json'))['acceptance'], 'PROPOSAL')
         self.assertEqual(self.project['stage'], 'PACKAGED')
         with zipfile.ZipFile(result['archive']) as archive:
             self.assertEqual(json.loads(archive.read('provenance.json'))['pins']['prompt_hash'], app.preparation_protocol_hash())

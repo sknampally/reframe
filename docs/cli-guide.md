@@ -590,7 +590,8 @@ marked `AWS_ASSUMED`; acceptance criteria stay `NOT RUN`. The ZIP also carries
 `modernization-sequence.json`, an unassigned capability map, an unrun
 parallel-validation plan, inventories of the copybook and batch members the
 assessment named, a governance checklist, a guide for reading extraction
-findings without changing the source, and one skill for discovery, rules,
+findings without changing the source, a coverage row for every imported rule,
+any requirements or traceability file copied unchanged, and one skill for discovery, rules,
 data, API, screens, batch, tests, risk, and extraction findings.
 
 The named owner, reason and assessment fingerprint are recorded as

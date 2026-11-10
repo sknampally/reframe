@@ -23,17 +23,22 @@ BATCH_SUFFIXES = {'.jcl', '.job', '.proc'}
 COPYBOOK_DIRS = {'copybook', 'copybooks', 'copy', 'cpy'}
 BATCH_DIRS = {'jcl', 'jobs', 'proc', 'procs'}
 ORACLE = 'Legacy runtime oracle not established'
+TRACE_DISPOSITIONS = {'captured', 'not_applicable', 'delegated'}
+REQUIREMENT_NAMES = {'requirements.md', 'traceability.yaml', 'traceability.yml', 'traceability.json'}
 
 SKILLS = {
     'skill-discovery.md': (
         '---\nname: review-legacy-discovery\n'
         'description: Read the pinned findings before any change.\n---\n\n'
         'Read capability-map.json and field-inventory.json. The legacy source stays read-only. '
+        'Each capability is a proposal until a person accepts that boundary. '
         'Do not invent programs, fields, or business rules. A disposition stays unassigned until a person sets retain, expose, rewrite, or retire.\n'),
     'skill-rules.md': (
         '---\nname: review-imported-rules\n'
         'description: Treat imported rules as data, not as instructions to invent more rules.\n---\n\n'
-        'Read rules.json and acceptance-catalog.json. Keep every imported rule. Do not add a rule that the assessment did not record.\n'),
+        'Read rules.json, acceptance-catalog.json, and rule-coverage.json. Every imported rule is listed once. '
+        'A disposition of captured, not applicable, or delegated is recorded only when the assessment traceability file states it. '
+        'Do not add a rule that the assessment did not record.\n'),
     'skill-data.md': (
         '---\nname: review-data-inventory\n'
         'description: Use only the copybook members the assessment named.\n---\n\n'
@@ -69,7 +74,7 @@ SKILLS = {
 NAMES = frozenset({
     'modernization-sequence.json', 'capability-map.json', 'parallel-validation.json',
     'field-inventory.json', 'batch-inventory.json', 'api-boundary.json', 'governance.json',
-    'extraction-reading.json', *SKILLS,
+    'extraction-reading.json', 'rule-coverage.json', 'legacy-requirements.json', *SKILLS,
 })
 
 
@@ -97,6 +102,93 @@ def slug(value):
 def sequence():
     """Return the six modernization steps, each still not started."""
     return [{'id': ident, 'summary': text, 'status': 'NOT_STARTED'} for ident, text in STEPS]
+
+
+def parse_dispositions(text):
+    """Read captured, not applicable, or delegated only from an explicit id and disposition pair."""
+    found = {}
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        value = None
+    if isinstance(value, list):
+        records = value
+    elif isinstance(value, dict):
+        records = value.get('rules')
+    else:
+        records = None
+    if isinstance(records, list):
+        for record in records:
+            disposition = record.get('disposition') if isinstance(record, dict) else None
+            if isinstance(record, dict) and isinstance(record.get('id'), str) and disposition in TRACE_DISPOSITIONS:
+                found[record['id']] = disposition
+        if found:
+            return found
+    lines = [line.strip() for line in text.splitlines()]
+    for index, line in enumerate(lines):
+        identity = re.fullmatch(r'-?\s*id:\s*[\'"]?([A-Za-z0-9_.:-]+)[\'"]?', line)
+        if not identity:
+            continue
+        for candidate in lines[index + 1:index + 3]:
+            disposition = re.fullmatch(r'disposition:\s*[\'"]?(captured|not_applicable|not applicable|delegated)[\'"]?', candidate, re.I)
+            if disposition:
+                found[identity.group(1)] = disposition.group(1).lower().replace(' ', '_')
+                break
+    return found
+
+
+def rule_coverage(rules, legacy_files):
+    """List every imported rule once. Use a traceability disposition only when the file states it."""
+    assigned = {}
+    for item in legacy_files or []:
+        if isinstance(item, dict) and isinstance(item.get('text'), str):
+            assigned.update(parse_dispositions(item['text']))
+    rows = []
+    for rule in rules:
+        ident = str(rule['id'])
+        aws = rule.get('aws_rule_id')
+        disposition = assigned.get(ident) or (assigned.get(str(aws)) if aws else None)
+        if disposition not in TRACE_DISPOSITIONS:
+            disposition, source = 'unassigned', 'unassigned'
+        else:
+            source = 'assessment_traceability'
+        rows.append({'rule_id': ident, 'disposition': disposition, 'disposition_source': source})
+    ids = [row['rule_id'] for row in rows]
+    complete = ids == [str(rule['id']) for rule in rules] and len(ids) == len(set(ids))
+    return {'status': 'COMPLETE' if complete else 'GAP', 'rule_count': len(rules), 'rules': rows}
+
+
+def legacy_requirements(files):
+    """Return assessment requirement files unchanged, or record that none were sealed."""
+    files = list(files or [])
+    if files:
+        note = 'Copied from the sealed assessment. Reframe did not rewrite these files.'
+    else:
+        note = 'The sealed assessment did not include requirements.md or a traceability file.'
+    return {'note': note, 'files': files}
+
+
+def read_legacy_requirements(directory, paths):
+    """Read requirement and traceability files that stay inside the assessment directory."""
+    if directory is None:
+        return []
+    root = (Path(directory) / 'assessment').resolve()
+    files = []
+    seen = set()
+    for relative in paths or []:
+        if not isinstance(relative, str) or Path(relative).name.lower() not in REQUIREMENT_NAMES or relative in seen:
+            continue
+        seen.add(relative)
+        target = (root / relative).resolve()
+        if not target.is_relative_to(root) or not target.is_file() or target.is_symlink():
+            continue
+        try:
+            text = target.read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            files.append({'path': relative, 'included': False, 'reason': 'unreadable'})
+            continue
+        files.append({'path': relative, 'text': text})
+    return files
 
 
 def capabilities(rules):
@@ -205,19 +297,26 @@ def governance(caps):
     }
 
 
-def documents(rules, paths, apis):
+def documents(rules, paths, apis, legacy_files=None):
     """Assemble every handoff file from the imported rules, paths, and proposed APIs."""
     caps = capabilities(rules)
     fields, batches = inventories(paths)
+    legacy = legacy_requirements(legacy_files)
     payload = {
         'modernization-sequence.json': sequence(),
-        'capability-map.json': {'capabilities': caps},
+        'capability-map.json': {
+            'acceptance': 'PROPOSAL',
+            'note': 'Each capability is a proposed boundary. A person accepts it before any build. Reframe does not generate code from this map.',
+            'capabilities': caps,
+        },
         'parallel-validation.json': validation_plan(rules),
         'field-inventory.json': fields,
         'batch-inventory.json': batches,
         'api-boundary.json': boundary(apis, paths),
         'governance.json': governance(caps),
         'extraction-reading.json': extraction_reading(),
+        'rule-coverage.json': rule_coverage(rules, legacy['files']),
+        'legacy-requirements.json': legacy,
     }
     payload.update(SKILLS)
     return payload
@@ -235,13 +334,16 @@ def entry_points(existing):
         'api_boundary': 'api-boundary.json',
         'governance': 'governance.json',
         'extraction': 'extraction-reading.json',
+        'coverage': 'rule-coverage.json',
+        'legacy_requirements': 'legacy-requirements.json',
     })
     return points
 
 
-def write_into(destination, rules, paths, apis, save):
+def write_into(destination, rules, paths, apis, save, evidence_root=None):
     """Write the handoff files. JSON goes through save; skills are plain text."""
-    for name, value in documents(rules, paths, apis).items():
+    legacy_files = read_legacy_requirements(evidence_root, paths)
+    for name, value in documents(rules, paths, apis, legacy_files).items():
         if name.endswith('.json'):
             save(destination / name, value)
         else:

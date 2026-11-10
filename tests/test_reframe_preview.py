@@ -76,6 +76,8 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(json.loads(z.read('governance.json'))['retirement_status'],'NOT_READY')
             self.assertIn('skill-risk.md',z.namelist())
             self.assertTrue(json.loads(z.read('extraction-reading.json'))['source_stays_pinned'])
+            self.assertEqual(json.loads(z.read('rule-coverage.json'))['status'], 'COMPLETE')
+            self.assertEqual(json.loads(z.read('capability-map.json'))['acceptance'], 'PROPOSAL')
             self.assertIn('COPY-expanded',z.read('skill-extraction.md').decode())
         second=preview.run(self.work,self.project,self.arguments,app,lambda *a:self.fail('Reuse generated design'))
         self.assertEqual(second['model_calls'],1)
