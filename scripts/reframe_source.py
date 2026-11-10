@@ -10,6 +10,7 @@ from pilot import require, sha, git
 
 
 def extract_archive(archive, destination, limit=100000000):
+    """Unpack a source ZIP into a new directory and reject an unsafe member."""
     require(not destination.exists(), 'Source snapshot destination already exists')
     with zipfile.ZipFile(archive) as bundle:
         entries = bundle.infolist()
@@ -42,6 +43,7 @@ def extract_archive(archive, destination, limit=100000000):
 
 
 def from_s3(uri, work, profile, region, limit=100000000):
+    """Download one S3 ZIP, unpack it, and record a git index tree as the source revision."""
     parsed = urlsplit(uri)
     require(parsed.scheme == 's3' and parsed.netloc and parsed.path.lower().endswith('.zip')
             and not parsed.query and not parsed.fragment, 'Supply an S3 ZIP object URI')
@@ -49,6 +51,7 @@ def from_s3(uri, work, profile, region, limit=100000000):
     if profile: command += ['--profile', profile]
     if region: command += ['--region', region]
     def aws(*args):
+        """Call the AWS CLI and return JSON."""
         result = subprocess.run(command + list(args), capture_output=True, text=True, timeout=300)
         require(result.returncode == 0, 'S3 source access failed; verify the selected AWS login and object permissions')
         return json.loads(result.stdout)

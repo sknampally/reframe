@@ -22,6 +22,7 @@ def record_framework_update(ui, project):
 
 
 def run(ui):
+    """Walk a saved project from setup through assessment, skip or review, approvals, and the package."""
     from reframe_setup import workspace
     project = ui.project()
     if project:

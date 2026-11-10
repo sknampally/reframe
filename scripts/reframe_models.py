@@ -16,11 +16,13 @@ class ProviderSafetyRefusal(Blocked):
 
 
 def preparation_protocol_hash():
+    """Hash the executor and reviewer prompts so a changed protocol is visible."""
     root = Path(__file__).resolve().parent.parent / 'prompts/pipeline'
     return hashlib.sha256(b'\0'.join((root/name).read_bytes() for name in ('executor.md','reviewer.md'))).hexdigest()
 
 
 def check_provider_refusals(directory):
+    """Stop when Claude refused a request and that receipt has not been reviewed."""
     recovery_path = directory / 'provider-recovery.json'
     recovery = json.loads(recovery_path.read_text()) if recovery_path.exists() else {}
 
@@ -62,6 +64,7 @@ def require_claude_login():
 
 
 def call(provider, run, directory, role, message):
+    """Run Claude, Codex, or Kiro for one role and return its JSON object. The process gets no AWS tools."""
     require(provider in {'kiro', 'claude', 'codex'}, 'Unknown provider')
     if provider == 'kiro':
         # Kiro's parser supports the legacy protocol; use a temporary wrapper kind.

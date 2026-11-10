@@ -15,10 +15,12 @@ from pilot import Blocked, require
 
 
 def active_file():
+    """Return the private file that names the active workspace."""
     return Path.home() / '.config' / 'mainframe-modernize' / 'active.json'
 
 
 def select_workspace(work):
+    """Remember this workspace as the active one."""
     from kiro_workflow import private_save
     path = active_file()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -26,12 +28,14 @@ def select_workspace(work):
 
 
 def workspace():
+    """Return the active workspace, or stop when none has been selected."""
     path = active_file()
     require(path.is_file(), 'Run reframe init first, or select an existing --workspace')
     return Path(json.loads(path.read_text())['workspace']).expanduser().resolve()
 
 
 def ask(label, default=None):
+    """Ask for one required value. An empty answer keeps the default."""
     value = input(label + (f' [{default}]' if default else '') + ': ').strip()
     result = value or default
     require(result, 'A value is required: ' + label)
@@ -39,12 +43,14 @@ def ask(label, default=None):
 
 
 def yes(label, default=False):
+    """Ask a yes or no question."""
     answer = input(label + (' [Y/n]: ' if default else ' [y/N]: ')).strip().lower()
     require(answer in {'', 'y', 'yes', 'n', 'no'}, 'Answer yes or no')
     return answer in {'y', 'yes'} or (not answer and default)
 
 
 def optional(label, default=''):
+    """Ask for one optional value. JSON and multiple lines are rejected."""
     value = input(label + (f' [{default}]' if default else '') + ': ').strip() or default
     require('\n' not in value and '\r' not in value and not value.startswith(('{','[')),
             'Enter one value, not JSON or multiple lines. No setup operation was requested.')
@@ -52,6 +58,7 @@ def optional(label, default=''):
 
 
 def connect_arguments(path):
+    """Read a private Transform sign-in file. An MCP server configuration is rejected."""
     candidate = Path(path).expanduser()
     require(candidate.is_file(), 'Enter a path to an existing private configure-arguments file, not pasted JSON.')
     value = json.loads(candidate.read_text())
@@ -61,6 +68,7 @@ def connect_arguments(path):
 
 
 def sso_defaults(project):
+    """Read the Identity Center start URL and region from the selected AWS profile."""
     config = configparser.RawConfigParser()
     config.read(Path(os.environ.get('AWS_CONFIG_FILE', str(Path.home()/'.aws/config'))))
     profile = (project['aws'].get('profile') or '').strip()
@@ -72,6 +80,7 @@ def sso_defaults(project):
 
 
 def connect_transform(work, project, client=None):
+    """Confirm the Transform connection, or start the browser sign-in and check it again."""
     import kiro_workflow as flow
     client = client or flow.Transform(project['settings']['transform'], work)
     print('Checking the AWS Transform application connection...')
@@ -111,6 +120,7 @@ def connect_transform(work, project, client=None):
 
 
 def command_ok(command):
+    """True when a command exits successfully."""
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=45)
         return result.returncode == 0
@@ -119,6 +129,7 @@ def command_ok(command):
 
 
 def installation_hint(tool):
+    """Return the install page for a missing tool."""
     urls = {
         'git': 'https://git-scm.com/downloads',
         'aws': 'https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html',
@@ -132,6 +143,7 @@ def installation_hint(tool):
 
 
 def halt(message, hint):
+    """Stop setup and attach the next action the person should take."""
     error = Blocked(message)
     error.hint = hint
     raise error
@@ -204,6 +216,7 @@ def opentofu_binary():
 
 
 def profile_uses_sso(profile):
+    """True when the AWS profile is configured for Identity Center."""
     result = subprocess.run(['aws', '--profile', profile, 'configure', 'get', 'sso_role_name'], capture_output=True, text=True)
     return result.returncode == 0 and bool(result.stdout.strip())
 
@@ -241,6 +254,7 @@ def sandbox_outputs(profile, region, apply):
         env.update(TF_IN_AUTOMATION='1', TF_INPUT='0', TOFU=tofu)
         env['PATH'] = str(Path(tofu).parent) + os.pathsep + env.get('PATH', '')
         def run(args, capture=False):
+            """Run one OpenTofu command and stop setup if it does not finish."""
             print('Running ' + tofu + ' ' + args[0] + '...')
             result = subprocess.run([tofu, '-chdir=' + str(directory), *args], env=env, text=True, capture_output=capture)
             if result.returncode != 0:
@@ -307,6 +321,7 @@ def choose_aws_profile():
 
 
 def ensure_aws_login(project):
+    """Confirm the selected AWS profile can call AWS, and say how to sign in when it cannot."""
     try:
         return _ensure_aws_login(project)
     except Blocked:
@@ -368,6 +383,7 @@ def checks(project, work=None):
 
 
 def guided_init(args):
+    """Ask for the source, the AWS profile, and the sandbox, then save the project."""
     import reframe as app
     require(sys.stdin.isatty(), 'Interactive setup needs a terminal; supply --workspace, --source and --scope for scripted init')
     print('Reframe setup. A new project creates the sandbox, checks the production deny, and connects Transform.')
@@ -459,6 +475,7 @@ def guided_init(args):
 
 
 def refresh_unstarted_baseline(work, project):
+    """Point an unstarted run at the current Reframe commit."""
     import reframe as app
     previous = project.get('framework_commit')
     if not previous: return
@@ -485,6 +502,7 @@ def refresh_unstarted_baseline(work, project):
 
 
 def next_step(project):
+    """Return the command a person should run for the current stage."""
     if project['stage'] == 'PROVIDER_REVIEW_REQUIRED':
         return 'Review the private provider refusal and request content; automatic model retries are stopped.'
     stage = project['stage']

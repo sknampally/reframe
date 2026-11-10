@@ -20,27 +20,32 @@ class Blocked(Exception):
 
 
 def require(condition, message):
+    """Stop the operation when a condition is false."""
     if not condition:
         raise Blocked(message)
 
 
 def sha(path):
+    """Return the SHA-256 of a file."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def save(path, value):
+    """Write JSON by replacing a temporary file, so a crash cannot leave a partial record."""
     temporary = path.with_suffix(path.suffix + '.tmp')
     temporary.write_text(json.dumps(value, indent=2) + '\n')
     temporary.replace(path)
 
 
 def git(root, *args):
+    """Run one git command in a checkout and return its output."""
     result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True)
     require(result.returncode == 0, 'Source Git inspection failed: ' + result.stderr.strip())
     return result.stdout.strip()
 
 
 def baseline(task):
+    """Confirm the source and the framework still match the pinned commits and are clean."""
     root = Path(task['source']['root'])
     require(git(root, 'rev-parse', 'HEAD') == task['source']['commit'], 'Source commit changed')
     require(git(root, 'remote', 'get-url', 'origin') == task['source']['repository'], 'Source origin changed')
@@ -52,6 +57,7 @@ def baseline(task):
 
 
 def tracked_file(root, name):
+    """Resolve a source path that stays inside the pinned checkout and is tracked by git."""
     require(not (root / name).is_symlink(), 'Source symlink rejected')
     path = (root / name).resolve()
     require(path.is_relative_to(root.resolve()), 'Source path escapes the pinned checkout')
@@ -63,6 +69,7 @@ def tracked_file(root, name):
 
 @contextmanager
 def locked(manifest):
+    """Hold the task lock and reload the manifest and state for one operation."""
     manifest = manifest.resolve()
     require(manifest.is_file(), 'Task manifest not found; do not substitute another workspace')
     with (manifest.parent / '.pilot.lock').open('a') as lock:
@@ -78,6 +85,7 @@ def locked(manifest):
 
 
 def verify_handoff(task, state, directory):
+    """Confirm the reviewer handoff still matches the sealed artifacts and the pinned baseline."""
     require(state['executor_status'] == 'READY_FOR_REVIEW', 'Executor is not READY_FOR_REVIEW')
     handoff = directory / 'reviewer-handoff.json'
     require(handoff.is_file() and sha(handoff) == state.get('handoff_sha256'), 'Handoff missing or changed')
@@ -90,6 +98,7 @@ def verify_handoff(task, state, directory):
 
 
 def charge(task, state, role, command):
+    """Count one operation against the role budget and stop when that budget is spent."""
     session = state['sessions'].get(role)
     require(session is not None and session['status'] == 'ACTIVE', 'Begin an active ' + role + ' session first')
     if time.time() >= session['deadline_epoch'] or session['operations'] >= task['budget']['max_operations_per_role']:
@@ -102,6 +111,7 @@ def charge(task, state, role, command):
 
 
 def init(args):
+    """Create a task manifest and state outside the source checkout."""
     workspace, source = Path(args.workspace).resolve(), Path(args.source).resolve()
     framework = Path(__file__).resolve().parent.parent
     require(workspace.is_dir() and source.is_dir(), 'Workspace and source directories must exist')
@@ -145,6 +155,7 @@ def init(args):
 
 
 def operate(args):
+    """Run one metered pilot command: status, begin, read, search, put, seal, or finish-review."""
     manifest = Path(args.task)
     with locked(manifest) as (task, state, directory):
         role, command = args.role, args.command
@@ -259,6 +270,7 @@ def operate(args):
 
 
 def main():
+    """Parse the pilot command and print JSON. A blocked operation exits with status 2."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     create = commands.add_parser('init')
