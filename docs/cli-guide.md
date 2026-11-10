@@ -60,7 +60,7 @@ assessment/approval exists, setup can explicitly confirm a new framework baselin
 while keeping the pinned source unchanged. Existing assessment baselines are never
 repinned.
 
-After setup, stay on menu **1**. Confirm the upload when asked. That is the job. When the findings are sealed, approve them with your name, a short rationale, and confirmation that they match the pinned source. The next prompt is `skip` or `review`. Enter selects **skip**, which writes the HTML wireframes and the AI-DLC ZIP. `review` is the longer route below.
+After setup, stay on menu **1**. Confirm the upload when asked. That is the job. When the findings are sealed, approve them with your name, a short rationale, and confirmation that they match the pinned source. Before each approval question, and after the skip draft and the approved package are written, the CLI lists every file to review, its format, and its path. The next prompt is `skip` or `review`. Enter selects **skip**, which writes the HTML wireframes and the AI-DLC ZIP. `review` is the longer route below.
 
 The same result from the shell, after assessment approval:
 
