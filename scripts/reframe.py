@@ -42,6 +42,51 @@ def name(value):
     return value
 
 
+def saved_progress(work):
+    """Read the saved assessment plan without taking the workspace lock."""
+    work = Path(work)
+    project = read(work / 'project.json')
+    label = project.get('active_assessment')
+    record = (project.get('assessments') or {}).get(label) if label else None
+    progress = {'active_assessment': label, 'saved_status': None, 'reason': None, 'steps': []}
+    if not record:
+        return progress
+    directory = Path(record['directory'])
+    run = read(directory / 'run.json')
+    progress['saved_status'] = run.get('status')
+    progress['reason'] = run.get('reason')
+    snapshot = directory / 'assessment-status.json'
+    if snapshot.is_file():
+        steps = (read(snapshot).get('plan') or {}).get('steps') or []
+        progress['steps'] = [{'name': step.get('stepName'), 'status': step.get('status')}
+                             for step in steps if isinstance(step, dict) and step.get('stepName')]
+    return progress
+
+
+def watcher_owns(work):
+    """True when another process already holds the workspace lock."""
+    path = Path(work) / '.project.lock'
+    if not (Path(work) / 'project.json').is_file():
+        return False
+    with path.open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        return False
+
+
+def watcher_busy(work):
+    """The watcher is already staying with the job. Name the step that is running."""
+    running = [step['name'] for step in saved_progress(work)['steps']
+               if step.get('status') in {'IN_PROGRESS', 'RUNNING', 'EXECUTING'}]
+    error = Blocked('The assessment watcher already owns this workspace.')
+    error.hint = (('Current step: ' + ', '.join(running) + '. ') if running else 'No plan step is in progress. ')
+    error.hint += 'Choose 3 for every saved step. Do not start another assessment.'
+    return error
+
+
 @contextlib.contextmanager
 def locked(work):
     require((work / 'project.json').is_file(), 'Initialize this workspace first')
@@ -49,7 +94,7 @@ def locked(work):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise Blocked('Another command owns this workspace; try status or resume later') from error
+            raise watcher_busy(work) from error
         yield read(work / 'project.json')
 
 
@@ -1578,6 +1623,7 @@ def main(argv=None, reporter=None):
             project = read(work / 'project.json')
             result = {'status': project['stage'], 'source_commit': project['source']['commit'],
                       'assessments': {k: read(Path(v['directory']) / 'run.json')['status'] for k, v in project['assessments'].items()},
+                      'progress': saved_progress(work),
                       'approvals': list(project['approvals']), 'package': project.get('package'), 'next_step': next_step(project)}
             if project.get('checkpoints'):
                 import reframe_checkpoints as cp

@@ -107,6 +107,38 @@ class Terminal:
                 self.assessment_status(project)
         self.menu()
 
+    def show_status(self):
+        """Show the saved plan without redrawing the welcome screen or taking the workspace lock."""
+        project = self.project()
+        if not project:
+            self.console.print(Panel('No saved project is selected. Choose 1 to set one up, or /workspace to select one.',
+                                     title='Project status', border_style='blue'))
+            return
+        from reframe_setup import workspace
+        import reframe
+        try:
+            root = workspace()
+            progress = reframe.saved_progress(root)
+            owned = reframe.watcher_owns(root)
+        except (Blocked, OSError, ValueError, KeyError, RuntimeError) as error:
+            self.report({'status': 'BLOCKED', 'reason': str(error), 'next_step': 'Choose 1 or /workspace'})
+            return
+        lines = ['State  ' + str(project.get('stage', 'UNKNOWN')).replace('_', ' ')]
+        label = progress.get('active_assessment') or 'none'
+        lines.append('Assessment  ' + str(label) + '  ' + str(progress.get('saved_status') or 'not started'))
+        lines.append('Watcher  already staying with this job' if owned else 'Watcher  not running')
+        steps = progress.get('steps') or []
+        if steps:
+            for step in steps:
+                lines.append('  ' + str(step.get('name')) + '  ' + str(step.get('status')))
+        else:
+            lines.append('No plan steps recorded yet.')
+        if not self.private and progress.get('reason'):
+            lines.append('Detail  ' + str(progress.get('reason')))
+        elif self.private:
+            lines.append('Presentation privacy ON · /privacy reveals the saved detail')
+        self.console.print(Panel('\n'.join(clean(line) for line in lines), title='Project status', border_style='blue'))
+
     def assessment_status(self, project):
         from reframe import read
         rows=[]
@@ -195,9 +227,14 @@ class Terminal:
             else:
                 self.console.print(Panel('/guide setup       Installation, authentication and PATH\n/guide workflow    Setup through implementation package\n/guide comparison  Two-run assessment experiment',title='Built-in guides',border_style='blue'))
             return True
-        if cmd=='privacy':self.private=not self.private;self.dashboard();return True
-        if cmd in {'menu','status'}:
+        if cmd=='privacy':
+            self.private=not self.private
+            self.show_status()
+            return True
+        if cmd=='menu':
             self.dashboard();return True
+        if cmd=='status':
+            self.show_status();return True
         if cmd in {'demo','live'}:
             self.demo=cmd=='demo';self.dashboard();return True
         if cmd=='artifacts':self.artifacts();return True
