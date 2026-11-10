@@ -25,7 +25,8 @@ Return one JSON object (at most 14000 UTF-8 bytes):
 Replace U0001 with unit_id. Each supplied area/path/start/end must occur exactly
 once in coverage. IDs must be unique within the unit and start with unit_id + '-'.
 Findings may be empty for documents with no relevant behavior, but explain that in
-coverage. Every finding needs an exact quotation from the supplied ranges. Every
+coverage. Every finding needs a quote copied exactly from the supplied lines. The
+quote may be a contiguous excerpt of those lines. Do not paraphrase. Every
 unverified finding or NEEDS_SME coverage requires an owned question. Questions are
 public review artifacts, not internal reasoning. Apply prior reviewer corrections.
 If a usable checkpoint cannot be produced, return {"kind":"blocked","reason":"..."}.

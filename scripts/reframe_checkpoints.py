@@ -287,7 +287,8 @@ def validate_checkpoint(reply, unit, supplied):
             require(match is not None, 'Citation must refer to a supplied evidence range')
             numbered = match['text'].splitlines()
             quoted = '\n'.join(line.split(': ', 1)[1] for line in numbered[citation['start']-match['start']:citation['end']-match['start']+1])
-            require(citation.get('quote') == quoted and quoted.strip(), 'Citation quote does not match evidence')
+            excerpt = citation.get('quote')
+            require(isinstance(excerpt, str) and excerpt.strip() and excerpt in quoted, 'Citation quote does not match evidence')
         require(finding['status'] != 'SOURCE_VERIFIED' or any(c['area'] == 'source' for c in citations), 'AWS claims alone are not source verified')
     qids = set()
     for question in questions:
@@ -296,6 +297,22 @@ def validate_checkpoint(reply, unit, supplied):
         qids.add(question['id'])
     require(not any(c['status'] == 'NEEDS_SME' for c in coverage) or questions, 'Unresolved coverage requires an SME question')
     require(not any(f['status'] != 'SOURCE_VERIFIED' for f in findings) or questions, 'Unverified findings require SME questions')
+
+
+def synthesis_view(capsule):
+    """The findings and questions synthesis needs, without coverage notes or quotation text."""
+    checkpoint = capsule['checkpoint']
+    findings = []
+    for finding in checkpoint.get('findings', []):
+        findings.append({
+            'id': finding.get('id'), 'kind': finding.get('kind'), 'statement': finding.get('statement'),
+            'status': finding.get('status'),
+            'citations': [{key: citation.get(key) for key in ('area', 'path', 'start', 'end')}
+                          for citation in finding.get('citations', [])],
+        })
+    return {'unit': capsule['unit'], 'review_sha256': capsule.get('review_sha256'),
+            'checkpoint': {'summary': checkpoint.get('summary', ''), 'findings': findings,
+                           'questions': checkpoint.get('questions', [])}}
 
 
 def validate_synthesis(spec, capsules):

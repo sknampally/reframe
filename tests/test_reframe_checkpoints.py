@@ -160,8 +160,31 @@ class CheckpointTests(unittest.TestCase):
         directory,_=app.verified_assessment(self.project,self.project['selected'])
         supplied=cp.evidence(unit,self.project,directory)
         candidate=self.checkpoint({'unit_id':unit['id'],'evidence':supplied})
+        full = candidate['findings'][0]['citations'][0]['quote']
+        candidate['findings'][0]['citations'][0]['quote'] = full[:12]
+        cp.validate_checkpoint(candidate, unit, supplied)
         candidate['findings'][0]['citations'][0]['quote']='invented'
         with self.assertRaisesRegex(Blocked,'does not match'):cp.validate_checkpoint(candidate,unit,supplied)
+
+    def test_synthesis_view_fits_seventy_units_in_the_context_limit(self):
+        capsule = {'unit':'U0001', 'review_sha256':'a'*64, 'checkpoint':{
+            'summary':'s'*400, 'coverage':[{'note':'n'*500}],
+            'findings':[{'id':'U0001-F1', 'kind':'business_rule', 'statement':'x'*240, 'status':'SOURCE_VERIFIED',
+                         'citations':[{'area':'source', 'path':'a.txt', 'start':1, 'end':1, 'quote':'q'*400}]}],
+            'questions':[{'id':'U0001-Q1', 'question':'q'*160, 'impact':'i'*80, 'owner':'SME', 'blocks':'b'*80}]}}
+        views = []
+        for index in range(70):
+            item = json.loads(json.dumps(capsule))
+            item['unit'] = f'U{index+1:04d}'
+            item['checkpoint']['findings'][0]['id'] = item['unit'] + '-F1'
+            item['checkpoint']['questions'][0]['id'] = item['unit'] + '-Q1'
+            view = cp.synthesis_view(item)
+            self.assertNotIn('coverage', view['checkpoint'])
+            self.assertNotIn('"quote"', json.dumps(view))
+            views.append(view)
+        catalog = [{'path': f'finding-{i}.json', 'label': f'PROGRAM{i}.txt'} for i in range(360)]
+        message = json.dumps({'assessment_files': catalog, 'reviewed_evidence_units': views})
+        self.assertLess(len(message.encode()), 180000)
 
     def test_omitted_segments_and_false_aws_certainty_rejected(self):
         self.plan();plan,_=cp.verified_capsules(self.work,self.project,app)

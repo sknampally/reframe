@@ -1159,7 +1159,7 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             'remaining_model_calls': project['settings']['max_model_calls'] - state['calls'],
             'evidence_notes': state.get('evidence_notes', {}).get(key, [])}
         if capsules:
-            context['reviewed_evidence_units'] = capsules
+            context['reviewed_evidence_units'] = [cp.synthesis_view(capsule) for capsule in capsules]
             context['checkpoint_instruction'] = 'Use these cited, independently reviewed checkpoints for synthesis. Preserve every business-rule ID and SME question ID. This is full selected-scope integration, not permission to narrow scope. Validate cross-unit dependencies and assessment reconciliation; do not claim runtime equivalence.'
         prior_reply = next((area / f'reply-{n}.json' for n in range(state['calls'], 0, -1)
                             if (area / f'reply-{n}.json').exists()), None)
