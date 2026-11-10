@@ -2,6 +2,7 @@
 import argparse
 import copy
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -96,6 +97,7 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(updated['job_id'],'existing-job')
         self.assertEqual(updated['framework_commit'],'a'*40)
         self.assertEqual(updated['events'][-1]['from'],'b'*40)
+        self.assertEqual(self.project['pins']['framework_commit'],'a'*40)
         self.assertEqual(result['status'],'FRAMEWORK_UPDATED')
 
     def test_framework_upgrade_rejects_approved_or_dirty_project(self):
@@ -229,7 +231,23 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(pilot.Blocked, 'executor_model'):
             app.pipeline(self.work, self.project, self.args('resume'), lambda *a: self.fail('no model'))
 
-    def test_dollar_cap_stops_the_next_model_call(self):
+    def test_replacement_assessment_can_use_its_own_job(self):
+        self.project['pins']['aws_job_id'] = 'old-job'
+        self.project['active_assessment'] = 'run-2'
+        app.require_run_pins(self.project, 'new-job')
+        self.assertEqual(self.project['pins']['aws_job_id'], 'new-job')
+        self.assertEqual(self.project['pins']['assessment_label'], 'run-2')
+        with self.assertRaisesRegex(app.Blocked, 'aws_job_id'):
+            app.require_run_pins(self.project, 'other-job')
+
+    def test_claude_cli_login_is_not_charged_against_the_dollar_cap(self):
+        self.project['settings']['max_model_dollars'] = 0
+        self.project['settings']['model_dollars_spent'] = 0
+        self.project['providers']['wireframes'] = 'claude'
+        app.require_dollar_cap(self.project, 'wireframes', 'claude')
+        self.assertEqual(self.project['settings']['model_dollars_spent'], 0)
+
+    def test_dollar_cap_stops_the_next_api_key_call(self):
         self.baseline()
         self.project['settings']['max_model_dollars'] = 0
         self.project['settings']['model_dollars_spent'] = 0
@@ -237,13 +255,15 @@ class PreparationTests(unittest.TestCase):
         def runtime(*args):
             calls.append(args[3])
             return self.replies()[len(calls) - 1]
-        with self.assertRaisesRegex(pilot.Blocked, 'dollar cap'):
-            app.legacy_pipeline(self.work, self.project, self.args('validate'), runtime)
+        with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'fixture-key'}):
+            with self.assertRaisesRegex(pilot.Blocked, 'dollar cap'):
+                app.legacy_pipeline(self.work, self.project, self.args('validate'), runtime)
         self.assertEqual(calls, [])
         self.assertEqual(self.project['settings'].get('model_dollars_spent', 0), 0)
         self.project['settings']['max_model_dollars'] = 0.02
-        with self.assertRaisesRegex(pilot.Blocked, 'dollar cap'):
-            app.legacy_pipeline(self.work, self.project, self.args('validate'), runtime)
+        with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'fixture-key'}):
+            with self.assertRaisesRegex(pilot.Blocked, 'dollar cap'):
+                app.legacy_pipeline(self.work, self.project, self.args('validate'), runtime)
         self.assertEqual(calls, ['executor'])
         self.assertEqual(self.project['pipeline']['calls'], 1)
 
@@ -360,6 +380,17 @@ class PreparationTests(unittest.TestCase):
         app.initialize(args, work)
         project = app.read(work / 'project.json')
         self.assertEqual(project['settings']['transform']['upload_prefix'], 's3://fixture-bucket/reframe')
+
+    def test_sandbox_role_writes_anywhere_in_its_bucket_and_cannot_read_others(self):
+        policy = (Path(__file__).resolve().parents[1] / 'infrastructure' / 'main.tf').read_text()
+        use = policy.split('sid    = "UseSandbox"', 1)[1].split('sid    = "DenyReadsOutsideSandbox"', 1)[0]
+        deny = policy.split('sid    = "DenyReadsOutsideSandbox"', 1)[1]
+        self.assertIn('"${aws_s3_bucket.sandbox.arn}/*"', use)
+        self.assertIn('s3:PutObject', use)
+        self.assertNotIn('s3:prefix', policy)
+        for action in ('s3:GetObject', 's3:GetObjectVersion', 's3:ListBucket'):
+            self.assertIn(action, deny)
+        self.assertIn('not_resources', deny)
 
     def test_resume_unknown_label_never_creates(self):
         with self.assertRaisesRegex(pilot.Blocked, 'never creates'):
@@ -657,7 +688,9 @@ class PreparationTests(unittest.TestCase):
         class Process:
             returncode = 0
             def communicate(self, *a, **kw): return json.dumps({'result': '{"kind":"blocked","reason":"fixture"}'}), ''
-        with patch.object(models.shutil, 'which', return_value='/fixture/claude'), patch.object(models.subprocess, 'Popen', return_value=Process()) as process:
+        with patch.object(models.shutil, 'which', return_value='/fixture/claude'), \
+             patch.object(models, 'require_claude_login'), \
+             patch.object(models.subprocess, 'Popen', return_value=Process()) as process:
             models.call('claude', {'settings': kw.DEFAULTS, 'model_calls':1}, self.work, 'reviewer', '{}')
         command = process.call_args[0][0]
         self.assertEqual(command[command.index('--tools') + 1], '')
@@ -869,9 +902,20 @@ class PreparationTests(unittest.TestCase):
             def communicate(self, *a, **kw):
                 return json.dumps({'modelUsage':{'claude-sonnet-5-5':{}}, 'result':'{}'}), ''
         settings = dict(kw.DEFAULTS, reviewer_model='claude-opus-5-5')
-        with patch.object(models.shutil, 'which', return_value='/fixture/claude'), patch.object(models.subprocess, 'Popen', return_value=Process()):
+        with patch.object(models.shutil, 'which', return_value='/fixture/claude'), \
+             patch.object(models, 'require_claude_login'), \
+             patch.object(models.subprocess, 'Popen', return_value=Process()):
             with self.assertRaisesRegex(pilot.Blocked, 'model identity'):
                 models.call('claude', {'settings':settings, 'model_calls':1}, self.work, 'reviewer', '{}')
+
+    def test_claude_cli_without_login_does_not_start(self):
+        class Result:
+            returncode = 1
+        with patch.object(models.shutil, 'which', return_value='/fixture/claude'), \
+             patch.object(models.subprocess, 'run', return_value=Result()), \
+             patch.object(models.subprocess, 'Popen', side_effect=AssertionError('model process started')):
+            with self.assertRaisesRegex(kw.RuntimeUnavailable, 'claude auth login'):
+                models.call('claude', {'settings': kw.DEFAULTS, 'model_calls': 1}, self.work, 'wireframes', '{}')
 
     def test_codex_unexpected_tool_event_rejected(self):
         class Process:

@@ -24,7 +24,7 @@ DEFAULTS = {
     'kiro_command': ['kiro-cli'], 'executor_model': None, 'reviewer_model': None, 'wireframes_model': None,
     'max_model_calls': 16, 'max_rounds': 2, 'call_timeout_seconds': 600,
     'max_context_bytes': 180000, 'max_read_bytes': 50000,
-    'max_assessment_bytes': 10000000, 'max_source_upload_bytes': 100000000,
+    'max_assessment_bytes': 250000000, 'max_source_upload_bytes': 100000000,
     'poll_seconds': 60, 'max_polls_per_resume': 120, 'allow_new_assessments': False, 'transform': {},
     'max_model_dollars': 0, 'model_dollars_spent': 0,
     'model_rates': {'executor': 0.02, 'reviewer': 0.05, 'wireframes': 0.02},
@@ -445,6 +445,12 @@ def select_orchestrator(run, client):
     return agent
 
 
+def plan_confirmation(text):
+    """AWS is asking which menu choice builds the assessment plan."""
+    lower = text.lower()
+    return 'option 3' in lower and 'confirm' in lower and 'analy' in lower
+
+
 def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     """Select the agreed capabilities through job chat, never approve a deliverable.
 
@@ -462,7 +468,8 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     latest = max(system, key=lambda m: str(m.get('createdAt', '')))
     text = latest.get('text', '').lower()
     recognized = (('custom' in text and ('capabilities' in text or 'job plan' in text))
-                  or ('please confirm' in text and 'assessment-only' in text))
+                  or ('please confirm' in text and 'assessment-only' in text)
+                  or plan_confirmation(text))
     if not recognized:
         return False
     progress = run.setdefault('plan_bootstrap', {'sent_messages': [], 'attempts': 0})
@@ -480,25 +487,35 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
         return True
     if message_id in progress['sent_messages']:
         return False
-    if progress['attempts'] >= 2:
-        run['status'] = 'WAITING_FOR_HUMAN'
-        run['reason'] = 'AWS plan onboarding did not finish after two bounded attempts; inspect the private assessment status.'
-        return True
     config = run['settings']['transform']
     connector = config.get('connector_id')
     source = run.get('uploaded_source', {}).get('uri')
     require(connector and source, 'Plan setup requires the recorded connector_id and uploaded source URI; do not guess inputs')
-    message = (
-        'Use the EXISTING job ' + identity['jobId'] + ' in workspace ' + identity['workspaceId'] +
-        '. Do not create or switch jobs. Select option 3, custom ASSESSMENT-ONLY plan. '
-        'Confirm these explicit capabilities: Analyze code; Analyze data (where supported inputs exist); '
-        'Generate technical documentation; Extract business logic. '
-        'Do not add Decompose code or Plan test cases: proposed boundaries and test specifications belong to the later independently reviewed preparation phase. '
-        'This capability selection is confirmed: generate the plan and proceed. '
-        'Use existing active connector ' + connector + ' and source archive ' + source +
-        '. Pinned source commit: ' + run['source']['commit'] + '. Scope: ' + run['objective'] +
-        '. No application implementation, reimagination, deployment, new infrastructure or additional jobs. '
-        'Preserve required human approval of generated deliverables. This is capability selection, not deliverable approval.')
+    # AWS refuses job, workspace, connector, and archive identifiers in this chat.
+    # The recorded upload is submitted later on the resource-location task.
+    if plan_confirmation(text):
+        if progress.get('confirmation_sent'):
+            run['status'] = 'WAITING_FOR_HUMAN'
+            run['reason'] = 'AWS plan confirmation did not produce a plan; inspect the private assessment status.'
+            return True
+        message = (
+            'Select option 3. Build the custom plan with only Analyze code, Analyze data, '
+            'Generate technical documentation, and Extract business logic. '
+            'Do not include Analyze activity metrics. No SMF records and no SCRT file are available. '
+            'Do not include reimagine.')
+    else:
+        if progress['attempts'] >= 2:
+            run['status'] = 'WAITING_FOR_HUMAN'
+            run['reason'] = 'AWS plan onboarding did not finish after two bounded attempts; inspect the private assessment status.'
+            return True
+        message = (
+            'I want an assessment only. Analyze code. Analyze data. '
+            'Generate technical documentation. Extract business logic. '
+            'Do not include Analyze activity metrics. No SMF records and no SCRT file are available. '
+            'Do not decompose code, plan test cases, reimagine the application, implement it, or deploy it. '
+            'This capability selection is confirmed. Generate the plan and proceed. '
+            'Scope: ' + run['objective'] + '. '
+            'Preserve human approval of the generated findings. This is capability selection, not deliverable approval.')
     require(len(message) <= 7000, 'Assessment scope exceeds AWS job chat limit')
     attempt = progress['attempts'] + 1
     private_save(directory / f'plan-bootstrap-{attempt}-intent.json', {'reply_to': message_id, 'text': message})
@@ -508,6 +525,8 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
                              ('send_message', {**identity, 'text': message, 'skipPolling': True})])[-1]
     private_save(directory / f'plan-bootstrap-{attempt}-receipt.json', response)
     progress.update(pending=False, attempts=attempt)
+    if plan_confirmation(text):
+        progress['confirmation_sent'] = True
     progress['sent_messages'].append(message_id)
     run['status'] = 'WAITING_FOR_ASSESSMENT'
     run['reason'] = 'Assessment-only plan selection sent; resume to check the same job.'
@@ -515,20 +534,149 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     return True
 
 
+REQUIRED_ASSESSMENT_STEPS = frozenset({
+    'Kick off modernization', 'Analyze code', 'Analyze data',
+    'Generate technical documentation', 'Extract business logic',
+})
+
+
+def assessment_plan_authorized(steps):
+    """The assessment steps this run is allowed to execute."""
+    return {step.get('stepName') for step in steps} == REQUIRED_ASSESSMENT_STEPS
+
+
 def assessment_plan_complete(snapshot):
     """An optional invitation may keep the job open after every assessment step finishes."""
     steps = snapshot.get('plan', {}).get('steps', [])
-    expected = {'Kick off modernization', 'Analyze code', 'Analyze data',
-                'Generate technical documentation', 'Extract business logic'}
-    return (len(steps) == len(expected) and {s.get('stepName') for s in steps} == expected
-            and all(s.get('status') == 'SUCCEEDED' for s in steps))
+    return bool(steps) and assessment_plan_authorized(steps) and all(step.get('status') == 'SUCCEEDED' for step in steps)
+
+
+def assessment_start_offered(text):
+    """True when AWS has finished the plan and is asking to run it.
+
+    The wording changes between jobs. A finished plan asks to start, to proceed
+    with execution, or what to do next. Match those offers, not one sentence.
+    """
+    lower = text.lower()
+    planned = ('plan generated' in lower or 'plan has been generated' in lower or 'plan is ready' in lower)
+    ready = ('ready to execute' in lower or 'ready to start' in lower
+             or 'start the execution' in lower or 'what would you like to do next' in lower
+             or ('proceed' in lower and 'execut' in lower))
+    return planned and ready
+
+
+def assessment_plan_announced(text):
+    """True when AWS has generated the plan and setup should continue.
+
+    The next sentence is not stable. One job asks to start, another asks what
+    to do next, and another asks to configure the recorded source. A request to
+    approve findings is not this announcement.
+    """
+    lower = text.lower()
+    if 'approve' in lower and 'finding' in lower:
+        return False
+    return ('plan has been generated' in lower or 'plan generated' in lower
+            or 'plan is ready' in lower or assessment_start_offered(text))
+
+
+def exclude_activity_metrics(run, directory, client, identity, snapshot):
+    """Ask AWS to rebuild a not-yet-started plan that includes activity metrics.
+
+    That step needs an SMF file. This source has none, and the task has no way
+    to continue without one. One request is sent. The plan is not started
+    while the step remains.
+    """
+    steps = snapshot.get('plan', {}).get('steps', [])
+    if not steps or any(step.get('status') != 'NOT_STARTED' for step in steps):
+        return False
+    if not any(step.get('stepName') == 'Analyze activity metrics' for step in steps):
+        return False
+    receipt = directory / 'plan-without-activity-metrics-receipt.json'
+    intent = directory / 'plan-without-activity-metrics-intent.json'
+    if receipt.is_file():
+        run['status'] = 'WAITING_FOR_HUMAN'
+        run['reason'] = 'AWS kept Analyze activity metrics after one request to remove it. Start a new assessment that excludes that step.'
+        return True
+    if intent.is_file():
+        run['status'] = 'NEEDS_RECONCILIATION'
+        run['reason'] = 'The request to remove activity metrics has an uncertain result. Reconcile before sending it again.'
+        return True
+    message = (
+        'Regenerate this assessment plan without Analyze activity metrics. '
+        'No SMF records and no SCRT file are available. '
+        'Keep Kick off modernization, Analyze code, Analyze data, Generate technical documentation, and Extract business logic. '
+        'Do not include reimagine, implementation, or deployment.')
+    private_save(intent, {'text': message})
+    response = client.calls([('load_instructions', identity),
+                             ('send_message', {**identity, 'text': message, 'skipPolling': True})])[-1]
+    private_save(receipt, response)
+    run['status'] = 'WAITING_FOR_ASSESSMENT'
+    run['reason'] = 'Asked AWS to rebuild the plan without activity metrics.'
+    private_save(directory / 'run.json', run)
+    return True
+
+
+def source_location_requested(text):
+    """True when AWS is waiting for the source archive location."""
+    lower = text.lower()
+    return 's3' in lower and 'uri' in lower and 'source' in lower
+
+
+def supply_recorded_source(run, directory, client, identity, snapshot):
+    """Give AWS the recorded upload when it asks where the source is.
+
+    The plan chat must not carry workspace, job, or connector identifiers.
+    This reply is only the upload already stored for the run, and only after
+    AWS asks for that location. The source task form remains the other path.
+    """
+    steps = snapshot.get('plan', {}).get('steps', [])
+    if not steps or any(step.get('status') != 'NOT_STARTED' for step in steps):
+        return False
+    if not assessment_plan_authorized(steps):
+        return False
+    messages = [m for m in snapshot.get('messages', {}).get('messages', [])
+                if m.get('messageOrigin') == 'SYSTEM'
+                and m.get('processingInfo', {}).get('messageType') == 'FINAL_RESPONSE']
+    if not messages:
+        return False
+    latest = max(messages, key=lambda m: str(m.get('createdAt', '')))
+    if not source_location_requested(latest.get('text', '')):
+        return False
+    source = run.get('uploaded_source', {})
+    uri = source.get('uri', '')
+    require(uri.startswith('s3://') and source.get('sha256'),
+            'Source configuration requires a recorded upload URI and checksum')
+    archive = directory / 'source.zip'
+    require(archive.is_file() and sha(archive) == source['sha256'],
+            'Recorded source archive changed or is missing')
+    receipt = directory / 'source-chat-receipt.json'
+    intent = directory / 'source-chat-intent.json'
+    if receipt.is_file():
+        run.update(status='WAITING_FOR_ASSESSMENT',
+                   reason='Recorded source location sent; waiting for AWS to configure inputs and start the plan.')
+        return True
+    if intent.is_file():
+        run.update(status='NEEDS_RECONCILIATION',
+                   reason='Recorded source location outcome is uncertain. Reconcile before sending it again.')
+        return True
+    message = ('The recorded source archive is ' + uri + '. '
+               'There is no SCRT file and there are no SMF records. '
+               'Configure the assessment inputs with that archive and start the existing assessment plan. '
+               'Execute kickoff, code analysis, data analysis, technical documentation, and business-rule extraction. '
+               'Do not create another job, add reimagine, implement, or deploy.')
+    private_save(intent, {'reply_to': latest.get('messageId'), 'text': message})
+    response = client.calls([('load_instructions', identity),
+                             ('send_message', {**identity, 'text': message, 'skipPolling': True})])[-1]
+    private_save(receipt, response)
+    run.update(status='WAITING_FOR_ASSESSMENT',
+               reason='Recorded source location sent; waiting for AWS to configure inputs and start the plan.')
+    private_save(directory / 'run.json', run)
+    return True
 
 
 def start_assessment_plan(run, directory, client, identity, snapshot):
-    """Start only the exact assessment plan already authorized by this run."""
+    """Start the assessment plan already authorized by this run."""
     steps = snapshot.get('plan', {}).get('steps', [])
-    expected = {'Kick off modernization', 'Analyze code', 'Analyze data',
-                'Generate technical documentation', 'Extract business logic'}
     if not steps or any(step.get('status') != 'NOT_STARTED' for step in steps):
         return False
     messages = [m for m in snapshot.get('messages', {}).get('messages', [])
@@ -537,11 +685,10 @@ def start_assessment_plan(run, directory, client, identity, snapshot):
     if not messages:
         return False
     latest = max(messages, key=lambda m: str(m.get('createdAt', '')))
-    text = latest.get('text', '').lower()
-    if not ('plan' in text and 'ready' in text and 'start the execution' in text):
+    if not assessment_plan_announced(latest.get('text', '')):
         return False
     require(run['settings'].get('allow_new_assessments'), 'Assessment execution is not authorized')
-    require(len(steps) == len(expected) and {s.get('stepName') for s in steps} == expected,
+    require(assessment_plan_authorized(steps),
             'Generated plan differs from the authorized assessment capabilities; inspect before starting')
     intent = directory / 'plan-execution-intent.json'
     receipt = directory / 'plan-execution-receipt.json'
@@ -551,10 +698,11 @@ def start_assessment_plan(run, directory, client, identity, snapshot):
     if intent.exists():
         run.update(status='NEEDS_RECONCILIATION', reason='Execution request outcome uncertain; reconcile before retrying.')
         return True
-    message = ('Start execution of the existing assessment plan in this job now. '
-               'Use the already recorded connector and source archive. Execute only kickoff, '
-               'code analysis, data analysis, technical documentation and business-rule extraction. '
-               'Do not create another job, add capabilities, implement or deploy. '
+    message = ('Yes. Configure the assessment inputs from the recorded source archive, then start the existing assessment plan now. '
+               'The source archive is already recorded. '
+               'There is no SCRT file and there are no SMF records, so do not wait for them. '
+               'Execute kickoff, code analysis, data analysis, technical documentation, and business-rule extraction. '
+               'Do not create another job, add reimagine, implement, or deploy. '
                'This starts the authorized assessment; final findings remain subject to human review.')
     private_save(intent, {'identity': identity, 'reply_to': latest.get('messageId'), 'text': message,
                           'steps': steps})
@@ -623,6 +771,64 @@ def configure_source_task(run, directory, client, identity, tasks):
     private_save(receipt, response)
     state.update(pending=False, receipt=receipt.name)
     run.update(status='WAITING_FOR_ASSESSMENT', reason='Recorded source ZIP supplied to kickoff; resume checks the same job.')
+    private_save(directory / 'run.json', run)
+    return True
+
+
+def continue_without_activity_records(run, directory, client, identity, tasks):
+    """Decline activity metrics when this source has no SMF or SCRT records.
+
+    Approving the blank form makes AWS try to read a file that was not supplied.
+    Declining the step leaves a filled-in path untouched.
+    """
+    candidates = [task for task in tasks if isinstance(task, dict)
+                  and task.get('uxComponentId') == 'MainframeSMFConfigureComponent'
+                  and task.get('blockingType') == 'BLOCKING'
+                  and task.get('status') in {'AWAITING_HUMAN_INPUT', 'PENDING_HUMAN_INPUT', 'IN_PROGRESS'}]
+    if not candidates or run.get('smf_source') or run.get('scrt_source'):
+        return False
+    require(len(candidates) == 1, 'Multiple activity-metrics tasks; inspect privately rather than guessing')
+    task_id = candidates[0].get('taskId')
+    require(task_id, 'Activity-metrics task has no identity')
+    state = run.setdefault('activity_metrics', {})
+    if state.get('task_id') == task_id and state.get('receipt'):
+        run.update(status='WAITING_FOR_ASSESSMENT',
+                   reason='Activity metrics skipped because no SMF or SCRT records were supplied; waiting for AWS.')
+        return True
+    if state.get('pending'):
+        receipt = directory / 'activity-metrics-submit-receipt.json'
+        if state.get('task_id') == task_id and receipt.is_file():
+            state.update(pending=False, receipt=receipt.name)
+            run.update(status='WAITING_FOR_ASSESSMENT',
+                       reason='Recovered activity-metrics confirmation; waiting for AWS.')
+            private_save(directory / 'run.json', run)
+            return True
+        run.update(status='NEEDS_RECONCILIATION',
+                   reason='Activity-metrics confirmation outcome is uncertain; reconcile before retrying.')
+        return True
+    record = client.calls([('load_instructions', identity),
+                           ('get_resource', {**identity, 'resource': 'task', 'taskId': task_id})])[-1]
+    private_save(directory / 'activity-metrics-task.json', record)
+    task = record.get('task', {})
+    props = (record.get('agentArtifactContent') or {}).get('properties') or {}
+    require(task.get('taskId') == task_id and task.get('uxComponentId') == 'MainframeSMFConfigureComponent'
+            and task.get('status') in {'AWAITING_HUMAN_INPUT', 'PENDING_HUMAN_INPUT', 'IN_PROGRESS'}
+            and task.get('category') == 'REGULAR' and task.get('taskType') == 'NORMAL'
+            and all(task.get('jobMetadata', {}).get(key) == value for key, value in identity.items()),
+            'Activity-metrics task identity changed; no response submitted')
+    require(props.get('sourceCodeS3Path') == '' and props.get('scrtFileS3Path') == '',
+            'Activity metrics already names a file location; inspect before continuing')
+    private_save(directory / 'activity-metrics-submit-intent.json',
+                 {'task_id': task_id, 'content': {}, 'decision': 'No SMF or SCRT records were supplied'})
+    state.update(task_id=task_id, pending=True)
+    private_save(directory / 'run.json', run)
+    response = client.calls([('load_instructions', identity), ('complete_task', {
+        **identity, 'taskId': task_id, 'content': '{}', 'action': 'REJECT'})])[-1]
+    receipt = directory / 'activity-metrics-submit-receipt.json'
+    private_save(receipt, response)
+    state.update(pending=False, receipt=receipt.name)
+    run.update(status='WAITING_FOR_ASSESSMENT',
+               reason='Activity metrics skipped because no SMF or SCRT records were supplied; waiting for AWS.')
     private_save(directory / 'run.json', run)
     return True
 
@@ -720,6 +926,8 @@ def assessment_step(run, directory, client=None):
     tasks = task_container.get('hitlTasks', []) if isinstance(task_container, dict) else task_container if isinstance(task_container, list) else []
     if configure_source_task(run, directory, client, identity, tasks):
         return
+    if continue_without_activity_records(run, directory, client, identity, tasks):
+        return
     pending = any(isinstance(task, dict) and task.get('blockingType') != 'NON_BLOCKING'
                   and task.get('status') in {'AWAITING_HUMAN_INPUT','PENDING_HUMAN_INPUT','AWAITING_APPROVAL'} for task in tasks)
     if pending or (not tasks and snapshot.get('_pollingGuidance', {}).get('hasPendingTasks') is True):
@@ -740,6 +948,11 @@ def assessment_step(run, directory, client=None):
         run['reason'] = 'AWS Transform requires a human task decision. Complete it in the authorized UI, then resume this run.'
     elif status in {'FAILED', 'STOPPED', 'CANCELLED'}:
         run['status'] = 'ASSESSMENT_FAILED'
+        run['reason'] = 'AWS stopped this assessment before it finished. Start a new assessment for the same source after the recorded cause is fixed.'
+    elif exclude_activity_metrics(run, directory, client, identity, snapshot):
+        return
+    elif supply_recorded_source(run, directory, client, identity, snapshot):
+        return
     elif start_assessment_plan(run, directory, client, identity, snapshot):
         return
     elif bootstrap_assessment_plan(run, directory, client, identity, snapshot):

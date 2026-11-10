@@ -419,15 +419,16 @@ is extracted under path, file-count and expansion limits. Binary content that is
 not text-extracted is listed in `original-artifacts.json` for human review; it is
 not claimed as agent-readable evidence. Approval also checks original file hashes.
 
-For an export larger than the default local byte limit, explicitly increase it:
+A new run saves a 250000000 byte limit, which is also the maximum. Download
+totals, archive expansion and collected text are each bounded by that value.
+Set a smaller limit explicitly when a run should stop earlier:
 
 ```bash
 reframe resume --max-assessment-bytes 100000000 --wait
 ```
 
-The limit change is recorded. The maximum accepted value is 250000000 bytes;
-download totals, archive expansion and collected text are each bounded. This does
-not increase model context limits or approve any findings.
+The limit change is recorded. This does not increase model context limits or
+approve any findings.
 
 After the assessment is sealed, generate a private review index:
 

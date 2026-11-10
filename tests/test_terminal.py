@@ -44,7 +44,11 @@ class TerminalTests(unittest.TestCase):
     def test_menu_dispatch_keeps_existing_controller_gate(self):
         ui=self.ui()
         with patch.object(ui,'invoke') as invoke:ui.dispatch('2')
-        invoke.assert_called_once_with(['assess'])
+        invoke.assert_called_once_with(['assess','--wait'])
+    def test_resume_stays_with_the_aws_job(self):
+        ui=self.ui()
+        with patch.object(ui,'invoke') as invoke:ui.dispatch('4')
+        invoke.assert_called_once_with(['resume','--wait'])
     def test_flags_are_arguments_not_shell_text(self):
         ui=self.ui()
         with patch.object(ui,'invoke') as invoke:ui.dispatch('/feedback --by "Example owner" --note "$(echo injected)"')
@@ -85,6 +89,46 @@ class TerminalTests(unittest.TestCase):
             session.return_value.prompt.return_value='{\n"mcpServers":{}\n}'
             with self.assertRaisesRegex(Blocked,'single value'):ui.ask('Workspace ID')
         session.return_value.prompt.assert_called_once()
+
+    def test_status_shows_the_running_step_without_redrawing_the_menu(self):
+        ui=self.ui()
+        project={'stage':'READY_TO_ASSESS','scope':'hidden scope','assessments':{'run-4':{}},'settings':{},'providers':{}}
+        progress={'active_assessment':'run-4','saved_status':'WAITING_FOR_ASSESSMENT',
+                  'reason':'private/path detail','steps':[{'name':'Extract business logic','status':'IN_PROGRESS'}]}
+        with patch.object(ui,'project',return_value=project), \
+             patch('reframe_setup.workspace',return_value=Path('/fixture')), \
+             patch('reframe.saved_progress',return_value=progress), \
+             patch('reframe.watcher_owns',return_value=True):
+            ui.dispatch('3')
+            hidden=self.output.getvalue()
+            ui.dispatch('/privacy')
+            revealed=self.output.getvalue()
+        self.assertIn('Extract business logic',hidden)
+        self.assertIn('IN_PROGRESS',hidden)
+        self.assertIn('already staying',hidden)
+        self.assertNotIn('private/path detail',hidden)
+        self.assertNotIn('Workspace menu',hidden)
+        self.assertIn('private/path detail',revealed)
+        self.assertFalse(ui.private)
+
+    def test_busy_watcher_names_the_current_step(self):
+        import json, tempfile
+        import reframe
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            run=root/'run'
+            run.mkdir()
+            (root/'project.json').write_text(json.dumps({'active_assessment':'run-4','assessments':{'run-4':{'directory':str(run)}}}))
+            (run/'run.json').write_text(json.dumps({'status':'WAITING_FOR_ASSESSMENT','reason':'saved detail'}))
+            (run/'assessment-status.json').write_text(json.dumps({'plan':{'steps':[
+                {'stepName':'Analyze code','status':'SUCCEEDED'},
+                {'stepName':'Extract business logic','status':'IN_PROGRESS'}]}}))
+            progress=reframe.saved_progress(root)
+            error=reframe.watcher_busy(root)
+        self.assertEqual(progress['steps'][1]['status'],'IN_PROGRESS')
+        self.assertIn('Extract business logic',error.hint)
+        self.assertIn('Choose 3',error.hint)
+        self.assertNotIn('saved detail',error.hint)
 
     def test_safe_remediation_visible_with_privacy_enabled(self):
         ui=self.ui()

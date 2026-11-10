@@ -73,30 +73,28 @@ data "aws_iam_policy_document" "trust" {
 
 data "aws_iam_policy_document" "sandbox" {
   statement {
-    sid    = "ListSandboxPrefix"
+    sid    = "ListSandbox"
     effect = "Allow"
     actions = [
       "s3:ListBucket",
       "s3:GetBucketLocation",
     ]
     resources = [aws_s3_bucket.sandbox.arn]
-    condition {
-      test     = "StringLike"
-      variable = "s3:prefix"
-      values   = ["${local.prefix}/*"]
-    }
   }
 
   statement {
-    sid    = "UseSandboxPrefix"
+    sid    = "UseSandbox"
     effect = "Allow"
     actions = [
       "s3:GetObject",
       "s3:GetObjectVersion",
       "s3:PutObject",
+      "s3:DeleteObject",
       "s3:AbortMultipartUpload",
+      "s3:ListMultipartUploadParts",
+      "s3:PutObjectTagging",
     ]
-    resources = ["${aws_s3_bucket.sandbox.arn}/${local.prefix}/*"]
+    resources = ["${aws_s3_bucket.sandbox.arn}/*"]
   }
 
   statement {

@@ -17,6 +17,9 @@ import pilot
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_default_assessment_limit_holds_a_full_export(self):
+        self.assertEqual(flow.DEFAULTS['max_assessment_bytes'], 250000000)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -195,9 +198,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(flow.bootstrap_assessment_plan(run,self.directory,Client(),identity,snapshot))
         self.assertEqual([name for name,_ in calls],['load_instructions','send_message'])
         sent = calls[-1][1]['text']
-        for value in ['fixture-job','fixture-connector','s3://fixture-bucket/source.zip',self.commit,
-                      'Validate one rule','Analyze code','Extract business logic','not deliverable approval']:
+        for value in ['Validate one rule','Analyze code','Extract business logic','not deliverable approval',
+                      'Do not include Analyze activity metrics']:
             self.assertIn(value,sent)
+        for value in ['fixture-job','fixture-connector','s3://fixture-bucket/source.zip',self.commit]:
+            self.assertNotIn(value,sent)
         self.assertTrue((self.directory/'plan-bootstrap-1-receipt.json').exists())
 
     def test_uncertain_plan_message_requires_reconciliation(self):
@@ -252,6 +257,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(run['plan_bootstrap']['attempts'],2)
         self.assertEqual(run['status'],'WAITING_FOR_HUMAN')
 
+    def test_option_three_confirmation_is_sent_once_after_the_objective(self):
+        run, snapshot, identity = self.onboarding()
+        run['plan_bootstrap'] = {'pending':False,'attempts':2,'sent_messages':['older'],'confirmation_sent':False}
+        snapshot['messages']['messages'][0]['text'] = (
+            'Select option 3 to build a custom plan with Analyze code. Please confirm your choice.')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests)
+                return [{}, {'accepted':True}]
+        self.assertTrue(flow.bootstrap_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        sent = [args['text'] for name,args in calls if name=='send_message']
+        self.assertEqual(len(sent),1)
+        self.assertIn('Select option 3', sent[0])
+        self.assertNotIn('fixture-job', sent[0])
+        snapshot['messages']['messages'][0]['messageId'] = 'again'
+        self.assertTrue(flow.bootstrap_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name=='send_message' for name,_ in calls),1)
+        self.assertEqual(run['status'],'WAITING_FOR_HUMAN')
+
     def execution_fixture(self):
         run, snapshot, identity = self.onboarding()
         run['settings']['allow_new_assessments'] = True
@@ -286,6 +311,88 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
         self.assertTrue((self.directory/'plan-execution-receipt.json').exists())
 
+    def test_ready_to_execute_wording_starts_the_plan(self):
+        run, snapshot, identity = self.execution_fixture()
+        snapshot['messages']['messages'][0]['text'] = (
+            'Plan generated successfully. Ready to execute. '
+            'Would you like to proceed with running the plan now?')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
+
+    def test_activity_metrics_plan_is_rebuilt_once_and_not_started(self):
+        run, snapshot, identity = self.execution_fixture()
+        snapshot['plan']['steps'].append({'stepName':'Analyze activity metrics','status':'NOT_STARTED'})
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.exclude_activity_metrics(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
+        self.assertIn('without Analyze activity metrics', calls[-1][1]['text'])
+        self.assertIn('Analyze data', calls[-1][1]['text'])
+        self.assertFalse(flow.assessment_plan_authorized(snapshot['plan']['steps']))
+        self.assertTrue(flow.exclude_activity_metrics(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
+        self.assertEqual(run['status'],'WAITING_FOR_HUMAN')
+
+    def test_requested_source_uri_is_sent_once_from_the_recorded_upload(self):
+        run, snapshot, identity = self.execution_fixture()
+        archive = self.directory / 'source.zip'
+        archive.write_bytes(b'synthetic archive')
+        run['uploaded_source'] = {'uri': 's3://fixture-bucket/source.zip', 'sha256': flow.sha(archive)}
+        snapshot['messages']['messages'][0]['text'] = (
+            'Please provide the S3 URI for your source code. '
+            'Once you provide that, I will configure the inputs and start the plan execution.')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.supply_recorded_source(run,self.directory,Client(),identity,snapshot))
+        self.assertTrue(flow.supply_recorded_source(run,self.directory,Client(),identity,snapshot))
+        sent = [args['text'] for name,args in calls if name=='send_message']
+        self.assertEqual(len(sent),1)
+        self.assertIn('s3://fixture-bucket/source.zip', sent[0])
+        self.assertNotIn('fixture-job', sent[0])
+        self.assertNotIn('fixture-workspace', sent[0])
+        self.assertNotIn('fixture-connector', sent[0])
+        snapshot['messages']['messages'][0]['text'] = 'The plan is ready. I can start the execution.'
+        (self.directory / 'source-chat-receipt.json').unlink()
+        self.assertFalse(flow.supply_recorded_source(run,self.directory,Client(),identity,snapshot))
+
+    def test_generated_plan_that_asks_for_inputs_starts(self):
+        run, snapshot, identity = self.execution_fixture()
+        snapshot['messages']['messages'][0]['text'] = (
+            'Your assessment plan has been generated with the following capabilities: '
+            'Analyze code, Analyze data, Generate technical documentation, and Extract business logic. '
+            'Next step: configure your assessment inputs. '
+            'Would you like to proceed with configuring your inputs?')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        sent = [args['text'] for name,args in calls if name=='send_message']
+        self.assertEqual(len(sent),1)
+        self.assertIn('Configure the assessment inputs', sent[0])
+        self.assertIn('start the existing assessment plan', sent[0])
+        self.assertNotIn('s3://', sent[0])
+
+    def test_generated_plan_without_a_start_phrase_still_starts(self):
+        run, snapshot, identity = self.execution_fixture()
+        snapshot['messages']['messages'][0]['text'] = (
+            'Your custom assessment plan has been generated successfully. '
+            'What would you like to do next?')
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests); return [{}, {'accepted':True}]
+        self.assertTrue(flow.start_assessment_plan(run,self.directory,Client(),identity,snapshot))
+        self.assertEqual(sum(name == 'send_message' for name,_ in calls),1)
+
     def test_execution_start_rejects_added_capability_and_uncertain_send(self):
         run, snapshot, identity = self.execution_fixture()
         class Client:
@@ -319,6 +426,41 @@ class WorkflowTests(unittest.TestCase):
               '_outputSchema':{'type':'object','required':['assetLocation'],
                                'properties':{'assetLocation':{'type':'string'}}}}
         return run,identity,task
+
+    def activity_metrics_task(self):
+        return {'taskId':'fixture-metrics','uxComponentId':'MainframeSMFConfigureComponent',
+                'status':'AWAITING_HUMAN_INPUT','blockingType':'BLOCKING','category':'REGULAR',
+                'taskType':'NORMAL','jobMetadata':{'workspaceId':'fixture-workspace','jobId':'fixture-job'}}
+
+    def test_blank_activity_metrics_form_is_confirmed_once(self):
+        run, identity, _task = self.source_location_fixture()
+        waiting = self.activity_metrics_task()
+        calls = []
+        class Client:
+            def calls(self, requests):
+                calls.extend(requests)
+                if requests[-1][0] == 'get_resource':
+                    return [{}, {'task': waiting, 'agentArtifactContent': {'properties': {
+                        'sourceCodeS3Path':'', 'scrtFileS3Path':'', 'smfNewCustomerFeatures':True}}}]
+                return [{}, {'accepted':True}]
+        self.assertTrue(flow.continue_without_activity_records(run,self.directory,Client(),identity,[waiting]))
+        self.assertTrue(flow.continue_without_activity_records(run,self.directory,Client(),identity,[waiting]))
+        submitted = [args for name, args in calls if name == 'complete_task']
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(submitted[0]['content'], '{}')
+        self.assertEqual(submitted[0]['action'], 'REJECT')
+        run['smf_source'] = {'uri':'s3://fixture-bucket/smf/'}
+        self.assertFalse(flow.continue_without_activity_records(run,self.directory,Client(),identity,[waiting]))
+
+    def test_filled_activity_metrics_path_is_not_replaced(self):
+        run, identity, _task = self.source_location_fixture()
+        waiting = self.activity_metrics_task()
+        class Client:
+            def calls(self, requests):
+                return [{}, {'task': waiting, 'agentArtifactContent': {'properties': {
+                    'sourceCodeS3Path':'s3://fixture-bucket/smf/','scrtFileS3Path':''}}}]
+        with self.assertRaisesRegex(flow.Blocked, 'already names'):
+            flow.continue_without_activity_records(run,self.directory,Client(),identity,[waiting])
 
     def test_source_task_submits_recorded_zip_once_without_other_options(self):
         run,identity,task=self.source_location_fixture();calls=[]
@@ -391,6 +533,15 @@ class WorkflowTests(unittest.TestCase):
                 return [{}, {'job':{'jobId':'fixture-job','status':'AWAITING_HUMAN_INPUT'}}]
         result = flow.drive(self.directory, transform=Client())
         self.assertEqual(result['status'], 'WAITING_FOR_HUMAN')
+
+    def test_failed_aws_job_stops_without_saying_it_continues(self):
+        self.prepare_job()
+        class Client:
+            def calls(self, requests):
+                return [{}, {'job':{'jobId':'fixture-job','status':'FAILED'}}]
+        result = flow.drive(self.directory, transform=Client())
+        self.assertEqual(result['status'], 'ASSESSMENT_FAILED')
+        self.assertNotIn('continues', result['reason'])
 
     def test_unknown_creation_never_retries_create(self):
         run = self.prepare_job(); run['job_id'] = None; run['create_pending'] = True; self.store(run)
