@@ -119,6 +119,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(result[0]['text'].startswith('2:'))
         self.assertNotIn('1: IF', result[0]['text'])
 
+    def test_source_read_accepts_text_that_is_not_utf8(self):
+        (self.source / 'rule.cbl').write_bytes(b'IF AMOUNT = ZERO\n MOVE \xb3 TO FLAG\n')
+        run = self.load()
+        result = flow.source_read(run, self.directory, 'executor', {'paths':['rule.cbl'], 'start':2, 'end':2})
+        self.assertIn('\u00b3', result[0]['text'])
+
     def test_changed_source_never_reaches_agent(self):
         self.dirty = True
         result = flow.drive(self.directory, runtime=lambda *args: self.fail('Agent must not run'))

@@ -1181,6 +1181,12 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                     'business rule and the exact SME question objects. A short candidate is valid. '
                     'This is full selected-scope integration, not permission to narrow scope. '
                     'Do not claim runtime equivalence.')
+            else:
+                context['checkpoint_instruction'] = (
+                    'The program reviews already inspected the source. Review the assembled specification. '
+                    'Return kind review. A source read is only for one claim you cannot check from the candidate. '
+                    'Do not inventory the repository. PASS when the specification keeps the reviewed rules and '
+                    'SME questions and does not claim runtime equivalence. REWORK only for a contradicted claim.')
         prior_reply = next((area / f'reply-{n}.json' for n in range(state['calls'], 0, -1)
                             if (area / f'reply-{n}.json').exists()), None)
         if role == 'executor' and prior_reply is not None:

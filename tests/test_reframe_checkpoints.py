@@ -74,6 +74,9 @@ class CheckpointTests(unittest.TestCase):
         self.assertTrue(all(u['status']=='PASS' for u in self.project['checkpoints']['units'].values()))
         self.assertEqual(set(self.project['approvals']), {'assessment'})
         self.assertIn('reviewed_evidence_units', self.seen[-2][1])
+        synthesis_review = next(ctx for role, ctx in reversed(self.seen) if role == 'reviewer' and 'unit_id' not in ctx)
+        self.assertNotIn('reviewed_evidence_units', synthesis_review)
+        self.assertIn('assembled specification', synthesis_review['checkpoint_instruction'])
         self.assertTrue((self.work/self.project['preparation_report']['path']).is_file())
 
     def test_finding_program_name_joins_that_source_file(self):
