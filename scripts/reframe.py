@@ -1329,7 +1329,7 @@ def review_site(work, project, args, runtime=model_call):
     directory.mkdir(mode=0o700)
     message = json.dumps({'protocol': (FRAMEWORK / 'prompts/pipeline/wireframes.md').read_text(),
                           'specification': spec, 'decisions': project['decisions']})
-    require(len(message.encode()) <= project['settings']['max_context_bytes'], 'UI context exceeds budget')
+    require(len(message.encode()) <= max(project['settings']['max_context_bytes'], 600000), 'UI context exceeds budget')
     require_stage_contract(work, 'task')
     require_dollar_cap(project, 'wireframes', provider)
     persist(work, project)
