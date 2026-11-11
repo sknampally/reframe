@@ -79,7 +79,7 @@ class PreparationTests(unittest.TestCase):
     def test_controller_upgrade_preserves_verified_assessment_approval(self):
         self.baseline()
         before = copy.deepcopy(self.project['approvals'])
-        self.project['pipeline'] = {'calls':2,'contexts':{'executor':[]}}
+        self.project['pipeline'] = {'calls':2,'contexts':{'executor':[]},'candidate_sha256':'b'*64}
         self.project['checkpoints'] = {'units': {'U0001': {'status': 'REWORK_LIMIT', 'candidate_sha256': 'a' * 64}}}
         app.upgrade_framework(self.work,self.project,argparse.Namespace(note='Controller fix'))
         self.assertEqual(self.project['approvals'],before)

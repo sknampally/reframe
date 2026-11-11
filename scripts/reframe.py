@@ -498,9 +498,8 @@ def require_dollar_cap(project, role, provider=None):
 
 def upgrade_framework(work, project, args):
     """Record a reviewed controller fix without replacing source, jobs or evidence."""
-    require(not (set(project.get('approvals', {})) - {'assessment'}) and not project.get('specification')
-            and not project.get('pipeline', {}).get('candidate_sha256'),
-            'Framework upgrades require no candidate or downstream approvals')
+    require(not (set(project.get('approvals', {})) - {'assessment'}) and not project.get('specification'),
+            'Framework upgrades require no specification or downstream approvals')
     if project.get('approvals', {}).get('assessment'):
         require(project.get('selected') in project['assessments'], 'Approved assessment identity is missing')
         verified_assessment(project, project['selected'])
