@@ -349,6 +349,19 @@ def complete_synthesis(spec, capsules, plan):
             questions.append(question)
             seen.add(question['id'])
     spec['questions'] = questions
+    spec.setdefault('tests', [])
+    covered = {case.get('rule_id') for case in spec['tests'] if isinstance(case, dict)}
+    for rule in rules:
+        if rule.get('id') in covered:
+            continue
+        covered.add(rule['id'])
+        spec['tests'].append({
+            'id': rule['id'] + '-accept', 'rule_id': rule['id'], 'category': 'boundary', 'status': 'NOT RUN',
+            'given': 'The reviewed condition for ' + rule['id'],
+            'when': 'That condition is evaluated',
+            'then': rule.get('statement') or rule['id'],
+            'oracle': 'Compare with ' + rule.get('source_path', '') + ' ' + rule.get('source_anchor', ''),
+        })
     return spec
 
 

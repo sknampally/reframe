@@ -1174,12 +1174,13 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         if capsules:
             context.pop('assessment_files', None)
             context['reviewed_evidence_units'] = [cp.synthesis_view(capsule) for capsule in capsules]
-            context['checkpoint_instruction'] = (
-                'Return the cross-unit sections, scope, exclusions, tests, work items, and layout. '
-                'Do not restate every business rule or SME question. The controller keeps every reviewed '
-                'business rule and the exact SME question objects. A short candidate is valid. '
-                'This is full selected-scope integration, not permission to narrow scope. '
-                'Do not claim runtime equivalence.')
+            if role == 'executor':
+                context['checkpoint_instruction'] = (
+                    'Return the cross-unit sections, scope, exclusions, tests, work items, and layout. '
+                    'Do not restate every business rule or SME question. The controller keeps every reviewed '
+                    'business rule and the exact SME question objects. A short candidate is valid. '
+                    'This is full selected-scope integration, not permission to narrow scope. '
+                    'Do not claim runtime equivalence.')
         prior_reply = next((area / f'reply-{n}.json' for n in range(state['calls'], 0, -1)
                             if (area / f'reply-{n}.json').exists()), None)
         if role == 'executor' and prior_reply is not None:

@@ -314,7 +314,9 @@ class CheckpointTests(unittest.TestCase):
         spec = {'rules':[{'id':'local', 'statement':'Local rule', 'source_path':'a.txt',
                           'source_anchor':'lines 1-1', 'evidence_status':'SOURCE_VERIFIED'}],
                 'questions':[{'id':'Q1', 'question':'changed'}],
-                'monorepo_layout':[{'path':'apps/ui', 'role':'interface'}]}
+                'monorepo_layout':[{'path':'apps/ui', 'role':'interface'}],
+                'tests':[{'id':'local-T', 'rule_id':'local', 'category':'normal', 'status':'NOT RUN',
+                         'given':'g', 'when':'w', 'then':'t', 'oracle':'o'}]}
         cp.complete_synthesis(spec, capsules, plan)
         self.assertEqual(spec['monorepo_layout'], ['{"path": "apps/ui", "role": "interface"}'])
         self.assertEqual({rule['id'] for rule in spec['rules']}, {'local', 'R1'})
@@ -322,6 +324,10 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(added['source_path'], 'a.txt')
         self.assertEqual(added['source_anchor'], 'lines 4-6')
         self.assertEqual(spec['questions'], [question])
+        self.assertEqual(spec['tests'][-1], {
+            'id': 'R1-accept', 'rule_id': 'R1', 'category': 'boundary', 'status': 'NOT RUN',
+            'given': 'The reviewed condition for R1', 'when': 'That condition is evaluated',
+            'then': 'Reject a zero amount', 'oracle': 'Compare with a.txt lines 4-6'})
 
     def test_spent_cap_before_synthesis_asks_for_two_calls(self):
         self.plan()
