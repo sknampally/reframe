@@ -1172,8 +1172,9 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             'evidence_notes': state.get('evidence_notes', {}).get(key, [])}
         if capsules:
             context.pop('assessment_files', None)
-            context['reviewed_evidence_units'] = [cp.synthesis_view(capsule) for capsule in capsules]
+            # The reviewer reads the assembled specification. The executor still receives every unit.
             if role == 'executor':
+                context['reviewed_evidence_units'] = [cp.synthesis_view(capsule) for capsule in capsules]
                 context['checkpoint_instruction'] = (
                     'Return the cross-unit sections, scope, exclusions, tests, work items, and layout. '
                     'Do not restate every business rule or SME question. The controller keeps every reviewed '
