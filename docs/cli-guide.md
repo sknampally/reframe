@@ -367,7 +367,7 @@ reframe package-export --version v1 --mode functional-parity
 reframe register-project
 ```
 
-Human context is optional. A run with none still produces the current-state draft and a draft package. Reimagine writes a future-state draft whose unaccepted ideas stay `proposed_unapproved`. An open contradiction blocks only the new package's final-handoff flag. `register-project` records identity in the workspace and does not start AWS.
+Human context is optional. A run with none still produces the current-state draft and a draft package. Accepted current-state notes are attributed inside the draft before the pages are rendered, and they stay human statements rather than verified source behavior. Reimagine writes future-state screens from that same baseline. Ideas with no accepted future-state submission stay `proposed_unapproved`. Accepting a statement does not close a contradiction; `reframe context resolve` records that decision. An open contradiction blocks only the new package's final-handoff flag. `register-project` records identity in the workspace and does not start AWS. A new assessment of an existing project is a plan with a dated prefix until a person authorizes a live job.
 
 ```mermaid
 flowchart TD

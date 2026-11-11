@@ -100,7 +100,15 @@ def locked(work):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise watcher_busy(work) from error
+            running = []
+            try:
+                running = [step['name'] for step in saved_progress(work)['steps']
+                           if step.get('status') in {'IN_PROGRESS', 'RUNNING', 'EXECUTING'}]
+            except (OSError, ValueError, KeyError, TypeError):
+                running = []
+            if running:
+                raise watcher_busy(work) from error
+            raise Blocked('Another command is using this workspace.') from error
         yield read(work / 'project.json')
 
 
@@ -1731,6 +1739,11 @@ def parser():
     context_decide.add_argument('--disposition', required=True)
     context_decide.add_argument('--by', required=True)
     context_decide.add_argument('--note', required=True)
+    context_resolve = context_commands.add_parser('resolve')
+    context_resolve.add_argument('--id', required=True)
+    context_resolve.add_argument('--resolution', required=True)
+    context_resolve.add_argument('--by', required=True)
+    context_resolve.add_argument('--note', required=True)
     design = commands.add_parser('design-export', help='Write an opt-in current-state or reimagine draft beside the review site')
     design.add_argument('--version', required=True)
     design.add_argument('--mode', required=True)
@@ -1866,8 +1879,10 @@ def main(argv=None, reporter=None):
                                 source.chmod(0o600)
                             require(source, 'Provide a context file or text')
                             result = optional.import_context(work, source, args.by, args.role, args.category, [item for item in args.affected.split(',') if item])
-                        else:
+                        elif args.context_command == 'decide':
                             result = optional.decide_context(work, args.id, args.disposition, args.by, args.note)
+                        else:
+                            result = optional.resolve_conflict(work, args.id, args.resolution, args.by, args.note)
                     elif args.command == 'design-export':
                         import reframe_optional as optional
                         result = optional.design_export(work, project, args.version, args.mode, args.stack)

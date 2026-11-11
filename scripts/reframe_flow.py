@@ -238,6 +238,7 @@ def run(ui):
                     ui.say('The draft was not written. /flow retries it. No approval was recorded.')
                     return
                 say_review(ui, 'Review these draft files. They are not an approval.', draft_rows(name))
+                ui.say('Optional design-export can add a parity or reimagine draft later. These skip files stay as written.')
                 return
             if not ui.yes('Run independent verification using the saved model-call budget?'):
                 return
@@ -297,6 +298,20 @@ def run(ui):
             return
         if stage == 'PACKAGED':
             say_review(ui, 'The approved package is already written.', package_rows(project))
+            choice = ui.ask('Optional design export (skip/functional-parity/reimagine)', 'skip')
+            require(choice in {'skip', 'functional-parity', 'reimagine'}, 'Choose skip, functional-parity, or reimagine')
+            if choice == 'skip':
+                ui.say('The approved package is unchanged.')
+                return
+            version = ui.ask('Design version', 'v1')
+            stack = ui.ask('Target stack', 'unspecified')
+            if ui.ask('Import human context now? (yes/no)', 'no') == 'yes':
+                ui.say('Use reframe context import. A missing file does not block the draft.')
+            if ui.invoke(['design-export', '--version', version, '--mode', choice, '--stack', stack]) != 0:
+                return
+            if ui.invoke(['package-export', '--version', version, '--mode', choice]) != 0:
+                return
+            ui.say('Draft mode package written beside the approved package. Final handoff was not requested.')
             return
         if not approved:
             command = 'resume' if project.get('active_assessment') else 'assess'

@@ -12,7 +12,8 @@ from pilot import Blocked
 class TerminalTests(unittest.TestCase):
     def ui(self,demo=False,width=90):
         self.output=io.StringIO()
-        return Terminal(console=Console(file=self.output,width=width,color_system=None),demo=demo)
+        # Height is set with width so a TERM=dumb console still uses the requested size.
+        return Terminal(console=Console(file=self.output,width=width,height=24,color_system=None),demo=demo)
     def test_no_workspace_displays_welcome(self):
         ui=self.ui()
         with patch('reframe_setup.workspace',side_effect=Blocked('No project')):ui.dashboard()

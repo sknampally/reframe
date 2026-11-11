@@ -264,7 +264,7 @@ class GuidedFlowTests(unittest.TestCase):
         self.assertIn('Handoff records — JSON and Markdown — ', text)
 
     def test_approved_package_names_the_zip_and_its_folder(self):
-        ui = self.ui({'stage':'PACKAGED', 'package':{'path':'packages/package-abc.zip'}}, ['continue'])
+        ui = self.ui({'stage':'PACKAGED', 'package':{'path':'packages/package-abc.zip'}}, ['continue', 'skip'])
         lines = self.said(ui)
         with tempfile.TemporaryDirectory() as root, patch('reframe_setup.workspace', return_value=Path(root)):
             run(ui)

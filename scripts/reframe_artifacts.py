@@ -189,8 +189,8 @@ def _schema(value):
     return {'type': 'string', 'description': str(value)}
 
 
-def openapi_document(apis, title='Approved review APIs'):
-    """OpenAPI 3 document for the approved contracts. It describes no running server."""
+def openapi_document(apis, title='Approved review APIs', description=None):
+    """OpenAPI 3 document for the recorded contracts. It describes no running server."""
     paths = {}
     for api in apis:
         method = api['method'].lower()
@@ -225,7 +225,7 @@ def openapi_document(apis, title='Approved review APIs'):
     return {
         'openapi': '3.0.3',
         'info': {'title': title, 'version': 'review',
-                 'description': 'Proposed interfaces from the approved review. This document does not start a server and does not send a request.'},
+                 'description': description or 'Proposed interfaces from the approved review. This document does not start a server and does not send a request.'},
         'paths': paths,
         'components': {'securitySchemes': {'reviewAuth': {
             'type': 'http', 'scheme': 'bearer',

@@ -182,3 +182,56 @@ class OptionalModeTests(unittest.TestCase):
             optional.register_project(self.root, other)
         self.assertEqual((self.root / 'project.json').read_bytes(), before)
         self.assertEqual(reframe.parser().parse_args(['context', 'status']).command, 'context')
+        plan = optional.resource_plan(self.project, 'new-assessment')
+        self.assertEqual(plan['aws_jobs_created'], 0)
+        self.assertFalse(plan['job_created'])
+        self.assertTrue(plan['prefix'].startswith('projects/'))
+        self.assertEqual(optional.resource_plan(self.project, 'resume')['same_job'], True)
+        self.assertEqual(optional.resource_plan({'source': {'repository': 'https://example.test/other.git'}}, 'new-project')['resources'], 'isolated')
+        self.assertNotEqual(optional.canonical_repository('https://github.com/owner/demo.git')['canonical'],
+                            optional.canonical_repository('https://github.com/other/demo.git')['canonical'])
+        self.assertEqual(optional.review_cycle([], 1)['decision'], 'PASS')
+        self.assertEqual(optional.review_cycle([{'decision': 'FAIL'}], 1)['decision'], 'FAIL')
+        self.assertEqual(optional.review_cycle([{'decision': 'NEEDS_HUMAN_DECISION'}], 2)['decision'], 'NEEDS_HUMAN_DECISION')
+        with self.assertRaisesRegex(optional.Blocked, 'exhausted'):
+            optional.review_cycle([{'decision': 'FAIL'}], 3)
+
+    def test_symlink_duplicate_and_future_screens_stay_safe(self):
+        target = self.root / 'real.md'
+        target.write_text('Keep the cutoff.\n')
+        link = self.root / 'alias.md'
+        link.symlink_to(target)
+        with self.assertRaisesRegex(optional.Blocked, 'symbolic links'):
+            optional.import_context(self.root, link, 'Ari', 'architect', 'current-state', ['s1'])
+        self.assertFalse((self.root / 'human-review-context' / 'extracted').exists())
+        imported = optional.import_context(self.root, target, 'Ari', 'architect', 'current-state', ['s1'])
+        with self.assertRaisesRegex(optional.Blocked, 'already imported'):
+            optional.import_context(self.root, target, 'Ari', 'architect', 'current-state', ['s1'])
+        self.assertEqual(len(list((self.root / 'human-review-context' / 'extracted').glob('*.txt'))), 1)
+        optional.decide_context(self.root, imported['id'], 'accepted', 'Ari', 'Attributed only')
+        conflict = self.root / 'conflict.md'
+        conflict.write_text('Contradicts: R1\nThe cutoff is 9.\n')
+        second = optional.import_context(self.root, conflict, 'Ari', 'architect', 'current-state', ['s1'])
+        optional.decide_context(self.root, second['id'], 'accepted', 'Ari', 'Still not reconciled')
+        self.assertEqual(len(optional.open_conflicts(self.root)), 1)
+        optional.resolve_conflict(self.root, 'conflict-' + second['id'], 'keep-evidence', 'Ari', 'Source remains the evidence')
+        self.assertEqual(optional.open_conflicts(self.root), [])
+        optional.design_export(self.root, self.project, 'v8', 'reimagine', 'unspecified')
+        future = (self.root / 'previews' / 'v8' / 'future-state' / 'index.html').read_text()
+        self.assertIn('href="#screen-s1"', future)
+        self.assertIn('proposed_unapproved', future)
+        packaged = optional.package_export(self.root, self.project, 'v8', 'reimagine')
+        with zipfile.ZipFile(self.root / packaged['archive']) as archive:
+            names = set(archive.namelist())
+            for required in ('AGENTS.md', 'SKILL.md', 'specification.json', 'implementation-backlog.json',
+                             'openapi.json', 'modernization-sequence.json', 'checksums.json', 'manifest.json',
+                             'future-state.html', 'current-state.html'):
+                self.assertIn(required, names)
+            manifest = json.loads(archive.read('manifest.json'))
+            self.assertEqual(manifest['package_status'], 'DRAFT')
+            self.assertEqual(manifest['files']['AGENTS.md'], __import__('hashlib').sha256(archive.read('AGENTS.md')).hexdigest())
+        extracted = self.root / 'standalone'
+        extracted.mkdir()
+        with zipfile.ZipFile(self.root / packaged['archive']) as archive:
+            archive.extractall(extracted)
+        self.assertIn('NOT RUN', (extracted / 'README.md').read_text())
