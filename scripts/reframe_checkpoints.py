@@ -337,6 +337,10 @@ def complete_synthesis(spec, capsules, plan):
                           'source_anchor': f'lines {start}-{end}' if start and end else 'reviewed checkpoint',
                           'evidence_status': status})
             present.add(finding['id'])
+    layout = spec.get('monorepo_layout')
+    if isinstance(layout, list):
+        spec['monorepo_layout'] = [item if isinstance(item, str) else json.dumps(item, sort_keys=True)
+                                   for item in layout if item not in (None, '')]
     questions, seen = [], set()
     for capsule in capsules:
         for question in capsule['checkpoint'].get('questions') or []:

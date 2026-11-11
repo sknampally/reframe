@@ -313,8 +313,10 @@ class CheckpointTests(unittest.TestCase):
             'questions':[question]}}]
         spec = {'rules':[{'id':'local', 'statement':'Local rule', 'source_path':'a.txt',
                           'source_anchor':'lines 1-1', 'evidence_status':'SOURCE_VERIFIED'}],
-                'questions':[{'id':'Q1', 'question':'changed'}]}
+                'questions':[{'id':'Q1', 'question':'changed'}],
+                'monorepo_layout':[{'path':'apps/ui', 'role':'interface'}]}
         cp.complete_synthesis(spec, capsules, plan)
+        self.assertEqual(spec['monorepo_layout'], ['{"path": "apps/ui", "role": "interface"}'])
         self.assertEqual({rule['id'] for rule in spec['rules']}, {'local', 'R1'})
         added = next(rule for rule in spec['rules'] if rule['id'] == 'R1')
         self.assertEqual(added['source_path'], 'a.txt')
