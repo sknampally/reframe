@@ -100,7 +100,15 @@ def locked(work):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise watcher_busy(work) from error
+            running = []
+            try:
+                running = [step['name'] for step in saved_progress(work)['steps']
+                           if step.get('status') in {'IN_PROGRESS', 'RUNNING', 'EXECUTING'}]
+            except (OSError, ValueError, KeyError, TypeError):
+                running = []
+            if running:
+                raise watcher_busy(work) from error
+            raise Blocked('Another command is using this workspace.') from error
         yield read(work / 'project.json')
 
 
@@ -788,8 +796,13 @@ def preparation_report(work, project):
     rendered = render_site(spec, {'screens': []}, project['decisions'],
                            title='SME and architect review — preparation and challenge')
     review = read(work / project['specification']['review_path'])
-    rendered = rendered.replace('</main>', '<h2>Independent reviewer report</h2><pre>' +
-                                html.escape(json.dumps(review, indent=2)) + '</pre></main>')
+    rules = ''.join('<tr><td>' + html.escape(str(rule.get('id', ''))) + '</td><td>' + html.escape(str(rule.get('statement', '')))
+                    + '</td><td>' + html.escape(str(rule.get('evidence_status', ''))) + '</td><td>'
+                    + html.escape(str(rule.get('source_path', '')) + ' ' + str(rule.get('source_anchor', ''))) + '</td></tr>'
+                    for rule in spec.get('rules') or [] if isinstance(rule, dict))
+    rendered = rendered.replace('</main>', '<h2>Business rules</h2><table><thead><tr><th>Rule</th><th>Statement</th><th>Status</th><th>Source</th></tr></thead><tbody>'
+                                + rules + '</tbody></table><h2>Independent reviewer report</h2><pre>'
+                                + html.escape(json.dumps(review, indent=2)) + '</pre></main>')
     report.write_text(rendered)
     report.chmod(0o600)
     project['preparation_report'] = {'path': str(report.relative_to(work)), 'sha256': sha(report),
@@ -1358,11 +1371,16 @@ def review_site(work, project, args, runtime=model_call):
     validate_screens(screens, spec)
     write(directory / 'screens.json', screens)
     write(directory / 'api-contracts.json', screens['apis'])
+    from reframe_artifacts import openapi_document, provider_usage, render_api_page, render_usage_page
+    write(directory / 'openapi.json', openapi_document(screens['apis']))
+    (directory / 'api.html').write_text(render_api_page(screens['apis'], screens=screens['screens'], journeys=screens.get('journeys')))
     (directory / 'index.html').write_text(render_site(spec, screens, project['decisions']))
-    (directory / 'index.html').chmod(0o600)
+    (directory / 'usage.html').write_text(render_usage_page(provider_usage([work / 'preparation', directory]), project['settings']))
+    for name in ('index.html', 'api.html', 'usage.html'):
+        (directory / name).chmod(0o600)
     project['site'] = {'directory': str(directory.relative_to(work)), 'specification': project['specification']['sha256'],
                        'decisions': digest(project['decisions']), 'provider': provider,
-                       'files': {p: sha(directory / p) for p in ('screens.json', 'index.html', 'api-contracts.json')}}
+                       'files': {p: sha(directory / p) for p in ('screens.json', 'index.html', 'api-contracts.json', 'openapi.json', 'api.html', 'usage.html')}}
     project['stage'] = 'AWAITING_SPECIFICATIONS_APPROVAL'
     persist(work, project)
     return {'status': project['stage'], 'html': str(directory / 'index.html')}
@@ -1460,7 +1478,7 @@ def package(work, project):
         'tools': ['kiro', 'claude-code', 'codex', 'cursor'],
         'boundaries': {'scope': spec['scope'], 'excluded': spec['excluded_scope']},
         'entry_points': handoff.entry_points({'specifications': 'specification.json', 'backlog': 'implementation-backlog.json',
-                         'decisions': 'decisions.json', 'acceptance': 'traceability.json'}),
+                         'decisions': 'decisions.json', 'acceptance': 'traceability.json', 'openapi': 'openapi.json'}),
         'gates': ['Review unresolved and deferred decisions before affected implementation',
                   'Independent code review and executed acceptance tests before release'],
         'implementation_status': 'NOT_STARTED'})
@@ -1485,7 +1503,10 @@ def package(work, project):
             'Do not invent missing decisions or claim unexecuted tests passed. Respect deferred work boundaries.\n\n' +
             spec['sections'][section]['implementation_prompt'])
     shutil.copyfile(work / project['site']['directory'] / 'index.html', destination / 'review.html')
+    shutil.copyfile(work / project['site']['directory'] / 'api.html', destination / 'api.html')
     shutil.copyfile(work / project['site']['directory'] / 'api-contracts.json', destination / 'api-contracts.json')
+    shutil.copyfile(work / project['site']['directory'] / 'openapi.json', destination / 'openapi.json')
+    shutil.copyfile(work / project['site']['directory'] / 'usage.html', destination / 'usage.html')
     paths = [item['path'] for item in assessment_run.get('assessment_index', []) if isinstance(item, dict) and isinstance(item.get('path'), str)]
     paths += [rule['source_path'] for rule in spec['rules'] if isinstance(rule.get('source_path'), str)]
     handoff.write_into(destination, spec['rules'], paths, read(destination / 'api-contracts.json'), write, assessment_dir)
@@ -1502,7 +1523,7 @@ def package(work, project):
                         'Private package: review for confidential content before sharing'],
         'assistance': 'Specifications and wireframe content prepared with AI assistance; human approvals recorded separately'})
     (destination / 'README.md').write_text('# Implementation preparation package\n\n'
-        'Start with review.html, specification.json and decisions.json. Follow modernization-sequence.json. '
+        'Start with review.html, api.html, usage.html, openapi.json, specification.json and decisions.json. Follow modernization-sequence.json. '
         'Every capability starts unassigned, and every comparison stays NOT RUN. Work in backlog dependency order.\n'
         'Deferred decisions block the work identified in specification.json. This package is not a release approval.\n'
         'No application code or infrastructure has been deployed. All acceptance scenarios remain NOT RUN.\n'
@@ -1703,6 +1724,35 @@ def parser():
     f.add_argument('--by', required=True)
     f.add_argument('--note', required=True)
     commands.add_parser('package')
+    context = commands.add_parser('context', help='Import or decide optional human context')
+    context_commands = context.add_subparsers(dest='context_command', required=True)
+    context_import = context_commands.add_parser('import')
+    context_import.add_argument('--file')
+    context_import.add_argument('--text')
+    context_import.add_argument('--by', required=True)
+    context_import.add_argument('--role', required=True)
+    context_import.add_argument('--category', required=True)
+    context_import.add_argument('--affected', default='')
+    context_status = context_commands.add_parser('status')
+    context_decide = context_commands.add_parser('decide')
+    context_decide.add_argument('--id', required=True)
+    context_decide.add_argument('--disposition', required=True)
+    context_decide.add_argument('--by', required=True)
+    context_decide.add_argument('--note', required=True)
+    context_resolve = context_commands.add_parser('resolve')
+    context_resolve.add_argument('--id', required=True)
+    context_resolve.add_argument('--resolution', required=True)
+    context_resolve.add_argument('--by', required=True)
+    context_resolve.add_argument('--note', required=True)
+    design = commands.add_parser('design-export', help='Write an opt-in current-state or reimagine draft beside the review site')
+    design.add_argument('--version', required=True)
+    design.add_argument('--mode', required=True)
+    design.add_argument('--stack', default='unspecified')
+    exported = commands.add_parser('package-export', help='Write an opt-in draft package beside the approved package')
+    exported.add_argument('--version', required=True)
+    exported.add_argument('--mode', required=True)
+    registered = commands.add_parser('register-project', help='Record project identity locally without an AWS job')
+    registered.add_argument('--choice', choices=['assess-new-revision', 'reuse-baseline'])
     c = commands.add_parser('compare')
     c.add_argument('--left', required=True)
     c.add_argument('--right', required=True)
@@ -1816,6 +1866,32 @@ def main(argv=None, reporter=None):
                     elif args.command == 'review-site': result = review_site(work, project, args)
                     elif args.command == 'feedback': result = feedback(work, project, args)
                     elif args.command == 'package': result = package(work, project)
+                    elif args.command == 'context':
+                        import reframe_optional as optional
+                        if args.context_command == 'status': result = optional.context_status(work)
+                        elif args.context_command == 'import':
+                            source = args.file
+                            if args.text:
+                                require(not source, 'Provide context as a file or as text, not both')
+                                source = work / 'human-review-context' / 'incoming.md'
+                                source.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                                source.write_text(args.text)
+                                source.chmod(0o600)
+                            require(source, 'Provide a context file or text')
+                            result = optional.import_context(work, source, args.by, args.role, args.category, [item for item in args.affected.split(',') if item])
+                        elif args.context_command == 'decide':
+                            result = optional.decide_context(work, args.id, args.disposition, args.by, args.note)
+                        else:
+                            result = optional.resolve_conflict(work, args.id, args.resolution, args.by, args.note)
+                    elif args.command == 'design-export':
+                        import reframe_optional as optional
+                        result = optional.design_export(work, project, args.version, args.mode, args.stack)
+                    elif args.command == 'package-export':
+                        import reframe_optional as optional
+                        result = optional.package_export(work, project, args.version, args.mode)
+                    elif args.command == 'register-project':
+                        import reframe_optional as optional
+                        result = optional.register_project(work, project, args.choice)
                     elif args.command == 'compare':
                         result = compare(work, project, args)
                         if args.semantic: result = semantic_compare(work, project, args)

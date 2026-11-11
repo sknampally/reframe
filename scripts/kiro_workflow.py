@@ -484,6 +484,11 @@ def bootstrap_assessment_plan(run, directory, client, identity, snapshot):
     system = [m for m in messages if m.get('messageOrigin') == 'SYSTEM'
               and m.get('processingInfo', {}).get('messageType') == 'FINAL_RESPONSE']
     if not system:
+        # A status poll with no plan chat is not an invitation to invent setup.
+        # Sending the objective still requires the connector and upload already recorded.
+        recorded = run['settings']['transform']
+        if not (recorded.get('connector_id') and run.get('uploaded_source', {}).get('uri')):
+            return False
         latest = {'messageId': 'initial-no-plan', 'text': ''}
         text = ''
         recognized = True
