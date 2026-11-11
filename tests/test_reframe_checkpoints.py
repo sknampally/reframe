@@ -79,6 +79,41 @@ class CheckpointTests(unittest.TestCase):
         self.assertIn('assembled specification', synthesis_review['checkpoint_instruction'])
         self.assertTrue((self.work/self.project['preparation_report']['path']).is_file())
 
+    def test_synthesis_contradiction_gets_one_correction_after_the_round_limit(self):
+        reviews = {'n': 0}
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'reviewer' and 'unit_id' not in context:
+                reviews['n'] += 1
+                if reviews['n'] < 3:
+                    return {'kind':'review', 'decision':'REWORK', 'report':'The screen count contradicts the inventory',
+                            'findings':[{'id':'RV', 'issue':'screen count'}]}
+                self.assertEqual(context['previous_review']['report'], 'The screen count contradicts the inventory')
+                return {'kind':'review', 'decision':'PASS', 'report':'The corrected specification matches the inventory', 'findings':[]}
+            return self.runtime(provider, run, directory, role, message)
+        first = app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(first['status'], 'REWORK_LIMIT')
+        self.assertEqual(reviews['n'], 2)
+        self.project = app.read(self.work / 'project.json')
+        second = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(second['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.assertTrue(self.project['pipeline'].get('limit_corrected'))
+        self.assertEqual(reviews['n'], 3)
+
+    def test_a_second_synthesis_contradiction_stays_stopped(self):
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'reviewer' and 'unit_id' not in context:
+                return {'kind':'review', 'decision':'REWORK', 'report':'The screen count still contradicts the inventory',
+                        'findings':[{'id':'RV', 'issue':'screen count'}]}
+            return self.runtime(provider, run, directory, role, message)
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('validate'), runtime)['status'], 'REWORK_LIMIT')
+        self.project = app.read(self.work / 'project.json')
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('resume'), runtime)['status'], 'REWORK_LIMIT')
+        self.project = app.read(self.work / 'project.json')
+        with self.assertRaisesRegex(Blocked, 'Resolve missing evidence via feedback before retrying'):
+            app.pipeline(self.work, self.project, self.args('resume'), runtime)
+
     def test_finding_program_name_joins_that_source_file(self):
         (self.source / 'APP').mkdir()
         (self.source / 'APP' / 'MEMBER.TXT').write_text('IDENTIFICATION DIVISION.\n')

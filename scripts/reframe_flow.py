@@ -181,7 +181,7 @@ def offer_review_budget(ui, project):
     if ui.invoke(['model-budget', '--max-calls', str(cap), '--by', owner, '--note', note]) != 0:
         return None
     if ui.invoke(['validate']) != 0:
-        return None
+        return ui.project()
     return ui.project()
 
 
@@ -237,25 +237,32 @@ def run(ui):
                 return
             code = ui.invoke(['validate'])
             updated = ui.project() or ui.project() or {}
-            state = updated.get('pipeline') or {}
-            settings = updated.get('settings') or {}
-            spent = state.get('calls') or 0
-            cap = settings.get('max_model_calls') or 0
-            # Spending the last call returns exhaustion. The next check restates the remaining plan.
-            if state.get('reason') == 'Total model call budget exhausted' or (
-                    code != 0 and cap and spent >= cap
-                    and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan'):
-                ui.say('The call cap was spent. Checking how many calls the remaining programs need.')
-                code = ui.invoke(['validate'])
-                updated = ui.project() or {}
+            for _budget in range(6):
+                if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL':
+                    break
                 state = updated.get('pipeline') or {}
-            # A short cap returns a blocked status. Calls already spent still reach the question below.
-            if code != 0 and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan':
-                return
-            if updated.get('stage') != 'AWAITING_VALIDATION_APPROVAL':
-                updated = offer_review_budget(ui, updated)
-                if updated is None or updated.get('stage') != 'AWAITING_VALIDATION_APPROVAL':
+                settings = updated.get('settings') or {}
+                spent = state.get('calls') or 0
+                cap = settings.get('max_model_calls') or 0
+                # Spending the last call returns exhaustion. The next check restates the remaining plan.
+                if state.get('reason') == 'Total model call budget exhausted' or (
+                        code != 0 and cap and spent >= cap
+                        and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan'):
+                    ui.say('The call cap was spent. Checking how many calls the remaining programs need.')
+                    code = ui.invoke(['validate'])
+                    updated = ui.project() or {}
+                    continue
+                # A short cap returns a blocked status. Calls already spent still reach the question below.
+                if code != 0 and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan':
                     return
+                if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL':
+                    break
+                updated = offer_review_budget(ui, updated)
+                if updated is None:
+                    return
+                code = 0 if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL' else 2
+            else:
+                return
             stage = updated['stage']
             project = updated
         if stage in {'AWAITING_ASSESSMENT_APPROVAL', 'AWAITING_VALIDATION_APPROVAL', 'AWAITING_SPECIFICATIONS_APPROVAL'}:

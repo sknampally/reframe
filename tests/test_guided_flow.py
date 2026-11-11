@@ -156,6 +156,26 @@ class GuidedFlowTests(unittest.TestCase):
         self.assertEqual(ui.invoke.call_args_list[2].args[0],
                          ['model-budget', '--max-calls', '188', '--by', 'Satish', '--note', 'Finish the remaining programs'])
 
+    def test_a_raise_that_is_spent_asks_for_the_next_cap(self):
+        first = {'stage':'ASSESSMENT_APPROVED', 'approvals':{'assessment':True}}
+        blocked = {'stage':'PREPARATION_PLANNED', 'approvals':{'assessment':True}, 'pipeline':{
+            'calls':200, 'reason':'Insufficient call budget for remaining checkpoint plan',
+            'minimum_additional_calls':2, 'remaining_calls':0}}
+        exhausted = {'stage':'BLOCKED', 'approvals':{'assessment':True}, 'settings':{'max_model_calls':202}, 'pipeline':{
+            'calls':202, 'reason':'Total model call budget exhausted'}}
+        blocked_again = {'stage':'PREPARATION_PLANNED', 'approvals':{'assessment':True}, 'settings':{'max_model_calls':202}, 'pipeline':{
+            'calls':202, 'reason':'Insufficient call budget for remaining checkpoint plan',
+            'minimum_additional_calls':2, 'remaining_calls':0}}
+        ready = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}}
+        ui = self.ui(first, ['continue', 'review', 'Satish', 'Finish synthesis', 'Satish', 'Finish synthesis'])
+        ui.project.side_effect = [first, first, blocked, exhausted, blocked_again, ready]
+        ui.invoke.side_effect = [2, 0, 2, 2, 0, 0]
+        ui.yes.side_effect = [True, True, True, False]
+        lines = self.said(ui)
+        run(ui)
+        self.assertEqual(ui.yes.call_args_list[2].args[0], 'Raise the model-call cap to 204 and start the review?')
+        self.assertIn('Checking how many calls', '\n'.join(lines))
+
     def test_open_questions_are_deferred_before_validation_approval(self):
         waiting = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}, 'decisions':{}}
         approved = {'stage':'VALIDATION_APPROVED', 'approvals':{'assessment':True, 'validation':True}}

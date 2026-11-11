@@ -1143,6 +1143,17 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         state['status'] = 'RUNNING'
         state['invalid_candidates'] = 0
         state.pop('reason', None)
+    # The round limit already produced one correction. A synthesis review that still contradicts the
+    # candidate gets one more correction. A further contradiction stays stopped.
+    if (state.get('status') == 'REWORK_LIMIT' and state.get('candidate_sha256') and not state.get('limit_corrected')
+            and not project.get('specification')
+            and (project.get('checkpoints') or {}).get('status') == 'READY_FOR_SYNTHESIS'):
+        review_path = work / 'preparation' / f'checkpoint-review-{state.get("round", 1)}.json'
+        if review_path.is_file():
+            state['previous_review'] = read(review_path)
+        state.update(status='RUNNING', role='executor', round=state.get('round', 1) + 1, limit_corrected=True)
+        state.pop('reason', None)
+        project['stage'] = 'PREPARATION_PLANNED'
     require(state['status'] not in {'BLOCKED', 'REWORK_LIMIT'}, 'Resolve missing evidence via feedback before retrying')
     if project.get('specification'):
         return {'status': project['stage'], 'specification': project['specification']}
