@@ -498,11 +498,8 @@ def require_dollar_cap(project, role, provider=None):
 
 def upgrade_framework(work, project, args):
     """Record a reviewed controller fix without replacing source, jobs or evidence."""
-    require(not (set(project.get('approvals', {})) - {'assessment'}) and not project.get('specification')
-            and not project.get('pipeline', {}).get('candidate_sha256'),
-            'Framework upgrades require no candidate or downstream approvals')
-    require(not any(u.get('candidate_sha256') for u in project.get('checkpoints', {}).get('units', {}).values()),
-            'Framework upgrades require no checkpoint candidates')
+    require(not (set(project.get('approvals', {})) - {'assessment'}) and not project.get('specification'),
+            'Framework upgrades require no specification or downstream approvals')
     if project.get('approvals', {}).get('assessment'):
         require(project.get('selected') in project['assessments'], 'Approved assessment identity is missing')
         verified_assessment(project, project['selected'])
@@ -1063,6 +1060,8 @@ def preparation_plan(work, project, args):
         '<style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:0 24px;color:#183046}'
         'table{border-collapse:collapse;width:100%}td,th{padding:12px;text-align:left;border-bottom:1px solid #ccd7df}</style>'
         '<main><h1>Preparation coverage plan</h1><p>This is a deterministic inventory, not a completed assessment or approval.</p>'
+        '<p>' + str(len(plan.get('unlinked_source') or [])) + ' source files were not named by a finding and do not take a model call. '
+        + str(len(plan.get('unlinked_assessment') or [])) + ' findings did not name a program and do not take a model call.</p>'
         '<p>' + str(len(plan['units'])) + ' evidence units; at least ' + str(plan['minimum_calls']) + ' model calls for a new pass. '
         'Rework and additional evidence reads cost more. Calls are not a price estimate.</p>'
         '<p>Every unit must pass independent review before synthesis. Binary, undecodable and oversized single-line content '
@@ -1104,7 +1103,16 @@ def pipeline(work, project, args, runtime=model_call):
     require_stage_contract(work, 'task')
     import reframe_checkpoints as cp
     # Existing legacy runs retain their pinned behavior until explicitly migrated.
-    if not project.get('pipeline'):
+    checkpoints = project.get('checkpoints') or {}
+    progress = any(unit.get('status') == 'PASS' or unit.get('candidate_path') or unit.get('candidate_sha256')
+                   for unit in checkpoints.get('units', {}).values())
+    started = project.get('pipeline', {}).get('calls', 0) or progress
+    # A plan that marked readable source opaque is replaced. Accepted units stay.
+    if checkpoints and (not started or (not progress and cp.hidden_source(work, project, read))):
+        project.pop('checkpoints', None)
+        if project.get('stage') == 'PREPARATION_PLANNED':
+            project['stage'] = 'ASSESSMENT_APPROVED'
+    if not project.get('pipeline') or not project.get('checkpoints'):
         preparation_plan(work, project, SimpleNamespace(activate=True))
     if project.get('checkpoints') and project['checkpoints']['status'] != 'READY_FOR_SYNTHESIS':
         return cp.run(work, project, args, runtime, sys.modules[__name__])
@@ -1120,6 +1128,34 @@ def legacy_pipeline(work, project, args, runtime=model_call):
     assessment_dir, assessment_run = verified_assessment(project, label)
     approved(project, 'assessment', project['assessments'][label]['sha256'])
     state = project.setdefault('pipeline', {'round': 1, 'role': 'executor', 'calls': 0, 'contexts': {}, 'reads': {}, 'status': 'RUNNING'})
+    # A spent cap before synthesis is the same question as a short review plan. It is not a failed unit.
+    if state['calls'] >= project['settings']['max_model_calls'] and not project.get('specification'):
+        state['minimum_additional_calls'] = 2
+        state['remaining_calls'] = project['settings']['max_model_calls'] - state['calls']
+        state.update(status='BLOCKED', reason='Insufficient call budget for remaining checkpoint plan')
+        project['stage'] = 'PREPARATION_PLANNED'
+        persist(work, project)
+        return {'status':'BLOCKED', 'reason':state['reason'], 'calls':state['calls'],
+                'remaining_calls':state['remaining_calls'], 'minimum_additional_calls':2}
+    if (state.get('reason') in {'Insufficient call budget for remaining checkpoint plan',
+                                'Three invalid synthesis candidates; inspect validation feedback'}
+            and state['calls'] < project['settings']['max_model_calls'] and not project.get('specification')):
+        state['status'] = 'RUNNING'
+        state['invalid_candidates'] = 0
+        state.pop('reason', None)
+    # The round limit already produced a correction. Two further corrections are allowed when the
+    # review still contradicts the candidate. Another contradiction stays stopped.
+    used = state.get('limit_corrections') or (1 if state.get('limit_corrected') else 0)
+    if (state.get('status') == 'REWORK_LIMIT' and state.get('candidate_sha256') and used < 2
+            and not project.get('specification')
+            and (project.get('checkpoints') or {}).get('status') == 'READY_FOR_SYNTHESIS'):
+        review_path = work / 'preparation' / f'checkpoint-review-{state.get("round", 1)}.json'
+        if review_path.is_file():
+            state['previous_review'] = read(review_path)
+        state.update(status='RUNNING', role='executor', round=state.get('round', 1) + 1, limit_corrections=used + 1)
+        state.pop('reason', None)
+        state.pop('limit_corrected', None)
+        project['stage'] = 'PREPARATION_PLANNED'
     require(state['status'] not in {'BLOCKED', 'REWORK_LIMIT'}, 'Resolve missing evidence via feedback before retrying')
     if project.get('specification'):
         return {'status': project['stage'], 'specification': project['specification']}
@@ -1148,8 +1184,22 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             'remaining_model_calls': project['settings']['max_model_calls'] - state['calls'],
             'evidence_notes': state.get('evidence_notes', {}).get(key, [])}
         if capsules:
-            context['reviewed_evidence_units'] = capsules
-            context['checkpoint_instruction'] = 'Use these cited, independently reviewed checkpoints for synthesis. Preserve every business-rule ID and SME question ID. This is full selected-scope integration, not permission to narrow scope. Validate cross-unit dependencies and assessment reconciliation; do not claim runtime equivalence.'
+            context.pop('assessment_files', None)
+            # The reviewer reads the assembled specification. The executor still receives every unit.
+            if role == 'executor':
+                context['reviewed_evidence_units'] = [cp.synthesis_view(capsule) for capsule in capsules]
+                context['checkpoint_instruction'] = (
+                    'Return the cross-unit sections, scope, exclusions, tests, work items, and layout. '
+                    'Do not restate every business rule or SME question. The controller keeps every reviewed '
+                    'business rule and the exact SME question objects. A short candidate is valid. '
+                    'This is full selected-scope integration, not permission to narrow scope. '
+                    'Do not claim runtime equivalence.')
+            else:
+                context['checkpoint_instruction'] = (
+                    'The program reviews already inspected the source. Review the assembled specification. '
+                    'Return kind review. A source read is only for one claim you cannot check from the candidate. '
+                    'Do not inventory the repository. PASS when the specification keeps the reviewed rules and '
+                    'SME questions and does not claim runtime equivalence. REWORK only for a contradicted claim.')
         prior_reply = next((area / f'reply-{n}.json' for n in range(state['calls'], 0, -1)
                             if (area / f'reply-{n}.json').exists()), None)
         if role == 'executor' and prior_reply is not None:
@@ -1169,7 +1219,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             context['candidate'] = read(candidate_path)
         if state.get('previous_review'):
             context['previous_review'] = state['previous_review']
-        message = bounded_preparation_context(context, project['settings']['max_context_bytes'])
+        # Reviewed units are larger than one program. Synthesis may use the model window above the per-unit cap.
+        message = bounded_preparation_context(context, 600000 if capsules else project['settings']['max_context_bytes'])
         require_stage_contract(work, 'task')
         if role == 'reviewer':
             require_stage_contract(work, 'review')
@@ -1210,6 +1261,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             require(state['reads'].get(key) or checkpoint_paths, 'Executor must inspect source')
             require(any(x['request'].get('area') == 'assessment' and x.get('response') for x in history) or capsules, 'Executor must inspect assessment findings')
             try:
+                if capsules:
+                    cp.complete_synthesis(reply['specification'], capsules, plan)
                 validate_spec(reply.get('specification'), Path(project['source']['root']))
                 if capsules:
                     cp.validate_synthesis(reply['specification'], capsules)
@@ -1295,7 +1348,7 @@ def review_site(work, project, args, runtime=model_call):
     directory.mkdir(mode=0o700)
     message = json.dumps({'protocol': (FRAMEWORK / 'prompts/pipeline/wireframes.md').read_text(),
                           'specification': spec, 'decisions': project['decisions']})
-    require(len(message.encode()) <= project['settings']['max_context_bytes'], 'UI context exceeds budget')
+    require(len(message.encode()) <= max(project['settings']['max_context_bytes'], 600000), 'UI context exceeds budget')
     require_stage_contract(work, 'task')
     require_dollar_cap(project, 'wireframes', provider)
     persist(work, project)

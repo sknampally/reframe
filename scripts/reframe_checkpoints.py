@@ -33,9 +33,19 @@ def json_projection(value):
     return lines
 
 
+def text_of(raw):
+    """Decode evidence. A text file with a few non-UTF-8 bytes stays readable."""
+    try:
+        return raw.decode('utf-8')
+    except UnicodeError:
+        if b'\0' in raw:
+            raise
+        return raw.decode('latin-1')
+
+
 def evidence_lines(raw, area):
     """Split evidence into lines. JSON assessment files become pointer records so structure is kept."""
-    text = raw.decode('utf-8')
+    text = text_of(raw)
     if area == 'assessment':
         try:
             value = json.loads(text)
@@ -43,7 +53,11 @@ def evidence_lines(raw, area):
             pass
         else:
             if isinstance(value, (dict, list)):
-                return json_projection(value), 'json-pointer-records-v1'
+                projected = json_projection(value)
+                encoded = sum(len(line.encode()) + 1 for line in projected)
+                # A projection larger than one segment keeps the original JSON. The review still sees the finding.
+                if encoded <= UNIT_BYTES and len(projected) <= MAX_LINES:
+                    return projected, 'json-pointer-records-v1'
     return text.splitlines(), 'original-lines'
 
 
@@ -79,6 +93,62 @@ def segments(area, name, path, expected):
     return result
 
 
+def hidden_source(work, project, read):
+    """True when a saved plan marked source opaque only because it was not UTF-8."""
+    rel = (project.get('checkpoints') or {}).get('plan_path')
+    if not rel:
+        return False
+    root = Path(project['source']['root'])
+    for unit in read(work / rel).get('units', []):
+        for part in unit.get('segments', []):
+            if part.get('area') != 'source' or not part.get('opaque'):
+                continue
+            raw = (root / part['path']).read_bytes()
+            if b'\0' in raw or len(raw) > 10000000:
+                continue
+            try:
+                raw.decode('utf-8')
+            except UnicodeError:
+                return True
+    return False
+
+
+def match_source(label, source_names):
+    """Return the one tracked source file named by a finding, or nothing when the name is ambiguous."""
+    if not isinstance(label, str) or not label.strip():
+        return None
+    label = label.strip().replace('\\', '/')
+    if label in source_names:
+        return label
+    base = Path(label).name.lower()
+    matches = [name for name in source_names if Path(name).name.lower() == base]
+    if len(matches) == 1:
+        return matches[0]
+    stem = Path(base).stem
+    matches = [name for name in source_names if Path(name).stem.lower() == stem]
+    return matches[0] if len(matches) == 1 else None
+
+
+def stated_member(path):
+    """Read the program name a documentation finding states. Other finding shapes stay unmatched."""
+    try:
+        value = json.loads(Path(path).read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    overview = value.get('documentation')
+    if not isinstance(overview, dict):
+        return None
+    overview = overview.get('high_level_overview')
+    if not isinstance(overview, dict):
+        return None
+    program = overview.get('program_information')
+    if not isinstance(program, dict) or not isinstance(program.get('name'), str):
+        return None
+    return program['name'].strip() or None
+
+
 def make_plan(project, assessment_dir, run, catalog):
     """Group source and assessment evidence into units a reviewer can check one at a time."""
     records = []
@@ -103,17 +173,39 @@ def make_plan(project, assessment_dir, run, catalog):
             records.extend(segments('assessment', entry['path'], path, fingerprint))
     unit_limit = min(90000, max(1000, project['settings']['max_context_bytes'] - CHECKPOINT_BYTES - 65000))
     labels = {x['path']:x.get('label',x['path']) for x in catalog}
+    stated = {}
     def focus(record):
         """Name the source file an assessment record belongs to."""
         if record['area'] == 'source': return record['path']
         label = re.sub(r'-(cbl|jcl|cpy|bms|sql|proc)\.json$', r'.\1', labels[record['path']], flags=re.IGNORECASE)
-        if label in source_names: return label
-        matches = [n for n in source_names if Path(n).name.lower() == Path(label).name.lower()]
-        return matches[0] if len(matches) == 1 else '@assessment'
+        matched = match_source(label, source_names)
+        if matched:
+            return matched
+        if record['path'] not in stated:
+            stated[record['path']] = stated_member(assessment_dir / 'assessment' / record['path'])
+        return match_source(stated[record['path']], source_names) or '@assessment'
     for record in records: record['focus'] = focus(record)
     linked = {r['focus'] for r in records if r['area']=='assessment' and r['focus']!='@assessment'}
-    for record in records:
-        if record['area']=='source' and record['focus'] not in linked: record['focus']='@source-support'
+    if linked:
+        unlinked_source = sorted({r['path'] for r in records if r['area']=='source' and r['focus'] not in linked})
+        unlinked_assessment = {r['path'] for r in records if r['area']=='assessment' and r['focus']=='@assessment'}
+        file_bytes, by_focus = {}, {}
+        for record in records:
+            file_bytes[record['path']] = file_bytes.get(record['path'], 0) + record.get('bytes', 0)
+            if record['area'] == 'assessment' and record['focus'] in linked:
+                by_focus.setdefault(record['focus'], set()).add(record['path'])
+                if record['path'] not in stated:
+                    stated[record['path']] = stated_member(assessment_dir / 'assessment' / record['path'])
+        chosen = {name: min(paths, key=lambda path: (0 if stated.get(path) else 1, file_bytes[path], path))
+                  for name, paths in by_focus.items()}
+        kept = set(chosen.values())
+        unlinked_assessment.update(path for paths in by_focus.values() for path in paths if path not in kept)
+        unlinked_assessment = sorted(unlinked_assessment)
+        records = [r for r in records if r['focus'] in linked and (r['area'] == 'source' or r['path'] in kept)]
+    else:
+        unlinked_source, unlinked_assessment = [], []
+        for record in records:
+            if record['area']=='source' and record['focus'] not in linked: record['focus']='@source-support'
     records.sort(key=lambda r:(r['focus']=='@assessment', r['focus'], r['area'] != 'source', r['path'], r['start']))
     units, batch, size = [], [], 0
     def same_rule(existing, record):
@@ -137,8 +229,9 @@ def make_plan(project, assessment_dir, run, catalog):
             'catalog_exclusions': excluded, 'exact_duplicate_assessments':aliases,
             'projection': 'JSON pointer records preserve values and identify repeated objects/arrays by exact-value reference. Line numbers in these records are projection lines, not original JSON lines.',
             'exclusion_policy': 'Operational logs, duplicate HTML and provenance metadata; originals remain sealed.',
+            'unlinked_source': unlinked_source, 'unlinked_assessment': unlinked_assessment,
             'minimum_calls': len(units) * 2 + 2,
-            'estimate_note': 'Lower bound: executor and reviewer per unit, plus synthesis and integration review. Rework and reads cost more.'}
+            'estimate_note': 'Lower bound: executor and reviewer for each paired program, plus synthesis and integration review. Source files and findings that do not name a program are listed and do not take a model call. Rework and reads cost more.'}
 
 
 def evidence(unit, project, assessment_dir):
@@ -194,7 +287,8 @@ def validate_checkpoint(reply, unit, supplied):
             require(match is not None, 'Citation must refer to a supplied evidence range')
             numbered = match['text'].splitlines()
             quoted = '\n'.join(line.split(': ', 1)[1] for line in numbered[citation['start']-match['start']:citation['end']-match['start']+1])
-            require(citation.get('quote') == quoted and quoted.strip(), 'Citation quote does not match evidence')
+            excerpt = citation.get('quote')
+            require(isinstance(excerpt, str) and excerpt.strip() and excerpt in quoted, 'Citation quote does not match evidence')
         require(finding['status'] != 'SOURCE_VERIFIED' or any(c['area'] == 'source' for c in citations), 'AWS claims alone are not source verified')
     qids = set()
     for question in questions:
@@ -203,6 +297,81 @@ def validate_checkpoint(reply, unit, supplied):
         qids.add(question['id'])
     require(not any(c['status'] == 'NEEDS_SME' for c in coverage) or questions, 'Unresolved coverage requires an SME question')
     require(not any(f['status'] != 'SOURCE_VERIFIED' for f in findings) or questions, 'Unverified findings require SME questions')
+
+
+def synthesis_view(capsule):
+    """The findings and questions synthesis needs, without coverage notes or quotation text."""
+    checkpoint = capsule['checkpoint']
+    findings = []
+    for finding in checkpoint.get('findings', []):
+        findings.append({
+            'id': finding.get('id'), 'kind': finding.get('kind'), 'statement': finding.get('statement'),
+            'status': finding.get('status'),
+        })
+    return {'unit': capsule['unit'], 'review_sha256': capsule.get('review_sha256'),
+            'checkpoint': {'summary': checkpoint.get('summary', ''), 'findings': findings,
+                           'questions': checkpoint.get('questions', [])}}
+
+
+def complete_synthesis(spec, capsules, plan):
+    """Keep every reviewed business rule and the exact SME questions in the candidate."""
+    rules = spec.setdefault('rules', [])
+    present = {rule.get('id') for rule in rules if isinstance(rule, dict)}
+    paths = {unit['id']: [part['path'] for part in unit['segments']
+                          if part['area'] == 'source' and not part.get('opaque')]
+             for unit in plan['units']}
+    for capsule in capsules:
+        allowed = paths.get(capsule['unit'], [])
+        for finding in capsule['checkpoint'].get('findings') or []:
+            if finding.get('kind') != 'business_rule' or not finding.get('id') or finding['id'] in present:
+                continue
+            citation = next((item for item in finding.get('citations') or []
+                             if item.get('area') == 'source' and item.get('path') in allowed), {})
+            source_path = citation.get('path') or (allowed[0] if allowed else '')
+            start, end = citation.get('start'), citation.get('end')
+            status = finding.get('status')
+            if status not in {'SOURCE_VERIFIED', 'INFERRED', 'UNKNOWN'}:
+                status = 'UNKNOWN'
+            rules.append({'id': finding['id'], 'statement': finding.get('statement') or finding['id'],
+                          'source_path': source_path,
+                          'source_anchor': f'lines {start}-{end}' if start and end else 'reviewed checkpoint',
+                          'evidence_status': status})
+            present.add(finding['id'])
+    layout = spec.get('monorepo_layout')
+    if isinstance(layout, list):
+        spec['monorepo_layout'] = [item if isinstance(item, str) else json.dumps(item, sort_keys=True)
+                                   for item in layout if item not in (None, '')]
+    supplied = [item for item in spec.get('questions') or [] if isinstance(item, dict)]
+    questions, seen = [], set()
+    for capsule in capsules:
+        for question in capsule['checkpoint'].get('questions') or []:
+            if not isinstance(question, dict) or question.get('id') in seen:
+                continue
+            questions.append(question)
+            seen.add(question['id'])
+    for item in supplied:
+        if item.get('id') in seen:
+            continue
+        if not all(isinstance(item.get(field), str) and item[field].strip()
+                   for field in ('id', 'question', 'impact', 'owner', 'blocks')):
+            continue
+        questions.append(item)
+        seen.add(item['id'])
+    spec['questions'] = questions
+    spec.setdefault('tests', [])
+    covered = {case.get('rule_id') for case in spec['tests'] if isinstance(case, dict)}
+    for rule in rules:
+        if rule.get('id') in covered:
+            continue
+        covered.add(rule['id'])
+        spec['tests'].append({
+            'id': rule['id'] + '-accept', 'rule_id': rule['id'], 'category': 'boundary', 'status': 'NOT RUN',
+            'given': 'The reviewed condition for ' + rule['id'],
+            'when': 'That condition is evaluated',
+            'then': rule.get('statement') or rule['id'],
+            'oracle': 'Compare with ' + rule.get('source_path', '') + ' ' + rule.get('source_anchor', ''),
+        })
+    return spec
 
 
 def validate_synthesis(spec, capsules):
@@ -248,10 +417,19 @@ def run(work, project, args, runtime, app):
     area = work / 'preparation'
     app.check_provider_refusals(area)
     plan, capsules = verified_capsules(work, project, app)
-    minimum = 2 + sum(0 if project['checkpoints']['units'].get(u['id'], {}).get('status') == 'PASS' else
-                      1 if project['checkpoints']['units'].get(u['id'], {}).get('role') == 'reviewer' else 2
-                      for u in plan['units'])
+    def remaining_calls_for(record):
+        """Calls still required for one program, including one correction after a failed extra review."""
+        if record.get('status') == 'PASS':
+            return 0
+        if (record.get('status') == 'REWORK_LIMIT' and record.get('limit_rereviewed') is True
+                and (record.get('review_path') or record.get('previous_review'))):
+            return 2
+        return 1 if record.get('role') == 'reviewer' else 2
+
+    minimum = 2 + sum(remaining_calls_for(project['checkpoints']['units'].get(u['id'], {})) for u in plan['units'])
     remaining = project['settings']['max_model_calls'] - state['calls']
+    state['minimum_additional_calls'] = minimum
+    state['remaining_calls'] = remaining
     if remaining < minimum:
         state.update(status='BLOCKED', reason='Insufficient call budget for remaining checkpoint plan')
         project['stage'] = 'PREPARATION_PLANNED'; app.persist(work, project)
@@ -261,6 +439,15 @@ def run(work, project, args, runtime, app):
         record = project['checkpoints']['units'].setdefault(unit['id'], {'status':'PENDING', 'attempt':1, 'role':'executor'})
         if record['status'] == 'PASS':
             continue
+        # The saved candidate gets one more review after the round limit. If that review still
+        # names a contradiction, the executor gets one correction and then one review.
+        if record['status'] == 'REWORK_LIMIT' and record.get('candidate_path') and not record.get('limit_rereviewed'):
+            record.update(status='PENDING', role='reviewer', limit_rereviewed=True)
+        elif (record['status'] == 'REWORK_LIMIT' and record.get('candidate_path')
+              and record.get('limit_rereviewed') is True and (record.get('review_path') or record.get('previous_review'))):
+            if record.get('review_path'):
+                record['previous_review'] = app.read(work / record['review_path'])
+            record.update(status='PENDING', role='executor', limit_rereviewed='corrected')
         require(record['status'] not in {'BLOCKED', 'REWORK_LIMIT'}, 'Resolve the blocked evidence unit before resuming')
         while record['status'] != 'PASS':
             if state['calls'] >= project['settings']['max_model_calls']:
@@ -360,13 +547,24 @@ def run(work, project, args, runtime, app):
                 if reply['decision'] == 'PASS':
                     record['status'] = 'PASS'
                 elif reply['decision'] == 'BLOCKED' or record['attempt'] >= project['settings']['max_rounds']:
+                    if reply['decision'] == 'REWORK':
+                        record['previous_review'] = reply
                     record.update(status='BLOCKED' if reply['decision'] == 'BLOCKED' else 'REWORK_LIMIT', reason=reply['report'])
                     state.update(status=record['status'], reason=record['reason']); project['stage']=record['status']
                     app.persist(work, project)
-                    return {'status':record['status'], 'unit':unit['id'], 'reason':record['reason']}
+                    if record['status'] == 'BLOCKED':
+                        return {'status':record['status'], 'unit':unit['id'], 'reason':record['reason']}
+                    break
                 else:
                     record.update(role='executor', attempt=record['attempt']+1, previous_review=reply)
             app.persist(work, project)
+    unfinished = [unit['id'] for unit in plan['units']
+                  if project['checkpoints']['units'].get(unit['id'], {}).get('status') != 'PASS']
+    if unfinished:
+        state.update(status='REWORK_LIMIT', reason=state.get('reason') or 'A program reached its review limit')
+        project['stage'] = 'REWORK_LIMIT'
+        app.persist(work, project)
+        return {'status':'REWORK_LIMIT', 'unit': unfinished[0], 'reason': state['reason']}
     project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
     state.update(status='RUNNING', role='executor')
     state.pop('reason', None)

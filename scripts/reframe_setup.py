@@ -609,7 +609,11 @@ def next_step(project):
     if project['stage'] == 'PROVIDER_REVIEW_REQUIRED':
         return 'Review the private provider refusal and request content; automatic model retries are stopped.'
     stage = project['stage']
-    if stage == 'PREPARATION_PLANNED': return 'Review reframe prepare-plan and the call budget, then reframe validate'
+    if stage == 'PREPARATION_PLANNED':
+        state = project.get('pipeline') or {}
+        if state.get('reason') == 'Insufficient call budget for remaining checkpoint plan':
+            return 'Use /flow and choose review. The next question asks before the cap is raised.'
+        return 'Review reframe prepare-plan and the call budget, then reframe validate'
     if project.get('pending_action'): return 'reframe resume'
     if stage == 'PACKAGED': return 'Inspect the generated package and its deferred work boundaries.'
     if stage == 'SPECIFICATIONS_APPROVED': return 'reframe package'

@@ -1082,7 +1082,11 @@ def source_read(run, directory, role, request):
             require(expected == sha(path), 'Assessment snapshot changed')
         raw = path.read_bytes()
         require(len(raw) <= 10000000 and b'\0' not in raw, 'Requested file exceeds 10 MB or is binary')
-        text = raw.decode('utf-8')
+        try:
+            text = raw.decode('utf-8')
+        except UnicodeError:
+            # Same fallback as the program review: a text file with a few high bytes stays readable.
+            text = raw.decode('latin-1')
         start, end = request.get('start', 1), request.get('end', 300)
         require(type(start) is int and type(end) is int and 1 <= start <= end and end - start < 500,
                 'Read ranges require positive start/end and at most 500 lines')

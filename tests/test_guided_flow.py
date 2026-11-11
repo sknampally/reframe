@@ -99,6 +99,107 @@ class GuidedFlowTests(unittest.TestCase):
         self.assertEqual(args[0], 'preview')
         self.assertIn('--skip-validation', args)
 
+    def test_short_review_budget_states_the_count_before_raising_it(self):
+        first = {'stage':'ASSESSMENT_APPROVED', 'approvals':{'assessment':True}}
+        blocked = {'stage':'PREPARATION_PLANNED', 'approvals':{'assessment':True}, 'pipeline':{
+            'calls':0, 'reason':'Insufficient call budget for remaining checkpoint plan',
+            'minimum_additional_calls':12, 'remaining_calls':4}}
+        ready = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}}
+        ui = self.ui(first, ['continue', 'review', 'Owner', 'Cover the paired programs'])
+        ui.project.side_effect = [first, first, blocked, ready]
+        ui.invoke.side_effect = [2, 0, 0]
+        ui.yes.side_effect = [True, True, False]
+        lines = self.said(ui)
+        run(ui)
+        self.assertIn('at least 12 more model calls', '\n'.join(lines))
+        self.assertEqual(ui.invoke.call_args_list[1].args[0],
+                         ['model-budget', '--max-calls', '12', '--by', 'Owner', '--note', 'Cover the paired programs'])
+        self.assertEqual(ui.invoke.call_args_list[2].args[0], ['validate'])
+
+    def test_spent_calls_ask_to_raise_the_cap_above_what_was_used(self):
+        first = {'stage':'ASSESSMENT_APPROVED', 'approvals':{'assessment':True}}
+        blocked = {'stage':'PREPARATION_PLANNED', 'approvals':{'assessment':True}, 'pipeline':{
+            'calls':3, 'reason':'Insufficient call budget for remaining checkpoint plan',
+            'minimum_additional_calls':142, 'remaining_calls':139}}
+        ready = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}}
+        ui = self.ui(first, ['continue', 'review', 'Satish', 'Need more to run'])
+        ui.project.side_effect = [first, first, blocked, ready]
+        ui.invoke.side_effect = [2, 0, 0]
+        ui.yes.side_effect = [True, True, False]
+        lines = self.said(ui)
+        run(ui)
+        text = '\n'.join(lines)
+        self.assertIn('at least 142 more model calls', text)
+        self.assertIn('3 model calls were already used', text)
+        self.assertEqual(ui.yes.call_args_list[1].args[0], 'Raise the model-call cap to 145 and start the review?')
+        self.assertEqual(ui.invoke.call_args_list[1].args[0],
+                         ['model-budget', '--max-calls', '145', '--by', 'Satish', '--note', 'Need more to run'])
+        self.assertEqual(ui.invoke.call_args_list[2].args[0], ['validate'])
+
+    def test_exhausted_budget_restates_the_remaining_plan_before_asking(self):
+        first = {'stage':'ASSESSMENT_APPROVED', 'approvals':{'assessment':True}}
+        exhausted = {'stage':'BLOCKED', 'approvals':{'assessment':True}, 'pipeline':{
+            'calls':148, 'reason':'Total model call budget exhausted'}}
+        blocked = {'stage':'PREPARATION_PLANNED', 'approvals':{'assessment':True}, 'pipeline':{
+            'calls':148, 'reason':'Insufficient call budget for remaining checkpoint plan',
+            'minimum_additional_calls':40, 'remaining_calls':0}}
+        ready = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}}
+        ui = self.ui(first, ['continue', 'review', 'Satish', 'Finish the remaining programs'])
+        ui.project.side_effect = [first, first, exhausted, blocked, ready]
+        ui.invoke.side_effect = [2, 2, 0, 0]
+        ui.yes.side_effect = [True, True, False]
+        lines = self.said(ui)
+        run(ui)
+        self.assertIn('at least 40 more model calls', '\n'.join(lines))
+        self.assertEqual(ui.invoke.call_args_list[1].args[0], ['validate'])
+        self.assertEqual(ui.yes.call_args_list[1].args[0], 'Raise the model-call cap to 188 and start the review?')
+        self.assertEqual(ui.invoke.call_args_list[2].args[0],
+                         ['model-budget', '--max-calls', '188', '--by', 'Satish', '--note', 'Finish the remaining programs'])
+
+    def test_a_raise_that_is_spent_asks_for_the_next_cap(self):
+        first = {'stage':'ASSESSMENT_APPROVED', 'approvals':{'assessment':True}}
+        blocked = {'stage':'PREPARATION_PLANNED', 'approvals':{'assessment':True}, 'pipeline':{
+            'calls':200, 'reason':'Insufficient call budget for remaining checkpoint plan',
+            'minimum_additional_calls':2, 'remaining_calls':0}}
+        exhausted = {'stage':'BLOCKED', 'approvals':{'assessment':True}, 'settings':{'max_model_calls':202}, 'pipeline':{
+            'calls':202, 'reason':'Total model call budget exhausted'}}
+        blocked_again = {'stage':'PREPARATION_PLANNED', 'approvals':{'assessment':True}, 'settings':{'max_model_calls':202}, 'pipeline':{
+            'calls':202, 'reason':'Insufficient call budget for remaining checkpoint plan',
+            'minimum_additional_calls':2, 'remaining_calls':0}}
+        ready = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}}
+        ui = self.ui(first, ['continue', 'review', 'Satish', 'Finish synthesis', 'Satish', 'Finish synthesis'])
+        ui.project.side_effect = [first, first, blocked, exhausted, blocked_again, ready]
+        ui.invoke.side_effect = [2, 0, 2, 2, 0, 0]
+        ui.yes.side_effect = [True, True, True, False]
+        lines = self.said(ui)
+        run(ui)
+        self.assertEqual(ui.yes.call_args_list[2].args[0], 'Raise the model-call cap to 204 and start the review?')
+        self.assertIn('Checking how many calls', '\n'.join(lines))
+
+    def test_open_questions_are_deferred_before_validation_approval(self):
+        waiting = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}, 'decisions':{}}
+        approved = {'stage':'VALIDATION_APPROVED', 'approvals':{'assessment':True, 'validation':True}}
+        ui = self.ui(waiting, ['continue', 'Satish', 'Deferred for package review'])
+        ui.yes.side_effect = [True, True]
+        ui.project.side_effect = [waiting, waiting, approved]
+        ui.invoke.side_effect = [0, 0, 0, 2]
+        with patch('reframe_flow.open_question_ids', return_value=['Q1', 'Q2']):
+            run(ui)
+        calls = [c.args[0] for c in ui.invoke.call_args_list]
+        self.assertEqual(calls[0], ['decide', '--question', 'Q1', '--by', 'Satish',
+                                    '--answer', 'Deferred for package review', '--disposition', 'deferred'])
+        self.assertEqual(calls[1], ['decide', '--question', 'Q2', '--by', 'Satish',
+                                    '--answer', 'Deferred for package review', '--disposition', 'deferred'])
+        self.assertEqual(calls[2], ['approve', 'validation'])
+
+    def test_declining_deferral_records_no_approval(self):
+        waiting = {'stage':'AWAITING_VALIDATION_APPROVAL', 'approvals':{'assessment':True}, 'decisions':{}}
+        ui = self.ui(waiting, ['continue'])
+        ui.yes.return_value = False
+        with patch('reframe_flow.open_question_ids', return_value=['Q1']):
+            run(ui)
+        ui.invoke.assert_not_called()
+
     def test_review_word_runs_validation(self):
         ui = self.ui({'stage':'ASSESSMENT_APPROVED','approvals':{'assessment':True}}, ['continue','review'])
         ui.yes.return_value = True

@@ -126,6 +126,65 @@ def package_rows(project):
     ]
 
 
+def open_question_ids(project):
+    """Question ids with no recorded decision. An absent specification file means none yet."""
+    record = project.get('specification') or {}
+    work = workspace_path()
+    if not work or not record.get('path'):
+        return []
+    path = work / record['path']
+    if not path.is_file():
+        return []
+    from reframe import read, spec_path
+    spec = read(spec_path(work, project))
+    decided = project.get('decisions') or {}
+    return [q['id'] for q in spec.get('questions') or [] if isinstance(q, dict) and q.get('id') not in decided]
+
+
+def defer_open_questions(ui, project):
+    """Record an explicit deferral for every open SME question before validation approval."""
+    pending = open_question_ids(project)
+    if not pending:
+        return True
+    ui.say(str(len(pending)) + ' SME questions are still open. A deferral is recorded; it is not an answer.')
+    if not ui.yes('Defer the ' + str(len(pending)) + ' open SME questions so the package can be written for review?'):
+        ui.say('Paused. Record each SME answer with reframe decide, then return with /flow. No approval was recorded.')
+        return False
+    owner = ui.ask('Accountable owner for these deferred questions')
+    note = ui.ask('Reason for deferring the open questions')
+    for question in pending:
+        if ui.invoke(['decide', '--question', question, '--by', owner, '--answer', note, '--disposition', 'deferred']) != 0:
+            ui.say('A deferral was not recorded. /flow retries the remaining questions. No approval was recorded.')
+            return False
+    return True
+
+
+def offer_review_budget(ui, project):
+    """Say when the paired review does not fit the saved cap. A larger cap is recorded only after a yes."""
+    state = project.get('pipeline') or {}
+    if state.get('reason') != 'Insufficient call budget for remaining checkpoint plan':
+        ui.say('Verification paused. Inspect status and any budget or evidence blocker before continuing.')
+        return None
+    needed = state.get('minimum_additional_calls')
+    spent = state.get('calls', 0) or 0
+    ui.say('The review plan needs at least ' + str(needed) + ' more model calls. The saved cap leaves '
+           + str(state.get('remaining_calls')) + '. ' + str(spent) + ' model calls were already used.')
+    cap = spent + needed if isinstance(needed, int) else None
+    if not isinstance(cap, int) or not spent < cap <= 256:
+        ui.say('That plan needs more than 256 model calls. The cap cannot be raised that far. No model call was made.')
+        return None
+    if not ui.yes('Raise the model-call cap to ' + str(cap) + ' and start the review?'):
+        ui.say('Review stayed within the saved cap. No model call was made.')
+        return None
+    owner = ui.ask('Accountable owner for this call budget')
+    note = ui.ask('Reason for this call budget')
+    if ui.invoke(['model-budget', '--max-calls', str(cap), '--by', owner, '--note', note]) != 0:
+        return None
+    if ui.invoke(['validate']) != 0:
+        return ui.project()
+    return ui.project()
+
+
 def run(ui):
     """Walk a saved project from setup through assessment, skip or review, approvals, and the package."""
     from reframe_setup import workspace
@@ -176,11 +235,33 @@ def run(ui):
                 return
             if not ui.yes('Run independent verification using the saved model-call budget?'):
                 return
-            if ui.invoke(['validate']) != 0:
-                return
-            updated = ui.project()
-            if updated.get('stage') != 'AWAITING_VALIDATION_APPROVAL':
-                ui.say('Verification paused. Inspect status and any budget or evidence blocker before continuing.')
+            code = ui.invoke(['validate'])
+            updated = ui.project() or ui.project() or {}
+            for _budget in range(6):
+                if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL':
+                    break
+                state = updated.get('pipeline') or {}
+                settings = updated.get('settings') or {}
+                spent = state.get('calls') or 0
+                cap = settings.get('max_model_calls') or 0
+                # Spending the last call returns exhaustion. The next check restates the remaining plan.
+                if state.get('reason') == 'Total model call budget exhausted' or (
+                        code != 0 and cap and spent >= cap
+                        and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan'):
+                    ui.say('The call cap was spent. Checking how many calls the remaining programs need.')
+                    code = ui.invoke(['validate'])
+                    updated = ui.project() or {}
+                    continue
+                # A short cap returns a blocked status. Calls already spent still reach the question below.
+                if code != 0 and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan':
+                    return
+                if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL':
+                    break
+                updated = offer_review_budget(ui, updated)
+                if updated is None:
+                    return
+                code = 0 if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL' else 2
+            else:
                 return
             stage = updated['stage']
             project = updated
@@ -190,6 +271,8 @@ def run(ui):
                 return
             rows = {'assessment': assessment_rows, 'validation': validation_rows, 'specifications': specification_rows}[phase](project)
             say_review(ui, 'Review these ' + phase + ' files before you approve. Unresolved decisions remain enforced.', rows)
+            if phase == 'validation' and not defer_open_questions(ui, project):
+                return
             if not ui.yes('Have you reviewed the ' + phase + ' outputs and want to record approval now?'):
                 ui.say('Paused for human review. The files listed above are unchanged. Return with /flow; no approval was recorded.')
                 return

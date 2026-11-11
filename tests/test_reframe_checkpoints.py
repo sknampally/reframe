@@ -74,7 +74,74 @@ class CheckpointTests(unittest.TestCase):
         self.assertTrue(all(u['status']=='PASS' for u in self.project['checkpoints']['units'].values()))
         self.assertEqual(set(self.project['approvals']), {'assessment'})
         self.assertIn('reviewed_evidence_units', self.seen[-2][1])
+        synthesis_review = next(ctx for role, ctx in reversed(self.seen) if role == 'reviewer' and 'unit_id' not in ctx)
+        self.assertNotIn('reviewed_evidence_units', synthesis_review)
+        self.assertIn('assembled specification', synthesis_review['checkpoint_instruction'])
         self.assertTrue((self.work/self.project['preparation_report']['path']).is_file())
+
+    def test_synthesis_contradiction_gets_one_correction_after_the_round_limit(self):
+        reviews = {'n': 0}
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'reviewer' and 'unit_id' not in context:
+                reviews['n'] += 1
+                if reviews['n'] < 3:
+                    return {'kind':'review', 'decision':'REWORK', 'report':'The screen count contradicts the inventory',
+                            'findings':[{'id':'RV', 'issue':'screen count'}]}
+                self.assertEqual(context['previous_review']['report'], 'The screen count contradicts the inventory')
+                return {'kind':'review', 'decision':'PASS', 'report':'The corrected specification matches the inventory', 'findings':[]}
+            return self.runtime(provider, run, directory, role, message)
+        first = app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(first['status'], 'REWORK_LIMIT')
+        self.assertEqual(reviews['n'], 2)
+        self.project = app.read(self.work / 'project.json')
+        second = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(second['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.assertEqual(self.project['pipeline'].get('limit_corrections'), 1)
+        self.assertEqual(reviews['n'], 3)
+
+    def test_a_second_synthesis_contradiction_stays_stopped(self):
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'reviewer' and 'unit_id' not in context:
+                return {'kind':'review', 'decision':'REWORK', 'report':'The screen count still contradicts the inventory',
+                        'findings':[{'id':'RV', 'issue':'screen count'}]}
+            return self.runtime(provider, run, directory, role, message)
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('validate'), runtime)['status'], 'REWORK_LIMIT')
+        self.project = app.read(self.work / 'project.json')
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('resume'), runtime)['status'], 'REWORK_LIMIT')
+        self.project = app.read(self.work / 'project.json')
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('resume'), runtime)['status'], 'REWORK_LIMIT')
+        self.project = app.read(self.work / 'project.json')
+        with self.assertRaisesRegex(Blocked, 'Resolve missing evidence via feedback before retrying'):
+            app.pipeline(self.work, self.project, self.args('resume'), runtime)
+
+    def test_finding_program_name_joins_that_source_file(self):
+        (self.source / 'APP').mkdir()
+        (self.source / 'APP' / 'MEMBER.TXT').write_text('IDENTIFICATION DIVISION.\n')
+        (self.source / 'APP' / 'COPY.TXT').write_text('01 ITEM.\n')
+        self.source_files += ['APP/MEMBER.TXT', 'APP/COPY.TXT']
+        folder = self.root / 'sealed' / 'assessment'
+        folder.mkdir(parents=True)
+        (folder / 'finding-1.json').write_text(json.dumps({
+            'documentation': {'high_level_overview': {'program_information': {'name': 'MEMBER.TXT', 'type': 'cobol'}}}}))
+        (folder / 'rules.json').write_text('{"rules":["reject zero amount"]}')
+        (folder / 'extract.json').write_text(json.dumps({'rules': ['x' * 4000]}))
+        index = [{'path': name, 'sha256': sha(folder / name)} for name in ('finding-1.json', 'rules.json', 'extract.json')]
+        self.project['selected'] = 'a'
+        self.project['assessments']['a']['sha256'] = 'fixture'
+        catalog = [{'path': item['path'], 'label': 'APP/MEMBER-cbl.json' if item['path'] == 'extract.json' else item['path']}
+                   for item in index]
+        plan = cp.make_plan(self.project, folder.parent, {'assessment_index': index}, catalog)
+        focuses = {unit['focus'] for unit in plan['units']}
+        self.assertIn('APP/MEMBER.TXT', focuses)
+        self.assertNotIn('APP/COPY.TXT', focuses)
+        self.assertIn('APP/COPY.TXT', plan['unlinked_source'])
+        self.assertIn('rule.cbl', plan['unlinked_source'])
+        self.assertEqual(plan['unlinked_assessment'], ['extract.json', 'rules.json'])
+        paired = next(unit for unit in plan['units'] if unit['focus'] == 'APP/MEMBER.TXT')
+        self.assertEqual({part['path'] for part in paired['segments']}, {'APP/MEMBER.TXT', 'finding-1.json'})
+        self.assertEqual(focuses, {'APP/MEMBER.TXT'})
 
     def test_preview_does_not_activate_or_change_budget(self):
         result = app.preparation_plan(self.work, self.project, argparse.Namespace(activate=False))
@@ -133,8 +200,32 @@ class CheckpointTests(unittest.TestCase):
         directory,_=app.verified_assessment(self.project,self.project['selected'])
         supplied=cp.evidence(unit,self.project,directory)
         candidate=self.checkpoint({'unit_id':unit['id'],'evidence':supplied})
+        full = candidate['findings'][0]['citations'][0]['quote']
+        candidate['findings'][0]['citations'][0]['quote'] = full[:12]
+        cp.validate_checkpoint(candidate, unit, supplied)
         candidate['findings'][0]['citations'][0]['quote']='invented'
         with self.assertRaisesRegex(Blocked,'does not match'):cp.validate_checkpoint(candidate,unit,supplied)
+
+    def test_synthesis_view_fits_seventy_units_in_the_context_limit(self):
+        capsule = {'unit':'U0001', 'review_sha256':'a'*64, 'checkpoint':{
+            'summary':'s'*400, 'coverage':[{'note':'n'*500}],
+            'findings':[{'id':'U0001-F1', 'kind':'business_rule', 'statement':'x'*240, 'status':'SOURCE_VERIFIED',
+                         'citations':[{'area':'source', 'path':'a.txt', 'start':1, 'end':1, 'quote':'q'*400}]}],
+            'questions':[{'id':'U0001-Q1', 'question':'q'*160, 'impact':'i'*80, 'owner':'SME', 'blocks':'b'*80}]}}
+        views = []
+        for index in range(70):
+            item = json.loads(json.dumps(capsule))
+            item['unit'] = f'U{index+1:04d}'
+            item['checkpoint']['findings'][0]['id'] = item['unit'] + '-F1'
+            item['checkpoint']['questions'][0]['id'] = item['unit'] + '-Q1'
+            view = cp.synthesis_view(item)
+            self.assertNotIn('coverage', view['checkpoint'])
+            self.assertNotIn('citations', view['checkpoint']['findings'][0])
+            self.assertNotIn('"quote"', json.dumps(view))
+            views.append(view)
+        catalog = [{'path': f'finding-{i}.json', 'label': f'PROGRAM{i}.txt'} for i in range(360)]
+        message = json.dumps({'assessment_files': catalog, 'reviewed_evidence_units': views})
+        self.assertLess(len(message.encode()), 180000)
 
     def test_omitted_segments_and_false_aws_certainty_rejected(self):
         self.plan();plan,_=cp.verified_capsules(self.work,self.project,app)
@@ -165,12 +256,151 @@ class CheckpointTests(unittest.TestCase):
         self.assertTrue(all(p['end']-p['start']<cp.MAX_LINES for p in parts))
         path.write_bytes(b'\x00binary')
         self.assertTrue(cp.segments('source','binary',path,sha(path))[0]['opaque'])
+        path.write_bytes(b'       IDENTIFICATION DIVISION.\xb3\n')
+        parts = cp.segments('source','member.txt',path,sha(path))
+        self.assertFalse(parts[0].get('opaque'))
+        self.assertIn('\u00b3', cp.evidence_lines(path.read_bytes(), 'source')[0][0])
+
+    def test_non_utf8_source_is_replanned_without_another_call(self):
+        member = self.source / 'MEMBER.TXT'
+        member.write_bytes(b'       IDENTIFICATION DIVISION.\xb3\n')
+        self.source_files.append('MEMBER.TXT')
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = json.loads(plan_path.read_text())
+        plan['units'][0]['segments'][0] = {'area':'source', 'path':'MEMBER.TXT', 'sha256':sha(member),
+                                           'start':0, 'end':0, 'opaque':True, 'bytes':member.stat().st_size}
+        mutated = plan_path.with_name('plan-opaque.json')
+        mutated.write_text(json.dumps(plan))
+        self.project['checkpoints']['plan_path'] = str(mutated.relative_to(self.work))
+        self.project['checkpoints']['plan_sha256'] = sha(mutated)
+        self.project['checkpoints']['units'] = {'U0001': {'status':'BLOCKED', 'role':'executor', 'attempt':1}}
+        self.project['pipeline']['calls'] = 3
+        self.project['pipeline']['status'] = 'BLOCKED'
+        self.project['stage'] = 'BLOCKED'
+        self.project['settings']['max_model_calls'] = 3
+        app.persist(self.work, self.project)
+        result = app.pipeline(self.work, self.project, self.args('validate'), lambda *a: self.fail('No model call'))
+        self.assertEqual(result['status'], 'BLOCKED')
+        self.assertEqual(self.project['pipeline']['calls'], 3)
+        saved = app.read(self.work / self.project['checkpoints']['plan_path'])
+        member_parts = [part for unit in saved['units'] for part in unit['segments'] if part['path'] == 'MEMBER.TXT']
+        self.assertTrue(member_parts and not member_parts[0].get('opaque'))
 
     def test_context_overflow_stops_before_spending_call(self):
         self.plan();self.project['settings']['max_context_bytes']=100
         with self.assertRaisesRegex(Blocked,'context limit'):
             app.pipeline(self.work,self.project,self.args('validate'),lambda *a:self.fail('No oversized provider call'))
         self.assertEqual(self.project['pipeline']['calls'],0)
+
+    def test_reviewer_passes_matching_claims_without_an_inventory_round(self):
+        text = (app.FRAMEWORK / 'prompts/checkpoints/reviewer.md').read_text()
+        self.assertIn('PASS when every written claim matches its citation', text)
+        self.assertNotIn('may request specific omitted behavior', text)
+
+    def test_rework_limit_still_reviews_the_next_program_and_retries_once(self):
+        self.plan()
+        seen = {'U0001': 0}
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if context.get('unit_id') == 'U0001' and role == 'reviewer':
+                seen['U0001'] += 1
+                if seen['U0001'] < 3:
+                    return {'kind':'review', 'decision':'REWORK', 'report':'Add the omitted branch',
+                            'findings':['Record the omitted branch']}
+            return self.runtime(provider, run, directory, role, message)
+        first = app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(first['status'], 'REWORK_LIMIT')
+        self.assertEqual(self.project['checkpoints']['units']['U0002']['status'], 'PASS')
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['status'], 'REWORK_LIMIT')
+        second = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['status'], 'PASS')
+        self.assertEqual(seen['U0001'], 3)
+        self.assertEqual(second['status'], 'AWAITING_VALIDATION_APPROVAL')
+
+    def test_failed_limit_review_gets_one_executor_correction(self):
+        self.plan()
+        seen = {'U0001': 0}
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if context.get('unit_id') == 'U0001' and role == 'reviewer':
+                seen['U0001'] += 1
+                if seen['U0001'] < 4:
+                    return {'kind':'review', 'decision':'REWORK', 'report':'The cited branch is contradicted',
+                            'findings':[{'issue':'The cited branch is contradicted'}]}
+            return self.runtime(provider, run, directory, role, message)
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('validate'), runtime)['status'], 'REWORK_LIMIT')
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('resume'), runtime)['status'], 'REWORK_LIMIT')
+        self.assertEqual(seen['U0001'], 3)
+        self.project['settings']['max_model_calls'] = self.project['pipeline']['calls']
+        blocked = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(blocked['reason'], 'Insufficient call budget for remaining checkpoint plan')
+        self.assertEqual(blocked['minimum_additional_calls'], 4)
+        self.project['settings']['max_model_calls'] = self.project['pipeline']['calls'] + 8
+        third = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['status'], 'PASS')
+        self.assertEqual(seen['U0001'], 4)
+        self.assertEqual(third['status'], 'AWAITING_VALIDATION_APPROVAL')
+
+    def test_synthesis_restores_rules_and_questions_the_model_omitted(self):
+        question = {'id':'Q1', 'question':'What limit applies', 'impact':'Stops the case',
+                    'owner':'SME', 'blocks':'The case cannot be approved'}
+        plan = {'units':[{'id':'U0001', 'segments':[{'area':'source', 'path':'a.txt'}]}]}
+        capsules = [{'unit':'U0001', 'checkpoint':{
+            'findings':[{'id':'R1', 'kind':'business_rule', 'statement':'Reject a zero amount',
+                         'status':'SOURCE_VERIFIED',
+                         'citations':[{'area':'source', 'path':'a.txt', 'start':4, 'end':6, 'quote':'REJECT'}]}],
+            'questions':[question]}}]
+        spec = {'rules':[{'id':'local', 'statement':'Local rule', 'source_path':'a.txt',
+                          'source_anchor':'lines 1-1', 'evidence_status':'SOURCE_VERIFIED'}],
+                'questions':[{'id':'Q1', 'question':'changed'},
+                             {'id':'QX', 'question':'Which split applies', 'impact':'Blocks the service boundary',
+                              'owner':'Architect', 'blocks':'Service design'}],
+                'monorepo_layout':[{'path':'apps/ui', 'role':'interface'}],
+                'tests':[{'id':'local-T', 'rule_id':'local', 'category':'normal', 'status':'NOT RUN',
+                         'given':'g', 'when':'w', 'then':'t', 'oracle':'o'}]}
+        cp.complete_synthesis(spec, capsules, plan)
+        self.assertEqual(spec['monorepo_layout'], ['{"path": "apps/ui", "role": "interface"}'])
+        self.assertEqual({rule['id'] for rule in spec['rules']}, {'local', 'R1'})
+        added = next(rule for rule in spec['rules'] if rule['id'] == 'R1')
+        self.assertEqual(added['source_path'], 'a.txt')
+        self.assertEqual(added['source_anchor'], 'lines 4-6')
+        self.assertEqual(spec['questions'], [question, {
+            'id':'QX', 'question':'Which split applies', 'impact':'Blocks the service boundary',
+            'owner':'Architect', 'blocks':'Service design'}])
+        self.assertEqual(spec['tests'][-1], {
+            'id': 'R1-accept', 'rule_id': 'R1', 'category': 'boundary', 'status': 'NOT RUN',
+            'given': 'The reviewed condition for R1', 'when': 'That condition is evaluated',
+            'then': 'Reject a zero amount', 'oracle': 'Compare with a.txt lines 4-6'})
+
+    def test_spent_cap_before_synthesis_asks_for_two_calls(self):
+        self.plan()
+        ready = app.pipeline(self.work, self.project, self.args('validate'), self.runtime)
+        self.assertEqual(ready['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.project.pop('specification')
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['pipeline']['calls'] = self.project['settings']['max_model_calls']
+        self.project['pipeline']['status'] = 'BLOCKED'
+        self.project['pipeline']['reason'] = 'Total model call budget exhausted'
+        self.project['stage'] = 'BLOCKED'
+        blocked = app.pipeline(self.work, self.project, self.args('resume'), self.runtime)
+        self.assertEqual(blocked['reason'], 'Insufficient call budget for remaining checkpoint plan')
+        self.assertEqual(blocked['minimum_additional_calls'], 2)
+        self.project['settings']['max_model_calls'] = self.project['pipeline']['calls'] + 2
+        done = app.pipeline(self.work, self.project, self.args('resume'), self.runtime)
+        self.assertEqual(done['status'], 'AWAITING_VALIDATION_APPROVAL')
+
+    def test_three_invalid_synthesis_candidates_can_resume(self):
+        self.plan()
+        ready = app.pipeline(self.work, self.project, self.args('validate'), self.runtime)
+        self.assertEqual(ready['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.project.pop('specification')
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['pipeline'].update(status='BLOCKED', invalid_candidates=3,
+            reason='Three invalid synthesis candidates; inspect validation feedback')
+        self.project['stage'] = 'BLOCKED'
+        done = app.pipeline(self.work, self.project, self.args('resume'), self.runtime)
+        self.assertEqual(done['status'], 'AWAITING_VALIDATION_APPROVAL')
 
     def test_invalid_schema_stops_after_three_calls(self):
         self.plan()
