@@ -321,11 +321,7 @@ so the change is incorporated before approval.
 # Or --provider claude
 ```
 
-Open the printed `index.html`. It contains wireframe layouts, screen states,
-business rules, source references, proposed architecture and technical specifications,
-SME decisions and unexecuted acceptance scenarios. It is a standalone review document:
-fields/actions are disabled, all model content is escaped, no external assets or
-JavaScript are loaded. It is not an interactive backend simulation.
+Open the printed `index.html`. It opens on the journeys the wireframe model named. Choosing a step opens that screen, and an action opens the screen the model named. A label with no screen id stays on the page. Business rules opens the rules linked to that screen. Services on the screen are the contracts the model attached, and they open `api.html`. `usage.html` shows the token counts and the list price printed on the provider receipts for that run. `openapi.json` is the OpenAPI 3 document for the same contracts. Fields can be typed for illustration. All model content is escaped, and the page loads no external assets or JavaScript. It does not call a backend or submit a transaction.
 
 ```bash
 ./reframe --workspace /path/to/private-poc feedback \
@@ -358,6 +354,32 @@ HTML, ten implementation prompts, dependency-ordered backlog, proposed monorepo 
 provenance and checksums. It excludes raw AWS results, source archives, provider
 receipts and workspace settings. Tests remain NOT RUN. This prepares a future
 monorepo/buildout; it does not create or deploy application code.
+
+## Optional design modes
+
+These commands are off unless you run them. They do not replace `previews/business-1`, a skip draft, or the single package from `reframe package`.
+
+```bash
+reframe context import --file notes.md --by "Your name" --role architect --category current-state
+reframe design-export --version v1 --mode functional-parity
+reframe design-export --version v2 --mode reimagine
+reframe package-export --version v1 --mode functional-parity
+reframe register-project
+```
+
+Human context is optional. A run with none still produces the current-state draft and a draft package. Reimagine writes a future-state draft whose unaccepted ideas stay `proposed_unapproved`. An open contradiction blocks only the new package's final-handoff flag. `register-project` records identity in the workspace and does not start AWS.
+
+```mermaid
+flowchart TD
+  review[Existing review site] --> choice{Optional mode}
+  choice -->|functional parity| current[previews/version/current-state]
+  choice -->|reimagine| current
+  choice -->|reimagine| future[previews/version/future-state]
+  current --> parity[packages/version/functional-parity]
+  current --> reimagine[packages/version/reimagine]
+  future --> reimagine
+  legacy[previews/business-1 and the single package] --> review
+```
 
 ## Compare two assessments
 

@@ -164,8 +164,11 @@ class PreparationTests(unittest.TestCase):
             'monorepo_layout': ['apps/ui: proposed interface', 'services/core: proposed domain']}
 
     def screens(self):
-        return {'screens': [{'id': 's1', 'title': 'Amount', 'purpose': 'Validate amount', 'rule_ids': ['R1'],
+        return {'journeys': [{'id': 'amount', 'name': 'Amount', 'summary': 'Check an amount before it is accepted.',
+                              'screen_ids': ['s1']}],
+                'screens': [{'id': 's1', 'title': 'Amount', 'purpose': 'Validate amount', 'rule_ids': ['R1'],
                             'fields': ['Amount'], 'actions': ['Submit'], 'states': ['Normal', 'Zero rejected'],
+                            'api_ids': ['validate-amount'],
                             'uncertainties': 'Runtime equivalence is unproven'}],
                 'apis':[{'id':'validate-amount','method':'POST','path':'/amount/validate',
                          'purpose':'Validate amount','authentication':'Proposed authenticated caller',
@@ -569,6 +572,68 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn('<script>', output)
         self.assertIn('&lt;script&gt;', output)
         self.assertIn("default-src 'none'", output)
+
+    def test_review_page_opens_the_named_screen_and_only_its_rules(self):
+        spec = self.spec()
+        spec['rules'].append({'id': 'R2', 'statement': 'Keep the receipt', 'source_path': 'rule.cbl',
+                              'source_anchor': 'lines 4-4', 'evidence_status': 'INFERRED'})
+        screens = self.screens()
+        screens['screens'][0]['actions'] = [{'label': 'Continue', 'screen_id': 'receipt'}, 'Open the payment receipt']
+        screens['screens'].append({'id': 'receipt', 'title': 'Payment receipt', 'purpose': 'Show the receipt',
+                                   'rule_ids': ['R2'], 'fields': ['Receipt'], 'api_ids': [],
+                                   'actions': [{'label': 'Back', 'screen_id': 's1'}],
+                                   'states': ['Shown'], 'uncertainties': 'None recorded'})
+        screens['journeys'][0]['screen_ids'].append('receipt')
+        screens['journeys'][0]['summary'] = 'Check the amount, then show the receipt.'
+        output = artifacts.render_site(spec, screens, {})
+        self.assertIn('href="#screen-receipt"', output)
+        self.assertIn('href="#screen-s1"', output)
+        self.assertIn('popovertarget="rules-s1"', output)
+        first, second = output.split('id="rules-s1"', 1)[1].split('id="rules-receipt"', 1)
+        self.assertIn('Reject zero', first)
+        self.assertNotIn('Keep the receipt', first)
+        self.assertIn('Keep the receipt', second)
+        self.assertIn('lines 4-4', second)
+        page = artifacts.render_api_page(screens['apis'])
+        document = artifacts.openapi_document(screens['apis'])
+        self.assertEqual(document['openapi'], '3.0.3')
+        self.assertEqual(document['paths']['/amount/validate']['post']['x-rule-ids'], ['R1'])
+        self.assertNotIn('servers', document)
+        self.assertIn('POST /amount/validate', page)
+        self.assertIn('openapi.json', page)
+        self.assertIn('What the caller sends', page)
+        self.assertNotIn('<script>', page)
+        self.assertIn('How this application works', output)
+        self.assertIn('Check the amount, then show the receipt.', output)
+        self.assertNotIn('href="#screen-receipt">Open the payment receipt', output)
+
+    def test_usage_page_counts_receipts_and_omits_the_session(self):
+        receipt = self.work / 'provider-1.json'
+        receipt.write_text(json.dumps({'provider': 'claude', 'role': 'executor', 'stdout': json.dumps({
+            'session_id': 'secret-session', 'total_cost_usd': 1.5,
+            'usage': {'input_tokens': 2, 'output_tokens': 10, 'cache_creation_input_tokens': 100, 'cache_read_input_tokens': 4},
+            'modelUsage': {'claude-sonnet': {'costUSD': 1.5, 'costBasis': 'list', 'thinkingTokens': 3}}})}))
+        rows = artifacts.provider_usage([self.work])
+        self.assertEqual(rows[0]['list_price'], 1.5)
+        self.assertEqual(rows[0]['cache_write'], 100)
+        page = artifacts.render_usage_page(rows, {'model_dollars_spent': 0, 'max_model_dollars': 0})
+        self.assertIn('Token spend', page)
+        self.assertIn('$1.50', page)
+        self.assertIn('list', page)
+        self.assertNotIn('secret-session', page)
+
+    def test_prose_action_does_not_invent_a_screen(self):
+        screens = self.screens()
+        screens['screens'][0]['actions'] = ['Open the payment receipt']
+        output = artifacts.render_site(self.spec(), screens, {})
+        self.assertNotIn('href="#screen-', output.split('id="screen-s1"', 1)[1])
+        self.assertIn('Stays on this screen: Open the payment receipt', output)
+
+    def test_structured_action_must_name_a_screen_in_the_review(self):
+        screens = self.screens()
+        screens['screens'][0]['actions'] = [{'label': 'Continue', 'screen_id': 'missing'}]
+        with self.assertRaisesRegex(pilot.Blocked, 'screen in this review'):
+            artifacts.validate_screens(screens, self.spec())
 
     def test_screen_unknown_rule_is_rejected(self):
         screens = self.screens(); screens['screens'][0]['rule_ids'] = ['invented']

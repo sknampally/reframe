@@ -80,12 +80,18 @@ def specification_rows(project):
         return [
             ('Business review wireframes', 'HTML', str(directory / 'index.html')),
             ('Screen content', 'JSON', str(directory / 'screens.json')),
+            ('API reference', 'HTML', str(directory / 'api.html')),
+            ('OpenAPI document', 'JSON', str(directory / 'openapi.json')),
             ('API contracts', 'JSON', str(directory / 'api-contracts.json')),
+            ('Token spend', 'HTML', str(directory / 'usage.html')),
         ]
     return [
         ('Business review wireframes', 'HTML', 'previews/business-*/index.html'),
         ('Screen content', 'JSON', 'previews/business-*/screens.json'),
+        ('API reference', 'HTML', 'previews/business-*/api.html'),
+        ('OpenAPI document', 'JSON', 'previews/business-*/openapi.json'),
         ('API contracts', 'JSON', 'previews/business-*/api-contracts.json'),
+        ('Token spend', 'HTML', 'previews/business-*/usage.html'),
     ]
 
 
