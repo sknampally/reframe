@@ -97,7 +97,7 @@ class CheckpointTests(unittest.TestCase):
         self.project = app.read(self.work / 'project.json')
         second = app.pipeline(self.work, self.project, self.args('resume'), runtime)
         self.assertEqual(second['status'], 'AWAITING_VALIDATION_APPROVAL')
-        self.assertTrue(self.project['pipeline'].get('limit_corrected'))
+        self.assertEqual(self.project['pipeline'].get('limit_corrections'), 1)
         self.assertEqual(reviews['n'], 3)
 
     def test_a_second_synthesis_contradiction_stays_stopped(self):
@@ -108,6 +108,8 @@ class CheckpointTests(unittest.TestCase):
                         'findings':[{'id':'RV', 'issue':'screen count'}]}
             return self.runtime(provider, run, directory, role, message)
         self.assertEqual(app.pipeline(self.work, self.project, self.args('validate'), runtime)['status'], 'REWORK_LIMIT')
+        self.project = app.read(self.work / 'project.json')
+        self.assertEqual(app.pipeline(self.work, self.project, self.args('resume'), runtime)['status'], 'REWORK_LIMIT')
         self.project = app.read(self.work / 'project.json')
         self.assertEqual(app.pipeline(self.work, self.project, self.args('resume'), runtime)['status'], 'REWORK_LIMIT')
         self.project = app.read(self.work / 'project.json')
@@ -351,7 +353,9 @@ class CheckpointTests(unittest.TestCase):
             'questions':[question]}}]
         spec = {'rules':[{'id':'local', 'statement':'Local rule', 'source_path':'a.txt',
                           'source_anchor':'lines 1-1', 'evidence_status':'SOURCE_VERIFIED'}],
-                'questions':[{'id':'Q1', 'question':'changed'}],
+                'questions':[{'id':'Q1', 'question':'changed'},
+                             {'id':'QX', 'question':'Which split applies', 'impact':'Blocks the service boundary',
+                              'owner':'Architect', 'blocks':'Service design'}],
                 'monorepo_layout':[{'path':'apps/ui', 'role':'interface'}],
                 'tests':[{'id':'local-T', 'rule_id':'local', 'category':'normal', 'status':'NOT RUN',
                          'given':'g', 'when':'w', 'then':'t', 'oracle':'o'}]}
@@ -361,7 +365,9 @@ class CheckpointTests(unittest.TestCase):
         added = next(rule for rule in spec['rules'] if rule['id'] == 'R1')
         self.assertEqual(added['source_path'], 'a.txt')
         self.assertEqual(added['source_anchor'], 'lines 4-6')
-        self.assertEqual(spec['questions'], [question])
+        self.assertEqual(spec['questions'], [question, {
+            'id':'QX', 'question':'Which split applies', 'impact':'Blocks the service boundary',
+            'owner':'Architect', 'blocks':'Service design'}])
         self.assertEqual(spec['tests'][-1], {
             'id': 'R1-accept', 'rule_id': 'R1', 'category': 'boundary', 'status': 'NOT RUN',
             'given': 'The reviewed condition for R1', 'when': 'That condition is evaluated',

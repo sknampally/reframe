@@ -341,6 +341,7 @@ def complete_synthesis(spec, capsules, plan):
     if isinstance(layout, list):
         spec['monorepo_layout'] = [item if isinstance(item, str) else json.dumps(item, sort_keys=True)
                                    for item in layout if item not in (None, '')]
+    supplied = [item for item in spec.get('questions') or [] if isinstance(item, dict)]
     questions, seen = [], set()
     for capsule in capsules:
         for question in capsule['checkpoint'].get('questions') or []:
@@ -348,6 +349,14 @@ def complete_synthesis(spec, capsules, plan):
                 continue
             questions.append(question)
             seen.add(question['id'])
+    for item in supplied:
+        if item.get('id') in seen:
+            continue
+        if not all(isinstance(item.get(field), str) and item[field].strip()
+                   for field in ('id', 'question', 'impact', 'owner', 'blocks')):
+            continue
+        questions.append(item)
+        seen.add(item['id'])
     spec['questions'] = questions
     spec.setdefault('tests', [])
     covered = {case.get('rule_id') for case in spec['tests'] if isinstance(case, dict)}
