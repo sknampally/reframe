@@ -401,8 +401,11 @@ stops instead of truncating or claiming full coverage.
 
 ## Verification
 
-Run `python3 -m unittest discover -s tests -v`. Optional MCP transport tests need the
+Run `PYTHONPATH=tests python -m unittest discover -s tests`. Optional MCP transport tests need the
 SDK. Tests use synthetic findings and provider/AWS fixtures, not live services.
+Pull requests into `main`, and pushes to `main`, run that suite in GitHub Actions on Python 3.12.
+The workflow installs this project, checks `reframe --help`, builds the distribution, and scans the
+checkout with pinned gitleaks. It does not call AWS or a model provider.
 For live acceptance, verify actual provider flags/behavior, AWS authentication,
 resource setup, source ingestion, findings retrieval, sleep/restart recovery,
 required human pauses, all approval gates, comparison and package traceability.
