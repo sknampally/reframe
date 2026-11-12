@@ -13,5 +13,5 @@ dependencies = ["mcp>=2,<3", "rich>=13,<15", "prompt-toolkit>=3.0,<4"]
 reframe = "reframe:main"
 
 [tool.setuptools]
-py-modules = ["reframe_flow", "reframe_workspace", "reframe_checkpoints", "reframe_preview", "reframe_terminal", "reframe", "reframe_setup", "reframe_models", "reframe_artifacts", "reframe_source", "reframe_contracts", "reframe_optional", "kiro_workflow", "pilot"]
+py-modules = ["reframe_flow", "reframe_workspace", "reframe_checkpoints", "reframe_preview", "reframe_terminal", "reframe", "reframe_setup", "reframe_models", "reframe_artifacts", "reframe_source", "reframe_contracts", "reframe_optional", "reframe_handoff", "kiro_workflow", "pilot"]
 package-dir = {"" = "scripts"}
