@@ -1,141 +1,159 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 636" width="960" height="636" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <title id="title">Reframe orchestration layer</title>
-  <desc id="desc">The Reframe orchestrator provides routing, state, governance and traceability, and drives four components: AWS Transform, the executor agent, the reviewer agent and the wireframe agent. Pinned mainframe source goes in, an AI-DLC handoff package comes out, and people approve every phase.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 620" width="960" height="620" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">How Reframe orchestrates the work</title>
+  <desc id="desc">Mainframe source goes into the Reframe orchestrator, which provides routing, state, governance and traceability. The orchestrator drives an AWS Transform assessment, records approvals from people, and hands bounded evidence to three AI agents: the executor, the reviewer and the wireframe agent. It writes an AI-DLC package as output.</desc>
 
-  <rect x="0" y="0" width="960" height="636" rx="16" fill="#ffffff"/>
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#64748b"/>
+    </marker>
+  </defs>
 
-  <text x="480" y="34" text-anchor="middle" font-size="15" fill="#475569">One orchestrator, specialised components</text>
+  <rect x="0" y="0" width="960" height="620" rx="16" fill="#ffffff"/>
 
-  <!-- Orchestration layer -->
-  <rect x="40" y="52" width="880" height="228" rx="14" fill="#eefbfd" stroke="#1597ab" stroke-width="2"/>
-  <text x="480" y="106" text-anchor="middle" font-size="34" font-weight="700" fill="#0f172a">Reframe Orchestrator</text>
-  <text x="480" y="138" text-anchor="middle" font-size="15" fill="#475569">Routing&#160;&#160;|&#160;&#160;State&#160;&#160;|&#160;&#160;Governance&#160;&#160;|&#160;&#160;Traceability</text>
-
-  <g fill="#ffffff" stroke="#8fd4df" stroke-width="1.5">
-    <rect x="58" y="164" width="196" height="92" rx="10"/>
-    <rect x="274" y="164" width="196" height="92" rx="10"/>
-    <rect x="490" y="164" width="196" height="92" rx="10"/>
-    <rect x="706" y="164" width="196" height="92" rx="10"/>
+  <!-- Connectors (drawn first so cards sit on top) -->
+  <g stroke="#64748b" stroke-width="2" fill="none">
+    <line x1="325" y1="112" x2="325" y2="148" marker-start="url(#head)" marker-end="url(#head)"/>
+    <line x1="635" y1="112" x2="635" y2="148" marker-start="url(#head)" marker-end="url(#head)"/>
+    <line x1="172" y1="265" x2="198" y2="265" marker-end="url(#head)"/>
+    <line x1="762" y1="265" x2="788" y2="265" marker-end="url(#head)"/>
+    <line x1="250" y1="382" x2="250" y2="456" marker-start="url(#head)" marker-end="url(#head)"/>
+    <line x1="480" y1="382" x2="480" y2="456" marker-start="url(#head)" marker-end="url(#head)"/>
+    <line x1="710" y1="382" x2="710" y2="456" marker-start="url(#head)" marker-end="url(#head)"/>
+  </g>
+  <g font-size="11.5" fill="#64748b">
+    <text x="333" y="135">MCP</text>
+    <text x="643" y="135">approve · decide</text>
   </g>
 
-  <g fill="none" stroke="#1597ab" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Routing -->
-    <g transform="translate(76 180)">
-      <path d="M14 27 V15 M14 15 L5 6 M14 15 L23 6 M5 6 h5 M5 6 v5 M23 6 h-5 M23 6 v5"/>
+  <!-- AWS Transform -->
+  <rect x="200" y="20" width="250" height="92" rx="12" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <rect x="200" y="20" width="6" height="92" rx="3" fill="#f97316"/>
+  <g transform="translate(220 40)" fill="none" stroke="#c2410c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 26 H25 A6 6 0 0 0 26 14 A8.5 8.5 0 0 0 10.5 12.5 A7 7 0 0 0 9 26 Z"/>
+  </g>
+  <text x="262" y="50" font-size="16" font-weight="700" fill="#0f172a">AWS Transform</text>
+  <text x="262" y="70" font-size="12.5" fill="#475569">Assesses code, data, rules</text>
+  <text x="262" y="92" font-size="11.5" font-weight="600" fill="#c2410c">your account · private sandbox</text>
+
+  <!-- People -->
+  <rect x="510" y="20" width="250" height="92" rx="12" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  <rect x="510" y="20" width="6" height="92" rx="3" fill="#16a34a"/>
+  <g transform="translate(530 40)" fill="none" stroke="#15803d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="13" cy="9" r="5"/>
+    <path d="M3 29 a10 9 0 0 1 20 0"/>
+    <circle cx="25" cy="11" r="3.5"/>
+    <path d="M24 19 a8 7.5 0 0 1 8 8"/>
+  </g>
+  <text x="572" y="50" font-size="16" font-weight="700" fill="#0f172a">People</text>
+  <text x="572" y="70" font-size="12.5" fill="#475569">Approve every phase</text>
+  <text x="572" y="92" font-size="11.5" font-weight="600" fill="#15803d">a model PASS is not approval</text>
+
+  <!-- Source in -->
+  <rect x="20" y="210" width="152" height="110" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="96" y="240" text-anchor="middle" font-size="11" font-weight="700" fill="#64748b" letter-spacing="1">IN</text>
+  <text x="96" y="263" text-anchor="middle" font-size="15" font-weight="700" fill="#0f172a">Mainframe source</text>
+  <text x="96" y="283" text-anchor="middle" font-size="12.5" fill="#475569">COBOL · CICS · JCL</text>
+  <text x="96" y="301" text-anchor="middle" font-size="12.5" fill="#475569">pinned to a commit</text>
+
+  <!-- Package out -->
+  <rect x="788" y="210" width="152" height="110" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="864" y="240" text-anchor="middle" font-size="11" font-weight="700" fill="#64748b" letter-spacing="1">OUT</text>
+  <text x="864" y="263" text-anchor="middle" font-size="15" font-weight="700" fill="#0f172a">AI-DLC package</text>
+  <text x="864" y="283" text-anchor="middle" font-size="12.5" fill="#475569">specs · wireframes</text>
+  <text x="864" y="301" text-anchor="middle" font-size="12.5" fill="#475569">tests · backlog</text>
+
+  <!-- Orchestrator hub -->
+  <rect x="200" y="150" width="560" height="232" rx="14" fill="#f8fafc" stroke="#1e293b" stroke-width="2"/>
+  <path d="M200 164 a14 14 0 0 1 14 -14 H746 a14 14 0 0 1 14 14 V206 H200 Z" fill="#1e293b"/>
+  <text x="222" y="185" font-size="21" font-weight="700" fill="#ffffff">Reframe Orchestrator</text>
+  <text x="738" y="184" text-anchor="end" font-size="12.5" fill="#cbd5e1">the reframe CLI on your workstation</text>
+
+  <g fill="#eef2ff" stroke="#c7d2fe" stroke-width="1.2">
+    <rect x="220" y="222" width="250" height="64" rx="10"/>
+    <rect x="490" y="222" width="250" height="64" rx="10"/>
+    <rect x="220" y="300" width="250" height="64" rx="10"/>
+    <rect x="490" y="300" width="250" height="64" rx="10"/>
+  </g>
+  <g fill="none" stroke="#4338ca" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Routing: fork -->
+    <g transform="translate(234 240)">
+      <path d="M4 14 H11 M11 14 C15 14 15 5 21 5 H25 M11 14 C15 14 15 23 21 23 H25 M21 2 l4 3 l-4 3 M21 20 l4 3 l-4 3"/>
     </g>
-    <!-- State -->
-    <g transform="translate(292 180)">
-      <ellipse cx="14" cy="6" rx="9" ry="3.5"/>
-      <path d="M5 6 v16 a9 3.5 0 0 0 18 0 v-16 M5 14 a9 3.5 0 0 0 18 0"/>
+    <!-- State: stacked layers -->
+    <g transform="translate(504 240)">
+      <path d="M14 3 L25 8.5 L14 14 L3 8.5 Z M3 14 L14 19.5 L25 14 M3 19.5 L14 25 L25 19.5"/>
     </g>
-    <!-- Governance -->
-    <g transform="translate(508 180)">
-      <path d="M14 3 L23 7 V13 C23 19 19 23.5 14 25.5 C9 23.5 5 19 5 13 V7 Z"/>
-      <path d="M10 14 l3 3 l6 -6"/>
+    <!-- Governance: gate / padlock -->
+    <g transform="translate(234 318)">
+      <rect x="5" y="12" width="18" height="14" rx="2.5"/>
+      <path d="M9 12 V8 a5 5 0 0 1 10 0 V12 M14 17.5 v3.5"/>
     </g>
-    <!-- Traceability -->
-    <g transform="translate(724 180)">
-      <rect x="3" y="4" width="22" height="15" rx="2"/>
-      <path d="M10 25 h8 M14 19 v6"/>
-      <polyline points="7,15 11,11 14,13 20,8"/>
+    <!-- Traceability: linked chain / document with lines -->
+    <g transform="translate(504 318)">
+      <path d="M7 3 H18 L23 8 V25 H7 Z M18 3 V8 H23 M11 13 h8 M11 17 h8 M11 21 h5"/>
     </g>
   </g>
-
-  <g font-size="16" font-weight="600" fill="#0f172a">
-    <text x="114" y="200">Routing</text>
-    <text x="330" y="200">State</text>
-    <text x="546" y="200">Governance</text>
-    <text x="762" y="200">Traceability</text>
+  <g font-size="15" font-weight="700" fill="#0f172a">
+    <text x="272" y="249">Routing</text>
+    <text x="542" y="249">State</text>
+    <text x="272" y="327">Governance</text>
+    <text x="542" y="327">Traceability</text>
   </g>
   <g font-size="12.5" fill="#475569">
-    <text x="76" y="230">Picks the next phase:</text>
-    <text x="76" y="247">skip or full review</text>
-    <text x="292" y="230">Resumable runs with</text>
-    <text x="292" y="247">hash-sealed evidence</text>
-    <text x="508" y="230">Approval gates, call</text>
-    <text x="508" y="247">budget, AWS sandbox</text>
-    <text x="724" y="230">Cited rules, reports</text>
-    <text x="724" y="247">and token spend</text>
+    <text x="272" y="268">Chooses the next phase</text>
+    <text x="542" y="268">Resumable, hash-sealed runs</text>
+    <text x="272" y="346">Approvals, call budget, sandbox</text>
+    <text x="542" y="346">Cited rules, reports, spend</text>
   </g>
 
-  <!-- Arrows down -->
-  <g stroke="#1597ab" stroke-width="2" fill="#1597ab">
-    <line x1="156" y1="280" x2="156" y2="322"/>
-    <line x1="372" y1="280" x2="372" y2="322"/>
-    <line x1="588" y1="280" x2="588" y2="322"/>
-    <line x1="804" y1="280" x2="804" y2="322"/>
-    <path d="M150 320 L156 330 L162 320 Z" stroke="none"/>
-    <path d="M366 320 L372 330 L378 320 Z" stroke="none"/>
-    <path d="M582 320 L588 330 L594 320 Z" stroke="none"/>
-    <path d="M798 320 L804 330 L810 320 Z" stroke="none"/>
-  </g>
+  <!-- Agents group -->
+  <rect x="120" y="420" width="720" height="184" rx="14" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="140" y="443" font-size="11" font-weight="700" fill="#6d28d9" letter-spacing="1">AI AGENTS</text>
+  <text x="222" y="443" font-size="11.5" fill="#7c3aed">no tools · JSON in, JSON out</text>
 
-  <!-- Components -->
-  <g fill="#f6f8fb" stroke="#d5dbe3" stroke-width="1.5">
-    <rect x="58" y="336" width="196" height="212" rx="12"/>
-    <rect x="274" y="336" width="196" height="212" rx="12"/>
-    <rect x="490" y="336" width="196" height="212" rx="12"/>
-    <rect x="706" y="336" width="196" height="212" rx="12"/>
+  <g fill="#ffffff" stroke="#ddd6fe" stroke-width="1.5">
+    <rect x="145" y="458" width="210" height="130" rx="10"/>
+    <rect x="375" y="458" width="210" height="130" rx="10"/>
+    <rect x="605" y="458" width="210" height="130" rx="10"/>
   </g>
-
-  <g fill="none" stroke="#1e293b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-    <!-- AWS Transform: cloud -->
-    <g transform="translate(132 356)">
-      <path d="M14 38 H36 A8.5 8.5 0 0 0 37 21 A12 12 0 0 0 15.5 18.5 A9.8 9.8 0 0 0 14 38 Z"/>
-      <path d="M20 30 h12 M28 26 l4 4 l-4 4"/>
-    </g>
-    <!-- Executor: robot -->
-    <g transform="translate(348 356)">
-      <rect x="10" y="16" width="28" height="22" rx="5"/>
-      <path d="M24 16 V10 M7 24 v8 M41 24 v8 M19 33 h10"/>
-      <circle cx="24" cy="8" r="2"/>
-      <circle cx="19" cy="26" r="2.2" fill="#1e293b" stroke="none"/>
-      <circle cx="29" cy="26" r="2.2" fill="#1e293b" stroke="none"/>
+  <g fill="#7c3aed">
+    <rect x="145" y="458" width="210" height="5" rx="2.5"/>
+    <rect x="375" y="458" width="210" height="5" rx="2.5"/>
+    <rect x="605" y="458" width="210" height="5" rx="2.5"/>
+  </g>
+  <g fill="none" stroke="#6d28d9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Executor: pen on page -->
+    <g transform="translate(161 474)">
+      <path d="M5 4 H19 V28 H5 Z M9 10 h6 M9 14 h6"/>
+      <path d="M17 26 L28 15 l3 3 L20 29 h-3 Z"/>
     </g>
     <!-- Reviewer: magnifier with check -->
-    <g transform="translate(564 356)">
-      <circle cx="21" cy="21" r="12"/>
-      <path d="M30 30 L40 40" stroke-width="3"/>
-      <path d="M15.5 21 l4 4 l7.5 -7.5"/>
+    <g transform="translate(391 474)">
+      <circle cx="14" cy="14" r="9"/>
+      <path d="M21 21 L29 29 M10 14 l3 3 l5 -5.5"/>
     </g>
-    <!-- Wireframe: browser layout -->
-    <g transform="translate(780 356)">
-      <rect x="6" y="8" width="36" height="31" rx="3"/>
-      <path d="M6 15 h36 M27 22 h10 M27 27 h10 M27 32 h6"/>
-      <rect x="11" y="20" width="12" height="14" rx="1"/>
+    <!-- Wireframe: screen layout -->
+    <g transform="translate(621 474)">
+      <rect x="2" y="5" width="28" height="22" rx="2.5"/>
+      <path d="M2 11 h28 M14 11 V27 M18 16 h8 M18 20 h8"/>
     </g>
   </g>
-
-  <g font-size="20" font-weight="700" fill="#0f172a" text-anchor="middle">
-    <text x="156" y="440">AWS Transform</text>
-    <text x="372" y="440">Executor agent</text>
-    <text x="588" y="440">Reviewer agent</text>
-    <text x="804" y="440">Wireframe agent</text>
+  <g font-size="16" font-weight="700" fill="#0f172a">
+    <text x="201" y="496">Executor</text>
+    <text x="431" y="496">Reviewer</text>
+    <text x="661" y="496">Wireframes</text>
   </g>
-  <g stroke="#d5dbe3" stroke-width="1">
-    <line x1="80" y1="456" x2="232" y2="456"/>
-    <line x1="296" y1="456" x2="448" y2="456"/>
-    <line x1="512" y1="456" x2="664" y2="456"/>
-    <line x1="728" y1="456" x2="880" y2="456"/>
+  <g font-size="13" fill="#334155">
+    <text x="161" y="530">Drafts the specification</text>
+    <text x="161" y="548">and cites every rule</text>
+    <text x="391" y="530">Rechecks the evidence:</text>
+    <text x="391" y="548">PASS · REWORK · BLOCKED</text>
+    <text x="621" y="530">Screens, API reference</text>
+    <text x="621" y="548">and OpenAPI contracts</text>
   </g>
-  <g font-size="14" fill="#334155" text-anchor="middle">
-    <text x="156" y="480">Assesses code, data</text>
-    <text x="156" y="499">and business rules</text>
-    <text x="372" y="480">Drafts the specification,</text>
-    <text x="372" y="499">citing every rule</text>
-    <text x="588" y="480">Rechecks the evidence:</text>
-    <text x="588" y="499">PASS · REWORK · BLOCKED</text>
-    <text x="804" y="480">Screens, API reference</text>
-    <text x="804" y="499">and OpenAPI contracts</text>
+  <g font-size="11.5" font-weight="600" fill="#6d28d9">
+    <text x="161" y="574">Claude Sonnet · Codex · Kiro</text>
+    <text x="391" y="574">Claude Opus</text>
+    <text x="621" y="574">Claude · Codex</text>
   </g>
-  <g font-size="12" fill="#0e7490" text-anchor="middle" font-weight="600">
-    <text x="156" y="530">via MCP, in your sandbox</text>
-    <text x="372" y="530">Claude Sonnet · Codex · Kiro</text>
-    <text x="588" y="530">Claude Opus</text>
-    <text x="804" y="530">Claude · Codex</text>
-  </g>
-
-  <!-- Footer -->
-  <rect x="40" y="570" width="880" height="44" rx="10" fill="#f1f5f9"/>
-  <text x="480" y="597" text-anchor="middle" font-size="14" fill="#334155"><tspan font-weight="700" fill="#0f172a">In:</tspan> pinned mainframe source&#160;&#160;&#160;→&#160;&#160;&#160;<tspan font-weight="700" fill="#0f172a">Out:</tspan> AI-DLC handoff package&#160;&#160;&#160;·&#160;&#160;&#160;<tspan font-weight="700" fill="#0f172a">People</tspan> approve every phase</text>
 </svg>
