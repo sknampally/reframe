@@ -43,18 +43,7 @@ Reframe is an orchestrator. It runs on your workstation, drives an AWS Transform
 
 The agents run with no tools, so they cannot read files, call AWS or change anything. They return JSON, and the orchestrator decides what happens next.
 
-### The phases
-
-```mermaid
-flowchart LR
-    A["1 · Assess<br/>AWS Transform"] --> G1{{"Approve"}}
-    G1 --> B["2 · Validate<br/>Executor ⇄ Reviewer"] --> G2{{"Approve"}}
-    G2 --> C["3 · Wireframes<br/>Wireframe agent"] --> G3{{"Approve"}}
-    G3 --> D["4 · Package<br/>Orchestrator"]
-    G1 -.->|"skip review"| S["Draft wireframes + ZIP<br/>marked unverified"]
-```
-
-After the assessment is approved you choose a route. **Skip** goes straight to draft wireframes and a draft AI-DLC ZIP, built from the AWS findings alone and labelled unverified. **Review** runs phases 2 to 4 and is the only route that produces the approved package. Every step is saved, so you can stop at any point and continue later. See the [four-phase workflow](docs/four-phase-workflow.md) and [multi-agent workflow](architecture/multi-agent-workflow.md) for more detail.
+A run moves through four phases: assess, validate, wireframes and package, with a human approval after each of the first three. After the assessment is approved you choose a route. **Skip** goes straight to draft wireframes and a draft AI-DLC ZIP, built from the AWS findings alone and labelled unverified. **Review** runs phases 2 to 4 and is the only route that produces the approved package. Every step is saved, so you can stop at any point and continue later. See the [four-phase workflow](docs/four-phase-workflow.md) and [multi-agent workflow](architecture/multi-agent-workflow.md) for more detail.
 
 ## How to run
 
