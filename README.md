@@ -1,330 +1,150 @@
 # Reframe
 
-A CLI that reverse-engineers pinned mainframe source, builds wireframes, and packages an AI-DLC handoff. A later team uses that handoff in any AI coding tool and any target language. Reframe does not build the target application, deploy it, or prove runtime equivalence. The language, runtime, and platform remain an explicit architecture decision.
+**From legacy mainframe code to evidence-backed modernization plans.**
 
-**Status: four-phase POC tested with offline fixtures. One repaired CardDemo AWS
-assessment reached the human review gate; uninterrupted release acceptance and
-live agent-provider acceptance remain pending.** No application buildout, deployment, data
-migration or runtime equivalence is claimed. AI assistance is used to develop this
-framework and to prepare candidate artifacts; humans retain approval authority.
+Reframe is an open-source CLI for understanding mainframe applications before rebuilding them. It connects pinned source code to AWS Transform assessments, optional independent AI review, human decisions, HTML wireframe drafts, and AI-assisted development lifecycle (**AI-DLC**) handoff packages.
 
-**Mac or Windows? Start with the [platform installation and update guide](docs/platform-install.md).**
-Windows currently uses Ubuntu/WSL2; native PowerShell runtime is not supported.
-The final `.` in the install command is required.
+**Reframe prepares a modernization project; it does not translate the application into production code, deploy a target system, or prove runtime equivalence.** The target language and architecture are decisions for the implementing team.
 
-**New workstation? Follow the [engineer installation and login guide](docs/engineer-setup.md) first.**
-Then use the [CLI guide](docs/cli-guide.md) and [four-phase workflow](docs/four-phase-workflow.md).
-Supply an S3 source ZIP, GitHub URL or clean local Git checkout, configure your own
-AWS/provider access, and use the built-in protocols.
-No custom prompt writing or manual agent handoffs are required for normal operation.
+[![CI](https://github.com/sknampally/reframe/actions/workflows/ci.yml/badge.svg)](https://github.com/sknampally/reframe/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/Status-POC%20%7C%20offline--tested-orange)](docs/limitations.md)
 
-## Before you run reframe
+> **Project maturity:** The CLI and offline workflows have been exercised with fixtures. A CardDemo AWS assessment has reached a human-review gate, but uninterrupted live AWS/provider acceptance, production application buildout, and behavioral equivalence are **not** established. Generated implementation packages remain drafts until required reviews and evidence gates are satisfied.
 
-Install these on the workstation first. Reframe does not install them. When a required tool is missing, guided start stops before it creates a sandbox or starts an assessment.
+## Why Reframe?
 
-| Tool | When required | Check |
-| --- | --- | --- |
-| Git | Always | `git --version` |
-| uv and Python 3.12 | Always | `uv --version` |
-| OpenTofu 1.5 or newer, built for this computer | Always, before guided setup | `tofu version` |
-| AWS CLI v2 and a named profile | A new assessment | `aws --version` |
-| AWS Transform application access | A new assessment | Terminal AWS login is not enough |
-| Claude Code | Default executor and reviewer. Also the HTML provider when you choose Claude | `claude --version` and `claude auth status` |
-| Codex CLI | Default HTML provider. Also when you select Codex for execution | `codex --version` |
-| Kiro CLI | Only when you select Kiro as the executor | `kiro-cli --version` |
+Modernizing COBOL, CICS, VSAM and JCL is not simply converting syntax. Teams must recover business rules, data semantics, screen behavior, batch dependencies, operational assumptions and the decisions that exist outside the code. AI-generated documents can accelerate discovery, but need traceable evidence and human approval.
 
-OpenTofu is the tool that creates the private sandbox bucket and role. Install the build that matches the computer: `darwin_arm64` on Apple Silicon, `darwin_amd64` on an Intel Mac, `linux_arm64` or `linux_amd64` on Linux, and the Linux build inside Ubuntu/WSL2 on Windows. Native PowerShell is not supported. On a Mac with Homebrew, `brew install opentofu` installs it. The command is `tofu`, and `tofu version` must report 1.5 or newer. Other systems use the [OpenTofu install guide](https://opentofu.org/docs/intro/install/). If `tofu` is missing, older than 1.5, or built for a different computer, install the matching build and choose **1** again. Nothing is created until that install is in place.
+Reframe organizes that work into a controlled, repeatable preparation flow:
 
-Git, uv, the AWS CLI, Claude, and the optional Codex or Kiro CLIs are installed with the [engineer setup guide](docs/engineer-setup.md). Authenticate the AWS profile you will type into guided start. There is no default profile.
+- **Source-first:** Pin a Git repository revision or supplied source package and preserve provenance.
+- **Assessment-backed:** Use AWS Transform to inventory and analyze the mainframe workload.
+- **Reviewable:** Optionally run an executor and independent reviewer; keep unresolved findings visible.
+- **Human-informed, not human-dependent:** Add business clarifications and future-state ideas when available. Source-only draft preparation remains possible.
+- **Mode-aware:** Prepare *Functional Parity* or *Reimagine* design drafts without confusing intended changes with verified legacy behavior.
+- **Portable handoff:** Export HTML previews and AI-DLC packages for a subsequent implementation team.
 
-## Run the guided workflow
+## Architecture
 
-On macOS/Linux, or inside Ubuntu/WSL2 on Windows, start from a clean `main` checkout:
+```mermaid
+flowchart TB
+    S["Pinned mainframe source<br/>COBOL · CICS/BMS · JCL · VSAM"]
+    T["AWS Transform<br/>Assessment and extracted evidence"]
+    P["Reframe orchestrator<br/>Run state · provenance · approvals"]
+    H["Optional human context<br/>Corrections · SOPs · future-state ideas"]
+    V{"Review pathway"}
+    X["Executor agent<br/>Source-grounded verification"]
+    R["Independent reviewer<br/>PASS · REWORK · HUMAN DECISION"]
+    A["Human approval gates<br/>Evidence and design decisions"]
+    M{"Modernization intent"}
+    C["Functional Parity<br/>Current-state drafts"]
+    F["Reimagine<br/>Current + proposed future-state drafts"]
+    D["Mode-specific AI-DLC handoff<br/>Requirements · wireframes · gaps · tests"]
+    S --> T --> P --> V
+    H -.-> P
+    V -->|Review| X --> R
+    R -->|Rework| X
+    R -->|Pass or unresolved decision| A
+    V -->|Skip independent review| A
+    A --> M
+    M -->|Parity| C --> D
+    M -->|Reimagine| F --> D
+```
+
+**Trust boundary:** AWS Transform findings, AI interpretations and human-provided statements are separate evidence layers. A model's `PASS` is not a substitute for stakeholder approval; skip mode does not certify the findings.
+
+## The workflow
+
+```mermaid
+flowchart LR
+    I["1 · Select and pin source"] --> B["2 · Configure private AWS assessment"]
+    B --> E["3 · Analyze and preserve evidence"]
+    E --> G{"4 · Human review gate"}
+    G -->|Review| Q["Independent validation"]
+    G -->|Skip| U["Unverified draft path"]
+    Q --> O["5 · Wireframes and requirements"]
+    U --> O
+    O --> K["6 · AI-DLC handoff package"]
+    K --> Z["Downstream engineering and equivalence testing"]
+```
+
+Reframe preserves existing assessment state and can resume interrupted workflows. AWS connector and resource setup, source upload and human decisions have explicit operational boundaries. See the [four-phase workflow](docs/four-phase-workflow.md) and [CLI guide](docs/cli-guide.md).
+
+## Quick start
+
+**Supported workstation path:** macOS or Linux; Windows through Ubuntu/WSL2. Follow the [platform setup guide](docs/platform-install.md) and [engineer setup guide](docs/engineer-setup.md) for Git, `uv`, Python, AWS CLI, OpenTofu, provider CLI authentication and AWS Transform application access.
+
+From a clean checkout:
 
 ```bash
 git clone https://github.com/sknampally/reframe.git
 cd reframe
-git switch main
-git pull --ff-only
 uv tool install --force --managed-python --python 3.12 --editable .
 reframe
 ```
 
-Choose **1 — Guided start / continue**. Guided start finds OpenTofu 1.5 or newer for the computer it is running on. You do not change `PATH`. You supply the source, a private output directory, the AWS profile, the region, and the provider. The profile has no default; `aws configure list-profiles` lists the names. The CLI verifies access and offers SSO login when required.
+Choose **1 — Guided start / continue**. Provide your own GitHub source URL or clean local checkout, private output directory, AWS profile and region, and chosen agent/provider. Reframe checks prerequisites before creating an assessment sandbox. **AWS operations require your account, permissions and explicit confirmations; do not use real client code without authorization.**
 
-If setup is not finished, guided start creates a new private sandbox for this source. The bucket, workspace, and connector share one name: `reframe-`, the repository name, the UTC date, and a short id. The role name adds `-role`. The role can read and write objects in that bucket, including analysis output outside the `reframe/` upload prefix. It denies object and bucket reads everywhere else. It checks in the background that the role cannot list another bucket, and continues only when that read is denied. A new role can take a few tries before it can be assumed; the check waits and the console says why if it stops. You do not type the bucket name. Continuing the saved source reuses that sandbox. A fresh run creates another dated bucket, role, connector, and workspace. It stores `transform.workspace_id`, `transform.upload_prefix`, and `transform.sandbox_role`, then creates and activates the connector. You do not edit `project.json`. Keep the account ID, role ARN, and bucket name off this repository and out of issues. Comment on [story 40](https://github.com/sknampally/reframe/issues/40) that the production deny check passed. Answer **no** to the continuation question to pause before anything is created. The [sandbox notes](infrastructure/README.md) describe the same apply when you want to run it outside the menu.
-
-Stay on menu **1**. These are the questions, in order:
-
-1. **Source.** Type a GitHub URL or a clean local checkout. The prompt does not fill in a sample repository. Enter on the commit question uses the default branch. Enter on the scope question uses "Assess the entire supplied repository."
-2. **Where to write.** Confirm the parent directory and the `<repository>_assessment` folder. That folder stays outside this Git checkout.
-3. **AWS.** Type the profile name. The region defaults to `us-east-1`. The executor defaults to `claude`. The HTML provider defaults to `codex`; type `claude` if that is the only login you want to use for wireframes.
-4. **Sandbox.** Confirm setup. Reframe creates the bucket and role, runs the deny check, and connects Transform. No job starts yet.
-5. **Connector confirmation.** Type your own name. That records who confirmed the connector. It is not an AWS user, role, or profile. AWS must show the connector active.
-6. **Upload.** Enter accepts the 250000000 byte evidence limit, which is also the maximum. Confirm the upload. That starts the one assessment job. Reframe stays with it. Do not type in the Transform chat, and do not start a second assessment.
-7. **Approval.** When the findings are ready, inspect the report. `/privacy` and then `/artifacts` show the local files. Record your name, a short rationale in your own words, and confirm the findings match the pinned source. Answer yes only after you have looked.
-8. **Wireframes and the AI-DLC draft.** The next question is `skip` or `review`. Enter selects **skip**. Skip asks for a draft name (`guided-draft`), your name, why you are trusting the AWS findings for design, and `claude` or `codex`. It then writes the HTML wireframes and `ai-dlc-draft.zip`. **review** runs the executor and an independent reviewer instead, and still has its own approval gates before `package`.
-
-If Reframe's own checkout changed after the run was saved, menu **1** asks for a short note, records that update, and then continues this same job. The findings stay as they are.
-
-**Skipping verification does not approve the design.** Draft findings are marked AWS-assumed, independent verification is skipped, stakeholder decisions remain pending, and acceptance tests are NOT RUN. The ZIP adds a modernization sequence, an unassigned capability map, an unrun comparison plan, inventories of members the assessment named, an API boundary note, a governance checklist, and a guide for reading extraction findings without changing the source. Every imported rule is listed once, and a requirement file from the assessment is copied unchanged. Each capability boundary stays a proposal until a person accepts it. A design-generation model call is distinct from executor and reviewer verification. A logged-in Claude CLI uses your Claude login and is not charged against Reframe's local dollar ledger. An API key is. If Claude is not logged in, generation stops and tells you to run `claude auth login`. No target application is built.
-
-A saved project offers **continue** or **fresh**. Fresh uses a separate output parent and does not delete the previous run. `reframe`, then **1** or `/flow`, continues a saved run.
-
-All outputs stay in a private `<repository>_assessment` folder under your chosen parent:
-
-```text
-<repository>_assessment/
-  source/                       # managed source checkout, when applicable
-  runs/                         # assessment evidence and review reports
-  preparation/                  # independent verification, if selected
-  previews/guided-draft/handoff/ # HTML wireframes and draft specifications
-  packages/guided-draft/         # ai-dlc-draft.zip
-  reports/index.html            # report and package links
-```
-
-Return with `reframe` → **1** or `/flow`. Reuse the same draft name to resume or
-verify/reuse an existing export; provider failures do not become approvals. Ctrl+C
-cancels the local wait, not an already-started AWS job. Saved evidence is preserved.
-The verified route may pause for SME decisions or budget changes; `/help` and
-`/guide workflow` describe these controls. `/init` remains available for setup alone.
-
-After pulling a merged update, reinstall dependencies from the repository directory:
+To inspect the UI without contacting cloud or AI services:
 
 ```bash
-git switch main
-git pull --ff-only
-uv tool install --force --managed-python --python 3.12 --editable .
-reframe
+reframe demo
 ```
 
-`reframe demo` is a simulated preview with no service calls. Existing commands remain
-available for scripts. See the [terminal guide](docs/terminal-console.md).
+### Example paths
 
-## Why this framework exists
-
-Generated documentation is useful input, but it does not prove business behavior. Reframe connects pinned source to an assessment, reviewed wireframes, and an AI-DLC package a later team can deploy. People keep the approval decisions.
-
-## Evidence and capability status
-
-| Capability | Evidence status | Public repository status |
+| Path | What happens | Output / caveat |
 | --- | --- | --- |
-| AWS Transform assessment | One repaired CardDemo run reached sealed evidence review; uninterrupted acceptance pending | S3 ZIP or GitHub/local source, chosen S3 destination, workspace/connector setup, existing local/S3 findings, wait/resume |
-| Independent validation | Structural checks and synthetic handoff verified | Claude Sonnet executor plus Claude Opus reviewer independently request source and findings; distinct pinned model IDs, bounded rework |
-| Approval gates | Hash invalidation tested | Separate assessment, SME/architect and business specification gates |
-| HTML business review | Deterministic rendering and escaping tested | Claude/Codex-generated screen content; inert HTML with rules, states and specifications |
-| Implementation preparation | Synthetic four-phase package tested | Versioned ZIP with specifications, prompts, backlog, decisions, monorepo proposal and checksums |
-| Repeated assessment comparison | Fixture comparison tested; live CardDemo runs pending | Preserved snapshots, normalized content diff and optional source-grounded AI comparison |
-| Application buildout, migration and equivalence | Not implemented by this POC | Future engineering work guided by the preparation package |
+| **Skip validation** | Use assessment findings without the independent executor/reviewer pass | HTML wireframe and AI-DLC **draft**, marked unverified |
+| **Independent review** | Executor checks evidence; reviewer challenges claims; human decisions gate progress | Reviewed specifications and gated package workflow |
+| **Functional Parity** | Prepare source-grounded current-state drafts | `previews/<version>/current-state/` and mode-specific draft ZIP |
+| **Reimagine** | Keep the current-state baseline and propose future-state screens and flows | `previews/<version>/future-state/`; proposals remain unapproved until accepted |
 
-A service reporting a completed assessment step does not establish correct requirements. A generated test plan is not an executed test suite. See [limitations](docs/limitations.md).
+Human-review context is optional. Accepted comments and supporting text can inform design exports; the current opt-in export is **not** a full model-driven regeneration of every screen. Older preview and package paths remain supported.
 
-## POC workflow
+For commands such as `context`, `design-export`, `package-export` and `register-project`, use the [CLI command reference](docs/cli-guide.md). New run planning and project registry logic have offline test coverage; **live AWS resource reuse is not yet verified**.
 
-![Four-phase POC: assessment, separate Claude Sonnet executor and Opus reviewer, HTML business review, and approved implementation package](docs/images/poc-workflow.svg)
+## Deliverables and quality gates
 
-[Open the full-size workflow](docs/images/poc-workflow.svg) · [Execution guide](docs/cli-guide.md)
+Reframe separates preparation outputs from completed modernization:
 
-Each phase stops at its approval boundary. Service completion and reviewer PASS do
-not approve business requirements. Private records preserve provenance, uncertainty,
-review results and exact approved versions. Deferred decisions retain explicit
-blocked downstream work. Microservices are evaluated against alternatives, not assumed.
+| Output | Purpose | Evidence boundary |
+| --- | --- | --- |
+| Source and assessment records | Inventory, dependencies, data and extracted rules | Source-pinned; verify Transform coverage |
+| Business review and wireframes | Screens, navigation, rules and proposed journeys | Generated material, not automatically approved |
+| Human decision records | Clarifications, conflicts, approvals and deferrals | Preserve provenance and unresolved decisions |
+| AI-DLC handoff packages | Requirements, designs, guidance and test planning inputs | Opt-in mode packages are **DRAFT**, not complete build contracts |
+| Target application | Implemented and operated by a downstream team | **Not generated or validated by this POC** |
 
-The [CLI guide](docs/cli-guide.md) describes implemented behavior and limitations.
-The [broader reference architecture](docs/images/reference-architecture.svg) and
-[detailed delivery workflow](architecture/multi-agent-workflow.md) include future
-implementation/equivalence stages beyond this preparation POC.
+Financial rules, authorization, EBCDIC data conversion, batch restart, concurrency and data equivalence require explicit validation. The [quality gates](quality-gates/README.md), [contracts](contracts/README.md), and [limitations](docs/limitations.md) describe the controls.
 
-## Next: prove the CardDemo journey
+## Documentation
 
-The guided **skip** path above is how a first run produces wireframes and the AI-DLC draft from a repository you type in. This list is the separate acceptance experiment. CardDemo is not filled in by the source prompt.
-
-1. Apply the sandbox in [infrastructure](infrastructure/README.md), confirm the production deny check, and run `reframe init` against that bucket. A new assessment stops until `workspace_id`, `upload_prefix`, and `sandbox_role` are set.
-2. Pin one CardDemo commit and the sign-on scope. Run two independent assessments with matching inputs and recorded human task choices; preserve both snapshots.
-3. Compare run A and run B, inspect material differences against source, and approve the baseline for validation. More findings do not automatically mean better findings.
-4. Run the Sonnet executor and Opus reviewer. Resolve or explicitly defer SME questions and approve the validated specifications.
-5. Generate the HTML review site, collect stakeholder feedback, approve the exact version and create the implementation package.
-
-**Acceptance requires a live journey, not just generated files:** verify interruption/resume, approval stops, evidence traceability, reviewer corrections and package completeness. Full CardDemo/AWS acceptance is still pending. No application buildout is part of this POC.
-
-Follow the [CLI guide](docs/cli-guide.md) and [two-run comparison protocol](docs/assessment-comparison.md); the framework supplies the role prompts and manages the handoffs.
-
-## Start here
-
-The four-phase CLI is the primary POC interface. The six methodology guides below cover the broader modernization lifecycle, including future buildout and equivalence work.
-
-| Phase | Guide |
+| Start with | Read |
 | --- | --- |
-| 1 | [Scope and discovery](methodology/01-discovery.md) |
-| 2 | [Requirements validation](methodology/02-requirements-validation.md) |
-| 3 | [Target architecture](methodology/03-target-architecture.md) |
-| 4 | [UI and data design](methodology/04-ui-and-data-design.md) |
-| 5 | [Incremental implementation](methodology/05-implementation.md) |
-| 6 | [Equivalence testing and release readiness](methodology/06-equivalence-testing.md) |
+| Install on your workstation | [Platform installation](docs/platform-install.md) · [Engineer setup](docs/engineer-setup.md) |
+| Operate Reframe | [CLI guide](docs/cli-guide.md) · [Terminal console](docs/terminal-console.md) |
+| Understand the process | [Four-phase workflow](docs/four-phase-workflow.md) · [Multi-agent workflow](architecture/multi-agent-workflow.md) |
+| Examine security boundaries | [Sandbox infrastructure](infrastructure/README.md) · [Security policy](SECURITY.md) |
+| Review methodology | [Modernization methodology](methodology/modernization.md) · [Quality gates](quality-gates/README.md) |
+| Reproduce a safe example | [CardDemo example](examples/carddemo/README.md) · [Assessment comparison](docs/assessment-comparison.md) |
+| Contribute | [Contributing](CONTRIBUTING.md) · [Third-party guidance](THIRD_PARTY.md) |
 
-**Primary path:** [four-phase CLI setup and execution](docs/cli-guide.md).
-**Experiment:** [two-run CardDemo comparison](docs/assessment-comparison.md).
-**Legacy diagnostics:** [single-rule Kiro adapter](docs/kiro-automation.md) and
-[manual pilot runner](docs/running-a-pilot.md). These are retained for compatibility;
-they are not the new four-phase interface.
+## Development and CI
 
-1. Read the [methodology](methodology/modernization.md) and [quality gates](quality-gates/README.md).
-2. Define a bounded task using the [task contract](contracts/task-contract.yaml).
-3. Assign the [orchestrator](agents/orchestrator.md), [executor](agents/executor.md), and [reviewer](agents/independent-reviewer.md) responsibilities. The CLI dispatches roles; the manual instructions remain diagnostic references.
-4. Walk through the [synthetic CardDemo skeleton](examples/carddemo/README.md). Pin upstream source before making source-specific claims.
-5. Record evidence, unresolved gaps, review results, and human decisions. Missing evidence blocks the relevant gate.
+Run the offline test suite from the repository with its dependencies installed:
 
-## Repository map
-
-The current foundation contains the following files. The tree includes documentation and the initial controllers; code presence does not establish live-service acceptance.
-
-```text
-reframe/
-├── README.md
-├── reframe                         # Repository-local entry point
-├── pyproject.toml                    # Installable reframe command
-├── LICENSE
-├── CONTRIBUTING.md
-├── SECURITY.md
-├── THIRD_PARTY.md
-├── .gitignore
-├── .github/
-│   └── pull_request_template.md
-├── architecture/
-│   └── multi-agent-workflow.md
-├── methodology/
-│   ├── modernization.md
-│   ├── 01-discovery.md
-│   ├── 02-requirements-validation.md
-│   ├── 03-target-architecture.md
-│   ├── 04-ui-and-data-design.md
-│   ├── 05-implementation.md
-│   └── 06-equivalence-testing.md
-├── prompts/
-│   ├── README.md
-│   ├── 01-executor.md
-│   ├── 02-independent-reviewer.md
-│   ├── 03-orchestrator.md
-│   ├── 04-rule-validation-pilot.md
-│   ├── automated/                   # Legacy single-rule protocols
-│   │   ├── executor.md
-│   │   └── reviewer.md
-│   ├── checkpoints/
-│   │   ├── executor.md
-│   │   └── reviewer.md
-│   └── pipeline/
-│       ├── executor.md
-│       ├── reviewer.md
-│       ├── wireframes.md
-│       ├── transform-preview.md
-│       └── comparison.md
-├── agents/
-│   ├── orchestrator.md
-│   ├── executor.md
-│   └── independent-reviewer.md
-├── contracts/
-│   ├── README.md
-│   ├── task-contract.yaml
-│   ├── review-record.yaml
-│   └── approval-record.yaml
-├── quality-gates/
-│   └── README.md
-├── examples/
-│   ├── config/
-│   │   ├── claude-settings.example.json
-│   │   └── kiro-settings.example.json
-│   └── carddemo/
-│       ├── README.md
-│       └── synthetic-example.md
-├── infrastructure/                 # Sandbox bucket and deny-scoped role
-│   ├── README.md
-│   ├── main.tf
-│   ├── outputs.tf
-│   ├── variables.tf
-│   ├── versions.tf
-│   └── deny-check.sh
-├── scripts/
-│   ├── pilot.py
-│   ├── kiro_workflow.py
-│   ├── reframe.py                  # reframe command implementation
-│   ├── reframe_setup.py
-│   ├── reframe_flow.py
-│   ├── reframe_terminal.py
-│   ├── reframe_workspace.py
-│   ├── reframe_checkpoints.py
-│   ├── reframe_preview.py
-│   ├── reframe_handoff.py          # Sequence, coverage, and inventories in the ZIP
-│   ├── reframe_contracts.py
-│   ├── reframe_source.py
-│   ├── reframe_models.py
-│   └── reframe_artifacts.py
-├── tests/
-│   ├── test_pilot.py
-│   ├── test_kiro_workflow.py
-│   ├── test_mcp_transport.py
-│   ├── test_terminal.py
-│   ├── test_guided_cli.py
-│   ├── test_guided_flow.py
-│   ├── test_reframe.py
-│   ├── test_reframe_preview.py
-│   ├── test_reframe_handoff.py
-│   ├── test_reframe_workspace.py
-│   ├── test_reframe_source.py
-│   ├── test_reframe_checkpoints.py
-│   ├── test_contracts.py
-│   └── fixtures/
-│       └── mcp_server.py
-└── docs/
-    ├── images/
-    │   ├── terminal-preview.svg
-    │   ├── poc-workflow.svg
-    │   └── reference-architecture.svg
-    ├── platform-install.md
-    ├── terminal-console.md
-    ├── engineer-setup.md
-    ├── cli-guide.md
-    ├── four-phase-workflow.md
-    ├── live-assessment-readiness.md
-    ├── assessment-comparison.md
-    ├── kiro-automation.md
-    ├── limitations.md
-    └── running-a-pilot.md
+```bash
+PYTHONPATH=tests python -m unittest discover -s tests
+reframe --help
 ```
 
-The repository does not install a `skills/` directory, and `docs/lessons-learned.md` is not part of the tree. The draft ZIP and the approved package write their own `skill-*.md` files at export. Lessons learned require actual reviewed execution evidence.
+The [CI workflow](.github/workflows/ci.yml) is configured for pull requests to `main` and pushes to `main`, covering offline tests, package validation and secret scanning. **The badge reflects GitHub's actual workflow result; it is not a claim of live AWS acceptance.** No AWS credentials or paid model calls are required by CI.
 
-| Path | Purpose |
-| --- | --- |
-| [architecture](architecture/multi-agent-workflow.md) | Intended workflow, trust boundaries, and recovery |
-| [methodology](methodology/modernization.md) | Discovery through cutover and rollback |
-| [agents](agents/orchestrator.md) | Bounded role instructions |
-| [prompts](prompts/README.md) | Stable role instructions consuming one task manifest |
-| [reframe CLI](docs/cli-guide.md) | Four-phase setup, assessment, validation, HTML and packaging |
-| [sandbox](infrastructure/README.md) | Private bucket, `reframe/` prefix, and the role that denies other reads |
-| [assessment comparison](docs/assessment-comparison.md) | Controlled two-run experiment and its limits |
-| [Kiro automation](docs/kiro-automation.md) | Legacy single-rule adapter diagnostics |
-| [pilot runner](docs/running-a-pilot.md) | Manual diagnostic operations and record-integrity checks |
-| [contracts](contracts/README.md) | Task, review, and approval record templates |
-| [quality-gates](quality-gates/README.md) | Evidence required to advance |
-| [examples/carddemo](examples/carddemo/README.md) | Sanitized case-study skeleton and synthetic example |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Attribution, validation, and PR process |
-| [SECURITY.md](SECURITY.md) | Publication boundaries and vulnerability reporting |
+## Security, licensing and scope
 
-## Delivery roadmap
+Keep source assessments, account identifiers, credentials and client documents in private workspaces—**never in this public repository or public issues**. Do not upload third-party source without authorization. Reframe itself is [MIT licensed](LICENSE); [AWS CardDemo](https://github.com/aws-samples/aws-mainframe-modernization-carddemo) remains an independent sample under its own license. See [SECURITY.md](SECURITY.md) and [THIRD_PARTY.md](THIRD_PARTY.md).
 
-- Foundation: method, roles, gates, diagrams, public boundaries, phase guides, and stable prompts are supplied.
-- Local pilot runner: shared manifest, metered operations, sealing, and review preflight are implemented for manual diagnostics.
-- Validation pilot: pin public source and validate one rule with independently reviewed evidence.
-- Preparation CLI: four phases, Claude Code review, HTML, versioned packages and repeated assessment comparison implemented; live provider/AWS acceptance pending.
-- Implementation pilot: build one vertical slice in the language the team chooses, with measured equivalence and failure-path tests.
-- Operational pilot: rehearse migration, recovery, observability, and rollback before any release claim.
-
-Each milestone requires its own reviewed evidence; the roadmap is not a list of working features.
-
-## Responsible publication and attribution
-
-Publish original framework material and approved synthetic examples only. Never add employer or client inventories, credentials, cloud resource identifiers, private assessment exports, or raw AWS Transform artifacts. Redacting a few names from an internal export is insufficient.
-
-This foundation was prepared with AI assistance using Codex. AI assistance does not imply independent validation. The repository owner reviews and decides what to merge; commit identity must match the owner's verified personal GitHub identity, without agent co-author attribution or concealment of assistance.
-
-Original framework material is covered by the [MIT license](LICENSE). [AWS CardDemo](https://github.com/aws-samples/aws-mainframe-modernization-carddemo) is a separate upstream project with its own license; no application source or datasets are bundled here. See [third-party guidance](THIRD_PARTY.md).
+This framework has been developed with AI assistance. Humans are responsible for interpreting evidence, approving decisions and validating any resulting application.
