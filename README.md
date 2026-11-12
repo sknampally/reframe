@@ -30,7 +30,7 @@ Reframe organizes that work into a controlled, repeatable preparation flow:
 
 Reframe is an orchestrator. It runs on your workstation, drives an AWS Transform assessment, hands bounded evidence to separate AI agents, and stops for a person at every approval.
 
-![Reframe orchestrator: routing, state, governance and traceability, driving AWS Transform, the executor agent, the reviewer agent and the wireframe agent](docs/images/orchestration-layer.svg)
+![Reframe orchestrator hub: source in, AI-DLC package out, AWS Transform and people above, and the executor, reviewer and wireframe agents below](docs/images/orchestration-layer.svg)
 
 | Part | Runs as | What it does |
 | --- | --- | --- |
