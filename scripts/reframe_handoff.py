@@ -246,11 +246,13 @@ def inventories(paths):
     copybooks, batches = _members(paths)
     return (
         {
-            'note': 'Member names only. Field layouts were not imported, so fields stay empty.',
+            'note': 'Discovered member names from the pinned source or saved evidence. Field layouts were not parsed, so fields stay empty.',
+            'fields_parsed': False,
             'copybooks': copybooks,
         },
         {
-            'note': 'Listed only when the assessment named a batch member.',
+            'note': 'Discovered batch members from the pinned source or saved evidence. Job steps were not parsed.',
+            'fields_parsed': False,
             'jobs': batches,
         },
     )

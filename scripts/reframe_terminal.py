@@ -18,12 +18,38 @@ from pilot import Blocked
 
 COMMANDS = ['flow', 'help', 'menu', 'guide', 'init', 'workspace', 'status', 'assess', 'resume',
             'compare', 'approve', 'preview', 'relocate', 'prepare-plan', 'model-budget', 'validate', 'decide', 'review-site', 'feedback',
-            'upgrade-framework', 'artifacts', 'package', 'privacy', 'demo', 'live', 'next', 'exit']
+            'upgrade-framework', 'artifacts', 'package', 'context', 'design-export', 'package-export', 'register-project',
+            'privacy', 'demo', 'live', 'next', 'exit']
 ACTIONS = {'1':'flow', '2':'assess', '3':'status', '4':'resume', '5':'compare',
            '6':'validate', '7':'review-site', '8':'package', '9':'guide', '0':'exit'}
 DEMO_STAGES = ['READY_TO_ASSESS', 'AWAITING_ASSESSMENT_APPROVAL', 'ASSESSMENT_APPROVED',
                'AWAITING_VALIDATION_APPROVAL', 'VALIDATION_APPROVED',
                'AWAITING_SPECIFICATIONS_APPROVAL', 'SPECIFICATIONS_APPROVED', 'PACKAGED']
+
+
+def recovery_notice(reason, result=None):
+    """Classify a design failure without repeating paths or identifiers."""
+    result = result or {}
+    if result.get('resumed'):
+        return {
+            'recovery': 'incomplete-generation',
+            'summary': 'Incomplete generation was resumed from the saved selection. No new model call was required.',
+            'next_step': 'Review the completed version before packaging.',
+        }
+    text = str(reason or '')
+    if 'integrity failure' in text:
+        return {
+            'recovery': 'integrity-failure',
+            'summary': 'Completed version integrity failure. The saved files do not match the completed version. Nothing was overwritten.',
+            'next_step': 'Restore the completed files or choose a new version. Do not reuse the damaged version.',
+        }
+    if 'immutable' in text:
+        return {
+            'recovery': 'immutable-version',
+            'summary': 'Completed version is immutable. Choose the next revision. No approval carries forward.',
+            'next_step': 'Export the next version. The completed version was not changed.',
+        }
+    return None
 
 
 def clean(value):
@@ -132,7 +158,18 @@ class Terminal:
         except (Blocked, OSError, ValueError, KeyError, RuntimeError) as error:
             self.report({'status': 'BLOCKED', 'reason': str(error), 'next_step': 'Choose 1 or /workspace'})
             return
+        from reframe import budget_summary
+        summary = budget_summary(project, root)
         lines = ['State  ' + str(project.get('stage', 'UNKNOWN')).replace('_', ' ')]
+        call_cap = 'no call cap' if summary['preparation_cap'] is None else 'cap ' + str(summary['preparation_cap'])
+        lines.append('Preparation calls  ' + str(summary['preparation_calls']) + ' with ' + call_cap)
+        lines.append('Completed units  ' + str(summary.get('completed_units', 0)) + '  Remaining units  ' + str(summary.get('remaining_units', 0)))
+        lines.append('Wireframe calls  ' + str(summary['wireframe_calls']) + ' with ' + ('no call cap' if summary['wireframe_cap'] is None else 'cap ' + str(summary['wireframe_cap'])))
+        lines.append('Skip-draft calls  ' + str(summary['skip_draft_calls'])
+                     + '  Failed attempts  ' + str(summary.get('skip_failures', 0)) + ' of limit ' + str(summary.get('skip_failure_limit', 3)))
+        lines.append('Measured model dollars  ' + str(summary['dollars_measured']) + ' of cap ' + str(summary['dollar_cap']))
+        if summary.get('next_call_estimate') is not None:
+            lines.append('Estimated next billed call  ' + str(summary['next_call_estimate']))
         label = progress.get('active_assessment') or 'none'
         lines.append('Assessment  ' + str(label) + '  ' + str(progress.get('saved_status') or 'not started'))
         lines.append('Watcher  already staying with this job' if owned else 'Watcher  not running')
@@ -176,6 +213,10 @@ class Terminal:
         state=clean(result.get('status','RESULT'))
         failed=state in {'BLOCKED','REWORK_LIMIT','ASSESSMENT_FAILED','NEEDS_RECONCILIATION','SETUP_INCOMPLETE','CANCELLED'}
         table=Table.grid(padding=(0,2));table.add_column(style='bold');table.add_column(overflow='fold')
+        notice = recovery_notice(result.get('reason'), result)
+        if self.private and notice:
+            table.add_row('Recovery', clean(notice['summary']))
+            table.add_row('Next Step', clean(notice['next_step']))
         for key,value in result.items():
             if key=='status':continue
             # Hide values that can contain paths, resource identifiers or arbitrary error text.
@@ -193,7 +234,10 @@ class Terminal:
              ('preview --skip-validation --by NAME --note REASON','Generate an AWS-assumed draft UI and AI-DLC package'),('relocate --output-parent PATH','Move outputs into a verified repository-named assessment folder'),('prepare-plan','Preview evidence units and minimum model calls; no AI calls'),('model-budget','Record an explicitly approved total call cap'),('compare','Compare two preserved assessment snapshots'),('approve','Record assessment, validation or business approval'),
              ('validate','Run executor and independent reviewer'),('decide / feedback','Record SME answers or request a revision'),
              ('review-site','Generate stakeholder HTML using the chosen provider'),('artifacts','List saved preparation and review files'),
-             ('package','Create the approved implementation package'),('upgrade-framework --note TEXT','Record a Reframe update on this saved run'),('guide [setup|workflow|comparison]','Read built-in documentation'),
+             ('package','Create the approved implementation package'),('context','Import, decide, or approve one future-state delta'),
+             ('design-export','Write the canonical versioned design'),('package-export','Write the draft mode ZIP'),
+             ('register-project','Record a project locally without an AWS job'),
+             ('upgrade-framework --note TEXT','Record a Reframe update on this saved run'),('guide [setup|workflow|comparison]','Read built-in documentation'),
              ('privacy','Toggle project/result detail visibility'),('demo / live','Switch simulated preview / saved live project'),
              ('menu / exit','Refresh dashboard / leave the console')]:table.add_row('/'+command,purpose)
         self.console.print(table)
@@ -274,7 +318,7 @@ class Terminal:
             path=Path(self.ask('Existing private workspace path')).expanduser().resolve()
             require((path/'project.json').is_file(),'No saved project at that path')
             select_workspace(path);self.dashboard();return True
-        if cmd not in {'init','assess','resume','compare','approve','preview', 'relocate','prepare-plan','model-budget','validate','review-site','package','decide','feedback','upgrade-framework'}:
+        if cmd not in {'init','assess','resume','compare','approve','preview', 'relocate','prepare-plan','model-budget','validate','review-site','package','decide','feedback','upgrade-framework','context','design-export','package-export','register-project'}:
             self.say('Unknown command. Type /help or choose a menu number.','yellow');return True
         if cmd=='compare' and not args:
             args=['--left',self.ask('First assessment label'),'--right',self.ask('Second assessment label')]

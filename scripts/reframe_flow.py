@@ -2,7 +2,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from pilot import require
+from pilot import Blocked, require
 
 
 def record_framework_update(ui, project):
@@ -173,13 +173,21 @@ def offer_review_budget(ui, project):
         return None
     needed = state.get('minimum_additional_calls')
     spent = state.get('calls', 0) or 0
-    ui.say('The review plan needs at least ' + str(needed) + ' more model calls. The saved cap leaves '
+    ui.say('The review plan needs at least ' + str(needed) + ' more model calls. The saved allowance leaves '
            + str(state.get('remaining_calls')) + '. ' + str(spent) + ' model calls were already used.')
     cap = spent + needed if isinstance(needed, int) else None
-    if not isinstance(cap, int) or not spent < cap <= 256:
-        ui.say('That plan needs more than 256 model calls. The cap cannot be raised that far. No model call was made.')
+    if not isinstance(cap, int) or not spent < cap:
+        ui.say('The remaining plan has no usable call count. No model call was made.')
         return None
     if not ui.yes('Raise the model-call cap to ' + str(cap) + ' and start the review?'):
+        if ui.yes('Remove the saved call cap and keep the completed work?'):
+            owner = ui.ask('Accountable owner for this call budget')
+            note = ui.ask('Reason for this call budget')
+            if ui.invoke(['model-budget', '--clear-call-cap', '--by', owner, '--note', note]) != 0:
+                return None
+            if ui.invoke(['validate']) != 0:
+                return ui.project()
+            return ui.project()
         ui.say('Review stayed within the saved cap. No model call was made.')
         return None
     owner = ui.ask('Accountable owner for this call budget')
@@ -191,21 +199,255 @@ def offer_review_budget(ui, project):
     return ui.project()
 
 
+def offer_dollar_budget(ui, project):
+    """Ask before raising the model dollar cap. The provider account remains the spend limit."""
+    state = project.get('pipeline') or {}
+    if state.get('reason') != 'Model call would exceed the dollar cap':
+        return None
+    settings = project.get('settings') or {}
+    spent = settings.get('model_dollars_spent', 0)
+    cap = settings.get('max_model_dollars', 0)
+    price = state.get('next_call_price') or 0
+    ui.say('Model dollars spent ' + str(spent) + ' of cap ' + str(cap) + '. The next billed call needs ' + str(price) + '.')
+    if not ui.yes('Raise the model dollar cap so this call can run?'):
+        ui.say('The review stayed within the saved dollar cap. No model call was made.')
+        return None
+    owner = ui.ask('Accountable owner for this dollar budget')
+    note = ui.ask('Reason for this dollar budget')
+    amount = ui.ask('Model dollar cap', str(round(max(cap, spent) + price, 2)))
+    try:
+        value = float(amount)
+    except ValueError:
+        ui.say('The dollar cap was not a number. No model call was made.')
+        return None
+    if ui.invoke(['model-budget', '--max-dollars', str(value), '--by', owner, '--note', note]) != 0:
+        return None
+    return ui.project()
+
+
+def _choose_match(ui, matches):
+    """Ask only when more than one saved workspace matches the repository."""
+    if len(matches) == 1:
+        return matches[0]
+    for index, folder in enumerate(matches, start=1):
+        ui.say(str(index) + ' ' + str(folder))
+    picked = ui.ask('Saved workspace number', '1')
+    require(picked.isdigit() and 1 <= int(picked) <= len(matches), 'Choose one of the saved workspaces')
+    return matches[int(picked) - 1]
+
+
+def offer_known_repository(ui, repository=None):
+    """Recognize a repository before setup. A failed reuse check does not provision a replacement."""
+    repository = repository or ui.ask('Repository URL to recognize')
+    from reframe_projects import load_project, matching_workspaces, pin_requested_revision, verify_saved_infrastructure
+    matches = matching_workspaces(repository)
+    if not matches:
+        ui.say('No saved project matches this repository. A new project is separate from every saved sandbox.')
+        if not ui.yes('Create a new project?'):
+            ui.say('No project was created.')
+            return False
+        return repository
+    folder = _choose_match(ui, matches)
+    saved = load_project(folder)
+    ui.say('Saved project recognized at ' + str(folder) + '.')
+    choice = ui.ask('Choose resume, reuse-baseline, assess-new-revision, or new-project', 'resume')
+    require(choice in {'resume', 'reuse-baseline', 'assess-new-revision', 'new-project'},
+            'Choose resume, reuse-baseline, assess-new-revision, or new-project')
+    if choice == 'new-project':
+        ui.say('A new project does not reuse this sandbox.')
+        if not ui.yes('Create a new project?'):
+            ui.say('No project was created.')
+            return False
+        return repository
+    try:
+        verify_saved_infrastructure(saved)
+    except Blocked as error:
+        ui.say(str(error))
+        ui.say('Reuse is paused. No new resources were created.')
+        return False
+    from reframe_optional import resource_plan
+    from reframe_setup import select_workspace
+    import reframe
+    intent = {'resume': 'resume', 'reuse-baseline': 'reuse-baseline', 'assess-new-revision': 'new-assessment'}[choice]
+    plan = resource_plan(saved, intent)
+    ui.say('Infrastructure verified. AWS jobs created: ' + str(plan['aws_jobs_created']) + '.')
+    select_workspace(folder)
+    if choice == 'reuse-baseline':
+        ui.say('The saved baseline stays in place. No assessment job was created.')
+        return True
+    if choice == 'resume':
+        ui.say('Resuming the saved job. No new assessment job was created.')
+        return True
+    if (saved.get('source') or {}).get('root'):
+        ref = ui.ask('Source revision to assess', saved['source'].get('commit') or 'HEAD')
+        try:
+            pinned = pin_requested_revision(folder, saved, ref)
+        except Blocked as error:
+            ui.say(str(error))
+            ui.say('Reuse is paused. No new resources were created.')
+            return False
+        reframe.persist(folder, saved)
+        ui.say('Pinned revision ' + pinned['commit'] + '. The saved baseline and its approvals stay in place.')
+    if not ui.yes('Authorize one new assessment of this revision on the verified infrastructure?'):
+        ui.say('No assessment job was created.')
+        return True
+    command = ['assess', '--wait', '--allow-new-assessment']
+    pending = saved.get('pending_revision') or {}
+    if pending.get('commit'):
+        command += ['--label', 'revision-' + pending['commit'][:8]]
+    if ui.invoke(command) != 0:
+        ui.say('The assessment was not started. No replacement sandbox was created.')
+        return False
+    return True
+
+
+def finish_guided_design(ui, project):
+    """Ask for mode, version, stack, and optional context, then write the draft package."""
+    from reframe import budget_summary
+    work = workspace_path()
+    summary = budget_summary(project or {}, work)
+
+    def cap_text(value):
+        return 'no call cap' if value is None else 'cap ' + str(value)
+
+    ui.say('Preparation model calls used ' + str(summary['preparation_calls']) + ' with ' + cap_text(summary['preparation_cap'])
+           + '. Completed units ' + str(summary.get('completed_units', 0)) + '. Remaining units ' + str(summary.get('remaining_units', 0)) + '.')
+    ui.say('Wireframe model calls used ' + str(summary['wireframe_calls']) + ' with ' + cap_text(summary['wireframe_cap']) + '.')
+    ui.say('Skip-draft model calls used ' + str(summary['skip_draft_calls'])
+           + '. Failed attempts ' + str(summary.get('skip_failures', 0)) + ' of limit ' + str(summary.get('skip_failure_limit', 3)) + '.')
+    ui.say('Measured model dollars ' + str(summary['dollars_measured']) + ' of cap ' + str(summary['dollar_cap']) + '.')
+    if summary.get('next_call_estimate') is not None:
+        ui.say('Estimated next billed call ' + str(summary['next_call_estimate']) + '. This estimate is not measured spend.')
+    mode = ui.ask('Design mode (functional-parity/reimagine)', 'functional-parity')
+    require(mode in {'functional-parity', 'reimagine'}, 'Choose functional-parity or reimagine')
+    version = ui.ask('Design version', 'v1')
+    stack = ui.ask('Target stack', 'unspecified')
+    context = ui.ask('Human context file, or none', 'none')
+    if context not in {'', 'none'}:
+        author = ui.ask('Context author')
+        role = ui.ask('Context role', 'architect')
+        category = ui.ask('Context category (current-state/future-state/clarification)', 'clarification')
+        require(category in {'current-state', 'future-state', 'clarification'}, 'Choose a context category')
+        affected = ui.ask('Affected ids, comma separated', '')
+        if ui.invoke(['context', 'import', '--file', context, '--by', author, '--role', role,
+                      '--category', category, '--affected', affected]) != 0:
+            ui.say('The context file was not imported. The design was not written.')
+            return
+        from reframe_optional import context_status
+        pending = [item for item in context_status(work).get('submissions') or [] if item.get('disposition') == 'proposed']
+        disposition = ui.ask('Disposition for the imported context (accepted/rejected)', 'rejected')
+        require(disposition in {'accepted', 'rejected'}, 'Choose accepted or rejected')
+        if pending and ui.invoke(['context', 'decide', '--id', pending[-1]['id'], '--disposition', disposition,
+                                  '--by', author, '--note', 'Recorded in the guided flow']) != 0:
+            ui.say('The context disposition was not recorded. The design was not written.')
+            return
+        if category == 'future-state' and disposition == 'accepted':
+            ui.say('Accepting this note records input only. It does not authorize a behavior change.')
+    if not offer_open_conflicts(ui, work):
+        return
+    if ui.invoke(['design-export', '--version', version, '--mode', mode, '--stack', stack]) != 0:
+        say_design_recovery(ui)
+        return
+    report = getattr(ui, 'last_report', None) or {}
+    if report.get('resumed'):
+        ui.say('Incomplete generation was resumed from the saved selection. No new model call was required.')
+        ui.say('Review the completed version before packaging.')
+    if category_was_future(context, locals()):
+        if ui.yes('Approve one future-state delta as an implementation requirement?'):
+            proposal = ui.ask('Proposal id to approve')
+            owner = ui.ask('Delta approver')
+            note = ui.ask('Delta approval note')
+            if ui.invoke(['context', 'approve-delta', '--version', version, '--id', proposal, '--by', owner, '--note', note]) != 0:
+                ui.say('The delta was not approved. The proposal stays proposed_unapproved.')
+    if ui.invoke(['package-export', '--version', version, '--mode', mode]) != 0:
+        ui.say('The draft ZIP was not written. /flow retries packaging. No final handoff was created.')
+        return
+    ui.say('Draft ' + mode + ' package written for ' + version + '. It stays DRAFT and is not the authorized implementation handoff.')
+
+
+def offer_open_conflicts(ui, work):
+    """Show conflicts that already exist, including when this turn imports no context."""
+    from reframe_optional import open_conflicts
+    conflicts = open_conflicts(work) if work else []
+    if not conflicts:
+        return True
+    ui.say(str(len(conflicts)) + ' unresolved context conflicts are visible. Final approval and authorized handoff stay blocked until they are resolved.')
+    for conflict in conflicts:
+        ui.say('Conflict ' + str(conflict.get('id')) + ' contradicts ' + str(conflict.get('contradicts') or 'recorded evidence') + '.')
+    if ui.yes('Resolve the open context conflict now?'):
+        conflict = conflicts[0]
+        resolution = ui.ask('Conflict resolution (keep-evidence/keep-human-statement/needs-more-evidence)', 'keep-evidence')
+        owner = ui.ask('Conflict resolver')
+        note = ui.ask('Conflict resolution note')
+        if ui.invoke(['context', 'resolve', '--id', conflict['id'], '--resolution', resolution,
+                      '--by', owner, '--note', note]) != 0:
+            ui.say('The conflict remains open. The draft can still be written. Final approval stays blocked.')
+        return True
+    if ui.yes('Defer the open conflict and continue the draft? Final approval stays blocked.'):
+        ui.say('The conflict stays open. The draft can still be written. Final approval stays blocked.')
+        return True
+    ui.say('Paused. Resolve the conflict or defer it before the design is written.')
+    return False
+
+
+def say_design_recovery(ui):
+    """Tell the operator which recovery applies without repeating hidden paths."""
+    from reframe_terminal import recovery_notice
+    report = getattr(ui, 'last_report', None) or {}
+    notice = recovery_notice(report.get('reason'), report)
+    if notice:
+        ui.say(notice['summary'])
+        ui.say(notice['next_step'])
+        return
+    ui.say('The design was not written. /flow resumes the same version when its completion record is missing.')
+
+
+def category_was_future(context, names):
+    """True when this turn imported a future-state note."""
+    return context not in {'', 'none'} and names.get('category') == 'future-state' and names.get('disposition') == 'accepted'
+
+
 def run(ui):
     """Walk a saved project from setup through assessment, skip or review, approvals, and the package."""
     from reframe_setup import workspace
     project = ui.project()
     if project:
-        choice = ui.ask('Continue saved project or start a fresh run? (continue/fresh)', 'continue')
-        require(choice in {'continue', 'fresh'}, 'Choose continue or fresh')
-        if choice == 'fresh':
-            source = ui.ask('Source Git URL, local checkout or S3 ZIP', project['source']['repository'])
+        choice = ui.ask('Continue saved project, recognize a repository, or start a fresh run? (continue/recognize/fresh)', 'continue')
+        require(choice in {'continue', 'recognize', 'fresh'}, 'Choose continue, recognize, or fresh')
+        if choice == 'recognize':
+            recognized = offer_known_repository(ui, (project.get('source') or {}).get('repository'))
+            if not recognized:
+                return
+            if isinstance(recognized, str) and ui.invoke(['init', '--guided', '--source', recognized]) != 0:
+                return
+            project = ui.project()
+        elif choice == 'fresh':
+            source = (project.get('source') or {}).get('repository')
+            require(source, 'The saved project has no repository to carry into setup')
+            ui.say('The new run uses the recognized repository ' + source + '.')
             parent = ui.ask('Parent directory for the new run', str(workspace().parent / ('run-' + datetime.now().strftime('%Y%m%d-%H%M%S'))))
             from reframe_workspace import output_directory
             require(not output_directory(parent, source).exists(), 'Output directory already exists; choose another parent or continue it')
             if ui.invoke(['init', '--guided', '--source', source, '--output-parent', parent]) != 0:
                 return
             project = ui.project()
+        else:
+            repository = (project.get('source') or {}).get('repository')
+            if repository:
+                from reframe_projects import matching_workspaces
+                from reframe_setup import select_workspace
+                matches = matching_workspaces(repository)
+                if len(matches) > 1:
+                    folder = _choose_match(ui, matches)
+                    select_workspace(folder)
+                    project = ui.project()
+    if not project:
+        recognized = offer_known_repository(ui)
+        if not recognized:
+            return
+        if isinstance(recognized, str) and ui.invoke(['init', '--guided', '--source', recognized]) != 0:
+            return
+        project = ui.project()
     if not project or project.get('stage') in {'INITIALIZED', 'WAITING_FOR_CONNECTOR_APPROVAL'}:
         if ui.invoke(['init', '--guided']) != 0:
             return
@@ -217,10 +459,16 @@ def run(ui):
         if not record_framework_update(ui, project):
             return
         if approved and not project.get('approvals', {}).get('validation') and stage != 'AWAITING_VALIDATION_APPROVAL':
-            ui.say('Assessment is approved. skip generates wireframes and the AI-DLC package without a second review. review runs the executor and an independent reviewer.')
-            choice = ui.ask('Next step (skip/review)', 'skip')
-            require(choice in {'skip', 'review', 'draft', 'verify'}, 'Choose skip or review')
-            if choice in {'skip', 'draft'}:
+            interrupted = stage in {'WAITING_FOR_RUNTIME', 'RUNNING_EXECUTOR', 'RUNNING_REVIEWER', 'PREPARATION_PLANNED'} and project.get('pipeline')
+            if interrupted:
+                ui.say('Resuming the saved review. Completed calls stay recorded. No new assessment job is created.')
+                code = ui.invoke(['validate'])
+                updated = ui.project() or {}
+            else:
+                ui.say('Assessment is approved. skip generates wireframes and the AI-DLC package without a second review. review runs the executor and an independent reviewer.')
+                choice = ui.ask('Next step (skip/review)', 'skip')
+                require(choice in {'skip', 'review', 'draft', 'verify'}, 'Choose skip or review')
+            if not interrupted and choice in {'skip', 'draft'}:
                 ui.say('Claude or Codex will generate design content. No executor/reviewer verification or approval is implied.')
                 from reframe import name as safe_name
                 name = safe_name(ui.ask('Draft name (reuse the same name to resume)', 'guided-draft'))
@@ -238,12 +486,13 @@ def run(ui):
                     ui.say('The draft was not written. /flow retries it. No approval was recorded.')
                     return
                 say_review(ui, 'Review these draft files. They are not an approval.', draft_rows(name))
-                ui.say('Optional design-export can add a parity or reimagine draft later. These skip files stay as written.')
+                finish_guided_design(ui, ui.project() or project)
                 return
-            if not ui.yes('Run independent verification using the saved model-call budget?'):
-                return
-            code = ui.invoke(['validate'])
-            updated = ui.project() or ui.project() or {}
+            if not interrupted:
+                if not ui.yes('Run independent verification using the saved model-call budget?'):
+                    return
+                code = ui.invoke(['validate'])
+                updated = ui.project() or {}
             for _budget in range(6):
                 if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL':
                     break
@@ -259,7 +508,14 @@ def run(ui):
                     code = ui.invoke(['validate'])
                     updated = ui.project() or {}
                     continue
-                # A short cap returns a blocked status. Calls already spent still reach the question below.
+                if state.get('reason') == 'Model call would exceed the dollar cap':
+                    updated = offer_dollar_budget(ui, updated)
+                    if updated is None:
+                        return
+                    code = ui.invoke(['validate'])
+                    updated = ui.project() or {}
+                    continue
+                # A short allowance returns a blocked status. Calls already spent still reach the question below.
                 if code != 0 and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan':
                     return
                 if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL':
@@ -295,23 +551,11 @@ def run(ui):
                 ui.say('The approved package was not written. /flow retries it.')
                 return
             say_review(ui, 'The approved package is ready to review.', package_rows(ui.project()))
+            finish_guided_design(ui, ui.project() or project)
             return
         if stage == 'PACKAGED':
             say_review(ui, 'The approved package is already written.', package_rows(project))
-            choice = ui.ask('Optional design export (skip/functional-parity/reimagine)', 'skip')
-            require(choice in {'skip', 'functional-parity', 'reimagine'}, 'Choose skip, functional-parity, or reimagine')
-            if choice == 'skip':
-                ui.say('The approved package is unchanged.')
-                return
-            version = ui.ask('Design version', 'v1')
-            stack = ui.ask('Target stack', 'unspecified')
-            if ui.ask('Import human context now? (yes/no)', 'no') == 'yes':
-                ui.say('Use reframe context import. A missing file does not block the draft.')
-            if ui.invoke(['design-export', '--version', version, '--mode', choice, '--stack', stack]) != 0:
-                return
-            if ui.invoke(['package-export', '--version', version, '--mode', choice]) != 0:
-                return
-            ui.say('Draft mode package written beside the approved package. Final handoff was not requested.')
+            finish_guided_design(ui, project)
             return
         if not approved:
             command = 'resume' if project.get('active_assessment') else 'assess'

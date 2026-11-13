@@ -89,7 +89,7 @@ source-upload/job authorization. Approvals prompt for owner, rationale and sourc
 provenance confirmation; they are never inferred. Validation approval after SME
 questions remains an explicit gate before HTML generation.
 
-A review plan pairs each finding with the source file named inside it. Source files the assessment does not name, and findings that do not name a program, stay on the plan and do not take a model call. A finding quote is an exact excerpt of the supplied lines. When the saved call cap is below that plan, the guided review states the required count and asks before raising the cap. The cap cannot exceed 256 calls. A review passes when the written claims match their citations. Omitted detail and a citation that does not cover every clause are named in the report and do not open another round. A contradicted claim, a quote that is not in the cited lines, false coverage, or source proof that needs another file still returns for correction. A program whose extra review still contradicts the source gets one correction and one more review. Rework uses more calls than the first estimate. One program at its round limit does not skip the programs after it. After the programs pass, synthesis receives their findings and questions without citation text. That combined review may use a larger context than one program. The synthesis reviewer judges the assembled specification; the program reviews already inspected the source. A cross-unit question the model adds is kept when it names an owner, an impact, and the work it blocks. A synthesis review that still contradicts the specification gets two corrections. A further contradiction stays stopped. A supplemental source read accepts a text file that is not UTF-8 when it contains no NUL bytes. Reviewed business rules and SME questions stay in the specification when the model restates only part of them.
+A review plan pairs each finding with the source file named inside it. Source files the assessment does not name, and findings that do not name a program, stay on the plan and do not take a model call. A finding quote is an exact excerpt of the supplied lines. When a saved call cap is below that plan, the guided review states the required count and asks before raising the cap or removing it. A new project has no call cap. A billed model call still stops at the saved dollar cap, and the model account remains the spend limit. A review passes when the written claims match their citations. Omitted detail and a citation that does not cover every clause are named in the report and do not open another round. A contradicted claim, a quote that is not in the cited lines, false coverage, or source proof that needs another file still returns for correction. A program whose extra review still contradicts the source gets one correction and one more review. Rework uses more calls than the first estimate. One program at its round limit does not skip the programs after it. After the programs pass, synthesis receives their findings and questions without citation text. That combined review may use a larger context than one program. The synthesis reviewer judges the assembled specification; the program reviews already inspected the source. A cross-unit question the model adds is kept when it names an owner, an impact, and the work it blocks. A synthesis review that still contradicts the specification gets two corrections. A further contradiction stays stopped. A supplemental source read accepts a text file that is not UTF-8 when it contains no NUL bytes. Reviewed business rules and SME questions stay in the specification when the model restates only part of them.
 
 When a new job has no chat yet, the controller sends the assessment objective once. It asks for Analyze code, Analyze data, Generate technical documentation, and Extract business logic, and it leaves out Analyze activity metrics. That message does not include the workspace, job, connector, or archive location. When AWS says the plan was generated, including a markdown sentence that says approval of the findings is preserved, the controller starts that plan. The recorded archive location is sent only after AWS asks where the source is. Resume uses the same job. Uncertain sends require reconciliation. Plan selection never approves generated deliverables, and unknown onboarding prompts are not automatically answered.
 
@@ -509,10 +509,13 @@ With the run owner's authorization, use:
 
 ```bash
 reframe model-budget --max-calls 64 --by "Run owner" --note "Approved additional assessment coverage"
+reframe model-budget --max-dollars 50 --by "Run owner" --note "Approved model spend for this estate"
 reframe resume
 ```
 
-This sets the total cap, not an additional allowance. Consumed calls remain counted,
+A new project has no model-call cap. `max_model_calls` is null until you set one. A saved run keeps its recorded cap, its calls, and its dollar cap. The guide asks before raising a cap or removing it with `reframe model-budget --clear-call-cap`. Removing the cap does not restart the assessment or discard completed work. A call cap is enforced only when it is set. Measured model dollars and an estimated next call are shown separately. A billed API key stops at the saved dollar cap until you raise it. A logged-in Claude subscription is not charged to that ledger. Repeated identical results, a provider failure, and a lack of progress pause with the completed work saved.
+
+This sets the total allowance, not an extra increment on top of it. There is no maximum call count. Consumed calls remain counted,
 and the change records the owner, rationale, old cap and new cap. It does not change
 the Claude subscription, buy credits, clear a provider refusal or approve findings.
 A call count limits requests; it is not a token or monetary estimate. Provider usage
@@ -604,8 +607,9 @@ reframe preview --skip-validation --by "Assessment owner" --note "Accept AWS fin
 
 Menu **1** offers the HTML provider saved at setup. That default is Codex unless you typed `claude` during setup. Use `--provider claude` here to generate the same structured draft with Claude instead.
 This calls the selected provider for design/wireframe content; it does **not** run
-the executor/reviewer verification loop. Up to three generation attempts are counted
-in a separate preview ledger. It does not reset or increase the validation call cap.
+the executor/reviewer verification loop. Failed generation attempts are counted
+separately and stop after three. A saved valid design is reused, and later review or
+packaging does not spend another generation attempt. It does not reset or increase the validation call cap.
 
 The command imports the complete supported AWS COBOL `all_rules` and JCL `rules` catalogs deterministically,
 uses AWS program summaries and clearly labeled rule examples to propose screens and

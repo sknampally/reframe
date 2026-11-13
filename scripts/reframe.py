@@ -500,8 +500,47 @@ def require_dollar_cap(project, role, provider=None):
     spent = settings.get('model_dollars_spent', 0)
     cap = settings.get('max_model_dollars', 0)
     require(isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap >= 0, 'Dollar cap is invalid')
-    require(spent + price <= cap, 'Model call would exceed the dollar cap')
+    if spent + price > cap:
+        project.setdefault('pipeline', {})['reason'] = 'Model call would exceed the dollar cap'
+        project['pipeline']['next_call_price'] = price
+        raise Blocked('Model call would exceed the dollar cap')
     settings['model_dollars_spent'] = round(spent + price, 6)
+
+
+def budget_summary(project, work=None):
+    """Report preparation, wireframe, and skip-draft counters separately."""
+    settings = project.get('settings') or {}
+    cap = settings.get('max_model_calls')
+    used = (project.get('pipeline') or {}).get('calls') or 0
+    skip_calls = 0
+    skip_failures = 0
+    if work:
+        for state in Path(work).glob('previews/*/preview-state.json'):
+            try:
+                saved = json.loads(state.read_text())
+                skip_calls += int(saved.get('calls') or 0)
+                skip_failures += int(saved.get('failed_attempts') or 0)
+            except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+    return {
+        'preparation_calls': used, 'preparation_cap': cap,
+        'wireframe_calls': project.get('ui_calls') or 0, 'wireframe_cap': cap,
+        'skip_draft_calls': skip_calls, 'skip_draft_cap': None,
+        'skip_failures': skip_failures, 'skip_failure_limit': 3,
+        'dollars_spent': settings.get('model_dollars_spent', 0),
+        'dollar_cap': settings.get('max_model_dollars', 0),
+        'dollars_measured': settings.get('model_dollars_spent', 0),
+        'next_call_estimate': (project.get('pipeline') or {}).get('next_call_price'),
+        'completed_units': sum(1 for item in ((project.get('checkpoints') or {}).get('units') or {}).values() if item.get('status') == 'PASS'),
+        'remaining_units': sum(1 for item in ((project.get('checkpoints') or {}).get('units') or {}).values() if item.get('status') != 'PASS'),
+    }
+
+
+def require_clear_for_final(work, action):
+    """Block an affected final approval while a context conflict is open."""
+    import reframe_optional as optional
+    conflicts = optional.open_conflicts(work)
+    require(not conflicts, 'Open context conflicts block ' + action)
 
 
 def upgrade_framework(work, project, args):
@@ -556,7 +595,18 @@ def assessment(work, project, args, client=None):
     label = name(args.label)
     if label not in project['assessments']:
         require(args.command == 'assess', 'Unknown assessment label; resume never creates a new run')
-        verify_source(project)
+        revision = project.get('pending_revision') if label not in project['assessments'] else None
+        if revision:
+            require(revision.get('baseline_commit') == (project.get('source') or {}).get('commit'),
+                    'Pending revision does not match the saved baseline. No assessment was started.')
+            require(revision.get('snapshot') and revision.get('commit'),
+                    'Resolve and pin the revision before its assessment. No assessment was started.')
+            source_record = {'root': revision['snapshot'], 'repository': project['source']['repository'],
+                             'commit': revision['commit'], 'ref': revision.get('ref')}
+            verify_source({'source': source_record, 'framework_commit': project['framework_commit']})
+        else:
+            verify_source(project)
+            source_record = project['source']
         if not args.findings:
             require(args.allow_new_assessment, 'Use --allow-new-assessment to authorize this new job and source upload')
             require(project['setup'].get('connector_approved_by'), 'Complete setup and confirm connector activation first')
@@ -565,10 +615,12 @@ def assessment(work, project, args, client=None):
             project['settings']['transform']['connector_id'] = project['setup']['connector_id']
         settings_file = work / 'run-settings.json'
         write(settings_file, project['settings'])
-        directory = kw.initialize(SimpleNamespace(source=project['source']['root'], workspace=str(work),
+        directory = kw.initialize(SimpleNamespace(source=source_record['root'], workspace=str(work),
             settings=str(settings_file), objective=project['scope'], assessment=args.findings,
-            source_record=project['source']))
-        project['assessments'][label] = {'directory': str(directory)}
+            source_record=source_record))
+        project['assessments'][label] = {'directory': str(directory), 'source_commit': source_record['commit']}
+        if revision:
+            project.pop('pending_revision', None)
         persist(work, project)
     directory = Path(project['assessments'][label]['directory'])
     run = read(directory / 'run.json')
@@ -917,6 +969,7 @@ def approve(work, project, args):
         require(args.by.strip() != skip['owner'].strip(), 'Second acceptance must name a different person')
         fingerprint = digest({k: skip[k] for k in ('owner', 'reason', 'assessment_sha256')})
     else:
+        require_clear_for_final(work, 'specification approval')
         require(project.get('site'), 'Generate the review site first')
         fingerprint = site_fingerprint(work, project)
         approved(project, 'validation', digest({'specification': project['specification']['sha256'], 'decisions': project['decisions']}))
@@ -985,20 +1038,41 @@ def recover_provider_request(work, project, args):
 def set_model_budget(work, project, args):
     """Record a named person's model-call budget before preparation has a specification."""
     require(args.by.strip() and args.note.strip(), 'Named owner and budget rationale required')
-    require(not project.get('specification') and not (set(project.get('approvals',{})) - {'assessment'}),
-            'Model budget changes require an unfinished preparation phase')
-    current = project['settings']['max_model_calls']
+    max_calls = getattr(args, 'max_calls', None)
+    max_dollars = getattr(args, 'max_dollars', None)
+    clear_calls = bool(getattr(args, 'clear_call_cap', False))
+    require(max_calls is not None or max_dollars is not None or clear_calls, 'Record a call allowance, clear the call cap, or record a dollar cap')
+    require(not (clear_calls and max_calls is not None), 'Clear the call cap or set a new cap, not both')
     consumed = project.get('pipeline',{}).get('calls',0)
-    require(consumed < args.max_calls <= 256, 'Total call cap must exceed consumed calls and be at most 256')
-    project['settings']['max_model_calls'] = args.max_calls
+    current = project['settings'].get('max_model_calls')
+    if clear_calls:
+        project['settings']['max_model_calls'] = None
+    elif max_calls is not None:
+        require(not project.get('specification') and not (set(project.get('approvals',{})) - {'assessment'}),
+                'Call allowance changes require an unfinished preparation phase')
+        require(isinstance(max_calls, int) and consumed < max_calls,
+                'Call allowance must exceed the calls already used')
+        project['settings']['max_model_calls'] = max_calls
+    spent = project['settings'].get('model_dollars_spent', 0)
+    current_dollars = project['settings'].get('max_model_dollars', 0)
+    if max_dollars is not None:
+        require(isinstance(max_dollars, (int, float)) and not isinstance(max_dollars, bool)
+                and max_dollars >= spent and max_dollars > current_dollars,
+                'Dollar cap must be higher than the saved cap and cover the dollars already spent')
+        project['settings']['max_model_dollars'] = max_dollars
     project.setdefault('events',[]).append({'event':'model_budget_changed','at':time.time(),
-        'from':current,'to':args.max_calls,'consumed':consumed,'by':args.by,'note':args.note})
+        'from':current,'to':project['settings']['max_model_calls'],'consumed':consumed,
+        'dollar_from':current_dollars,'dollar_to':project['settings'].get('max_model_dollars', 0),
+        'by':args.by,'note':args.note})
     state = project.get('pipeline',{})
-    if state.get('reason') == 'Total model call budget exhausted':
-        state['status']='RUNNING';state.pop('reason',None)
-        project['stage']='RUNNING_' + state['role'].upper()
+    if state.get('reason') in {'Total model call budget exhausted', 'Model call would exceed the dollar cap',
+                               'Insufficient call budget for remaining checkpoint plan'}:
+        state['status']='RUNNING';state.pop('reason',None);state.pop('next_call_price', None)
+        if state.get('role'):
+            project['stage']='RUNNING_' + state['role'].upper()
     persist(work,project)
-    return {'status':'MODEL_BUDGET_RECORDED','total_cap':args.max_calls,'calls_consumed':consumed,
+    return {'status':'MODEL_BUDGET_RECORDED','total_cap':project['settings']['max_model_calls'],
+            'dollar_cap':project['settings'].get('max_model_dollars', 0),'calls_consumed':consumed,
             'next_step':'reframe resume'}
 
 
@@ -1103,7 +1177,7 @@ def preparation_plan(work, project, args):
         persist(work, project)
     return {'status':'PREPARATION_PLAN_READY', 'units':len(plan['units']),
             'minimum_calls':plan['minimum_calls'], 'calls_consumed':consumed,
-            'calls_remaining':max(0, project['settings']['max_model_calls']-consumed),
+            'calls_remaining': None if kw.call_limit(project['settings']) is None else max(0, kw.call_limit(project['settings'])-consumed),
             'reviewed_units':len(capsules), 'opaque_segments':sum(bool(p.get('opaque')) for u in plan['units'] for p in u['segments']),
             'plan':str(path), 'html':str(report), 'note':plan['estimate_note'],
             'next_step':'Review the plan and budget before reframe validate; no model calls were made.'}
@@ -1142,9 +1216,9 @@ def legacy_pipeline(work, project, args, runtime=model_call):
     approved(project, 'assessment', project['assessments'][label]['sha256'])
     state = project.setdefault('pipeline', {'round': 1, 'role': 'executor', 'calls': 0, 'contexts': {}, 'reads': {}, 'status': 'RUNNING'})
     # A spent cap before synthesis is the same question as a short review plan. It is not a failed unit.
-    if state['calls'] >= project['settings']['max_model_calls'] and not project.get('specification'):
+    if not kw.within_call_limit(project['settings'], state['calls']) and not project.get('specification'):
         state['minimum_additional_calls'] = 2
-        state['remaining_calls'] = project['settings']['max_model_calls'] - state['calls']
+        state['remaining_calls'] = kw.call_limit(project['settings']) - state['calls']
         state.update(status='BLOCKED', reason='Insufficient call budget for remaining checkpoint plan')
         project['stage'] = 'PREPARATION_PLANNED'
         persist(work, project)
@@ -1152,7 +1226,7 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                 'remaining_calls':state['remaining_calls'], 'minimum_additional_calls':2}
     if (state.get('reason') in {'Insufficient call budget for remaining checkpoint plan',
                                 'Three invalid synthesis candidates; inspect validation feedback'}
-            and state['calls'] < project['settings']['max_model_calls'] and not project.get('specification')):
+            and kw.within_call_limit(project['settings'], state['calls']) and not project.get('specification')):
         state['status'] = 'RUNNING'
         state['invalid_candidates'] = 0
         state.pop('reason', None)
@@ -1183,7 +1257,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         checkpoint_paths = {p['path'] for u in plan['units'] for p in u['segments'] if p['area'] == 'source' and not p.get('opaque')}
     check_provider_refusals(area)
     artifact_prefix = 'checkpoint-' if capsules else ''
-    while state['calls'] < project['settings']['max_model_calls']:
+    previous_signature, repeated_results = None, 0
+    while kw.within_call_limit(project['settings'], state['calls']):
         role, number = state['role'], state['round']
         key = f'{number}:{role}'
         history = state['contexts'].setdefault(key, [])
@@ -1194,7 +1269,7 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             'source_files': kw.inventory(run), 'assessment_files': assessment_catalog(assessment_run),
             'assessment_provenance': assessment_run.get('assessment_provenance'), 'history': history,
             'feedback': project.get('feedback', []), 'decisions': project['decisions'],
-            'remaining_model_calls': project['settings']['max_model_calls'] - state['calls'],
+            'remaining_model_calls': None if kw.call_limit(project['settings']) is None else kw.call_limit(project['settings']) - state['calls'],
             'evidence_notes': state.get('evidence_notes', {}).get(key, [])}
         if capsules:
             context.pop('assessment_files', None)
@@ -1243,6 +1318,14 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         project['stage'] = 'RUNNING_' + role.upper()
         persist(work, project)
         reply = runtime(project['providers'][role], run, area, role, message)
+        signature = json.dumps(reply, sort_keys=True)
+        repeated_results = repeated_results + 1 if signature == previous_signature else 1
+        previous_signature = signature
+        if repeated_results >= 3 and reply.get('decision') != 'PASS':
+            state.update(status='BLOCKED', reason='Repeated identical model result. Completed work is saved. Resume after the input changes.')
+            project['stage'] = 'BLOCKED'
+            persist(work, project)
+            return {'status': 'BLOCKED', 'reason': state['reason'], 'calls': state['calls']}
         if role == 'reviewer':
             require(sha(candidate_path) == state['candidate_sha256'], 'Reviewer cannot write the candidate')
         verify_source(project)
@@ -1354,7 +1437,7 @@ def review_site(work, project, args, runtime=model_call):
     provider = args.provider or project['providers']['wireframes']
     require(provider in {'claude', 'codex'}, 'Review site provider must be claude or codex')
     project['ui_calls'] = project.get('ui_calls', 0) + 1
-    require(project['ui_calls'] <= project['settings']['max_model_calls'], 'UI invocation budget exhausted')
+    require(kw.call_limit(project['settings']) is None or project['ui_calls'] <= kw.call_limit(project['settings']), 'UI invocation budget exhausted')
     persist(work, project)
     directory = work / 'previews' / ('business-' + str(project['ui_calls']))
     directory.parent.mkdir(exist_ok=True, mode=0o700)
@@ -1392,7 +1475,7 @@ def feedback(work, project, args):
     require(project.get('pipeline'), 'No preparation candidate to revise')
     state = project['pipeline']
     require(project['stage'] != 'PROVIDER_REVIEW_REQUIRED', 'Provider refusals require explicit provider review, not feedback')
-    require(state['calls'] < project['settings']['max_model_calls'], 'Budget exhausted; record an explicitly approved model-budget change first')
+    require(kw.within_call_limit(project['settings'], state['calls']), 'Budget exhausted; record an explicitly approved model-budget change first')
     if project.get('checkpoints') and project['checkpoints']['status'] != 'READY_FOR_SYNTHESIS':
         unit_id = getattr(args, 'unit', None)
         require(unit_id in project['checkpoints']['units'], 'Specify the blocked evidence unit with --unit')
@@ -1452,6 +1535,7 @@ def require_skip_acceptance(project):
 
 def package(work, project):
     """Write the approved AI-DLC ZIP after the recorded approvals still match."""
+    require_clear_for_final(work, 'the authorized implementation handoff')
     require_stage_contract(work, 'approval')
     verify_source(project)
     require_skip_acceptance(project)
@@ -1591,7 +1675,8 @@ def semantic_compare(work, project, args, runtime=model_call):
     if state.get('complete'):
         require(sha(output) == state['complete'], 'Semantic report changed')
         return {'report': str(output), 'semantic_review': 'AWAITING_HUMAN_REVIEW'}
-    while state['calls'] < project['settings']['max_model_calls']:
+    stalled = 0
+    while kw.within_call_limit(project['settings'], state['calls']):
         message = json.dumps({'protocol': (FRAMEWORK / 'prompts/pipeline/comparison.md').read_text(),
             'source_files': kw.inventory(left), 'left_files': left['assessment_index'], 'right_files': right['assessment_index'],
             'scope': project['scope'], 'history': state['history']})
@@ -1607,6 +1692,7 @@ def semantic_compare(work, project, args, runtime=model_call):
         directory.mkdir(exist_ok=True, mode=0o700)
         reply = runtime(args.provider, run, directory, 'reviewer', message)
         verify_source(project)
+        areas_before = len(state.get('read_areas') or [])
         if reply.get('kind') == 'read':
             area = reply.get('area')
             require(area in {'left', 'right', 'source'}, 'Comparison read must select left, right or source')
@@ -1636,6 +1722,12 @@ def semantic_compare(work, project, args, runtime=model_call):
         write(state_path, state)
         if state.get('complete'):
             return {'report': str(output), 'semantic_review': 'AWAITING_HUMAN_REVIEW'}
+        if len(state.get('read_areas') or []) > areas_before:
+            stalled = 0
+        else:
+            stalled += 1
+        if stalled >= 2:
+            raise Blocked('Repeated comparison result made no progress. Completed calls stay recorded.')
     raise Blocked('Comparison invocation budget exhausted')
 
 
@@ -1684,8 +1776,10 @@ def parser():
     preview.add_argument('--provider', choices=['claude','codex'], default='codex')
     preview.add_argument('--name', default='transform-direct')
     preview.add_argument('--refresh-export', action='store_true', help='Re-export a verified saved design after a CLI update, without new model calls')
-    budget = commands.add_parser('model-budget', help='Record an explicit total preparation model-call cap')
-    budget.add_argument('--max-calls', required=True, type=int)
+    budget = commands.add_parser('model-budget', help='Record an approved call allowance or model dollar cap')
+    budget.add_argument('--max-calls', type=int)
+    budget.add_argument('--clear-call-cap', action='store_true')
+    budget.add_argument('--max-dollars', type=float)
     budget.add_argument('--by', required=True)
     budget.add_argument('--note', required=True)
     recovery = commands.add_parser('recover-provider', help='Record review of a reasoning-extraction refusal before an evidence-only retry')
@@ -1739,6 +1833,11 @@ def parser():
     context_decide.add_argument('--disposition', required=True)
     context_decide.add_argument('--by', required=True)
     context_decide.add_argument('--note', required=True)
+    context_delta = context_commands.add_parser('approve-delta')
+    context_delta.add_argument('--version', required=True)
+    context_delta.add_argument('--id', required=True)
+    context_delta.add_argument('--by', required=True)
+    context_delta.add_argument('--note', required=True)
     context_resolve = context_commands.add_parser('resolve')
     context_resolve.add_argument('--id', required=True)
     context_resolve.add_argument('--resolution', required=True)
@@ -1803,7 +1902,8 @@ def main(argv=None, reporter=None):
                 import reframe_checkpoints as cp
                 plan, capsules = cp.verified_capsules(work, project, sys.modules[__name__])
                 result['preparation'] = {'units':len(plan['units']), 'reviewed_units':len(capsules),
-                    'calls_consumed':project['pipeline']['calls'], 'total_cap':project['settings']['max_model_calls']}
+                    'calls_consumed':project['pipeline']['calls'], 'total_cap':project['settings'].get('max_model_calls'),
+                    'call_cap_set': project['settings'].get('max_model_calls') is not None}
         elif getattr(args, 'detach', False):
             require((work / 'project.json').is_file(), 'Initialize first')
             with locked(work) as project:
@@ -1881,6 +1981,8 @@ def main(argv=None, reporter=None):
                             result = optional.import_context(work, source, args.by, args.role, args.category, [item for item in args.affected.split(',') if item])
                         elif args.context_command == 'decide':
                             result = optional.decide_context(work, args.id, args.disposition, args.by, args.note)
+                        elif args.context_command == 'approve-delta':
+                            result = optional.approve_delta(work, args.version, args.id, args.by, args.note)
                         else:
                             result = optional.resolve_conflict(work, args.id, args.resolution, args.by, args.note)
                     elif args.command == 'design-export':

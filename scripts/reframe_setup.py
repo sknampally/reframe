@@ -14,9 +14,15 @@ from pathlib import Path
 from pilot import Blocked, require
 
 
+def config_dir():
+    """Return the private configuration directory. Tests can point this elsewhere."""
+    override = os.environ.get('REFRAME_CONFIG_HOME')
+    return Path(override).expanduser() if override else Path.home() / '.config' / 'mainframe-modernize'
+
+
 def active_file():
     """Return the private file that names the active workspace."""
-    return Path.home() / '.config' / 'mainframe-modernize' / 'active.json'
+    return config_dir() / 'active.json'
 
 
 def select_workspace(work):
@@ -25,6 +31,16 @@ def select_workspace(work):
     path = active_file()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     private_save(path, {'workspace': str(work)})
+    project_file = Path(work) / 'project.json'
+    if project_file.is_file():
+        try:
+            import reframe_projects as projects
+            project = json.loads(project_file.read_text())
+            repository = (project.get('source') or {}).get('repository')
+            if repository:
+                projects.remember_workspace(work, repository)
+        except (OSError, UnicodeError, json.JSONDecodeError, Blocked):
+            pass
 
 
 def workspace():

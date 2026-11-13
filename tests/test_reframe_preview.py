@@ -42,6 +42,29 @@ class PreviewTests(unittest.TestCase):
             {'id':'Q1','question':'Confirm design','owner':'Architect','impact':'Unapproved design','blocks':'Implementation'}])
         return value
 
+    def test_failed_preview_attempts_stay_bounded_and_a_valid_design_is_reused(self):
+        self.project['settings']['max_model_dollars'] = 100
+        calls = {'count': 0}
+
+        def flaky(provider, run, directory, role, message):
+            calls['count'] += 1
+            if calls['count'] < 3:
+                return {'sections': {}}
+            return self.runtime(provider, run, directory, role, message)
+
+        for _ in range(2):
+            with self.assertRaises(Blocked):
+                preview.run(self.work, self.project, self.arguments, app, flaky)
+        result = preview.run(self.work, self.project, self.arguments, app, flaky)
+        self.assertEqual(result['status'], 'DRAFT_READY')
+        state = app.read(self.work / 'previews' / 'transform-direct' / 'preview-state.json')
+        self.assertEqual(state['failed_attempts'], 2)
+        self.assertEqual(state['calls'], 3)
+        preview.run(self.work, self.project, self.arguments, app, flaky)
+        reused = app.read(self.work / 'previews' / 'transform-direct' / 'preview-state.json')
+        self.assertEqual(reused['calls'], 3)
+        self.assertEqual(calls['count'], 3)
+
     def test_preview_skips_agents_preserves_gate_state_and_exports_draft(self):
         before=copy.deepcopy(self.project)
         result=preview.run(self.work,self.project,self.arguments,app,self.runtime)
@@ -50,11 +73,13 @@ class PreviewTests(unittest.TestCase):
         recorded=self.project.pop('verification_skip')
         self.assertEqual(recorded['owner'],'Fixture owner')
         self.assertEqual(recorded['reason'],'Preview AWS findings')
+        self.assertEqual(self.project.pop('skip_bundle'), 'previews/transform-direct')
         self.assertGreater(self.project['settings'].pop('model_dollars_spent'), 0)
         before['settings'].pop('model_dollars_spent', None)
         self.assertEqual(self.project,before)
         saved=app.read(self.work/'project.json')
         self.assertEqual(saved.pop('verification_skip')['owner'],'Fixture owner')
+        self.assertEqual(saved.pop('skip_bundle'), 'previews/transform-direct')
         self.assertGreater(saved['settings'].pop('model_dollars_spent'), 0)
         self.assertEqual(saved,before)
         with zipfile.ZipFile(result['archive']) as z:

@@ -132,7 +132,7 @@ When the findings are downloaded, Reframe lists the files to review, including `
 
 On the **review** route, the guide takes you through each step in order:
 
-1. **Validate.** The executor and reviewer check the evidence program by program. If the saved model-call cap is too low, the guide tells you how many calls are needed and asks before raising it (256 at most).
+1. **Validate.** The executor and reviewer check the evidence program by program. The work follows the plan: two calls for each program, two synthesis calls, and extra calls when a program needs correction. A new project has no call cap. A saved run keeps its recorded cap and the calls already used. If that cap is short, the guide states the count and asks before raising it or removing it. The model account's budget is the spend limit, and a billed API key also stops at the saved dollar cap until you raise it. Measured spend and an estimated next call are shown separately. Preparation, wireframe, and skip-draft calls are counted separately. A skip draft stops after three failed generation attempts and reuses a saved valid design without another call.
 2. **Answer SME questions.** Open `preparation/review.html`. Answer each open question with `reframe decide`, or defer it with a named owner. Then approve validation.
 3. **Review the wireframes.** Reframe generates `index.html`, `api.html` and `openapi.json`. To ask for changes, run `reframe feedback`; this sends the work back to the executor and clears the later approvals. When you are happy, approve the specifications.
 4. **Package.** Reframe writes `packages/package-<version>.zip` for the implementation team.
