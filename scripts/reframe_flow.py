@@ -333,7 +333,7 @@ def finish_guided_design(ui, project):
                       '--category', category, '--affected', affected]) != 0:
             ui.say('The context file was not imported. The design was not written.')
             return
-        from reframe_optional import context_status, open_conflicts
+        from reframe_optional import context_status
         pending = [item for item in context_status(work).get('submissions') or [] if item.get('disposition') == 'proposed']
         disposition = ui.ask('Disposition for the imported context (accepted/rejected)', 'rejected')
         require(disposition in {'accepted', 'rejected'}, 'Choose accepted or rejected')

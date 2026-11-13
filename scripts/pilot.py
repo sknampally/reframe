@@ -306,5 +306,10 @@ def main():
     return 0
 
 
+if 'unittest' in sys.modules:
+    import reframe_offline
+    reframe_offline.install()
+
+
 if __name__ == '__main__':
     sys.exit(main())
