@@ -427,14 +427,17 @@ def run(work, project, args, runtime, app):
         return 1 if record.get('role') == 'reviewer' else 2
 
     minimum = 2 + sum(remaining_calls_for(project['checkpoints']['units'].get(u['id'], {})) for u in plan['units'])
-    remaining = project['settings']['max_model_calls'] - state['calls']
+    limit = app.kw.call_limit(project['settings'])
+    remaining = None if limit is None else limit - state['calls']
     state['minimum_additional_calls'] = minimum
     state['remaining_calls'] = remaining
-    if remaining < minimum:
+    if limit is not None and remaining < minimum:
         state.update(status='BLOCKED', reason='Insufficient call budget for remaining checkpoint plan')
         project['stage'] = 'PREPARATION_PLANNED'; app.persist(work, project)
         return {'status':'BLOCKED', 'reason':state['reason'], 'calls':state['calls'],
                 'remaining_calls':remaining, 'minimum_additional_calls':minimum}
+    if state.get('reason') == 'Insufficient call budget for remaining checkpoint plan':
+        state.pop('reason', None)
     for unit in plan['units']:
         record = project['checkpoints']['units'].setdefault(unit['id'], {'status':'PENDING', 'attempt':1, 'role':'executor'})
         if record['status'] == 'PASS':
@@ -450,7 +453,7 @@ def run(work, project, args, runtime, app):
             record.update(status='PENDING', role='executor', limit_rereviewed='corrected')
         require(record['status'] not in {'BLOCKED', 'REWORK_LIMIT'}, 'Resolve the blocked evidence unit before resuming')
         while record['status'] != 'PASS':
-            if state['calls'] >= project['settings']['max_model_calls']:
+            if not app.kw.within_call_limit(project['settings'], state['calls']):
                 state.update(status='BLOCKED', reason='Total model call budget exhausted')
                 project['stage'] = 'BLOCKED'; app.persist(work, project)
                 return {'status':'BLOCKED', 'reason':state['reason'], 'calls':state['calls']}

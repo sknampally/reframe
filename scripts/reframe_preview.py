@@ -182,7 +182,8 @@ def run(work, project, args, app, runtime=None):
         validate(value,rules)
         app.write(model_path,value);state['design_sha256']=sha(model_path);state.pop('validation_error',None);app.write(state_path,state)
     else:
-        require(state['calls']<3, 'Preview generation reached its separate three-call limit; inspect saved replies')
+        require(state.get('failed_attempts', 0) < 3,
+                'Preview generation stopped after 3 failed attempts. A saved valid design is reused without another call.')
         context=context_for(summaries,rules,project['scope'],project['settings']['max_context_bytes'])
         context['protocol']=(app.FRAMEWORK/'prompts/pipeline/transform-preview.md').read_text()
         if state.get('validation_error'): context['validation_error']=state['validation_error']
@@ -198,6 +199,7 @@ def run(work, project, args, app, runtime=None):
         value=normalize_design(value)
         try: validate(value,rules)
         except app.Blocked as error:
+            state['failed_attempts']=state.get('failed_attempts', 0) + 1
             state['validation_error']=str(error);app.write(state_path,state);raise
         app.write(model_path,value);state['design_sha256']=sha(model_path);app.write(state_path,state)
     validate(value,rules)
@@ -218,6 +220,8 @@ def run(work, project, args, app, runtime=None):
         manifest=app.read(bundle/'checksums.json')
         require(all(sha(bundle/name)==expected for name,expected in manifest.items()), 'Draft output changed; use a new preview name')
         require(sha(archive) == state['archive_sha256'], 'Draft archive changed')
+        project['skip_bundle'] = destination.relative_to(work).as_posix()
+        app.persist(work, project)
         return {'status':'DRAFT_READY','verification':'SKIPPED_BY_OWNER','rules':len(rules),'screens':len(value['screens']),
                 'model_calls':state['calls'],'html':str(bundle/'index.html'),'archive':str(archive),
                 'next_step':'Review the draft with stakeholders. Existing generation reused without model calls.'}
@@ -256,6 +260,8 @@ def run(work, project, args, app, runtime=None):
             if path.is_file():path.chmod(0o600);z.write(path,path.name)
     archive.chmod(0o600)
     state.update(status='DRAFT_READY',archive_sha256=sha(archive),bundle_manifest_sha256=sha(bundle/'checksums.json'));app.write(state_path,state)
+    project['skip_bundle'] = destination.relative_to(work).as_posix()
+    app.persist(work, project)
     return {'status':'DRAFT_READY','verification':'SKIPPED_BY_OWNER','rules':len(rules),'screens':len(value['screens']),
             'model_calls':state['calls'],'html':str(bundle/'index.html'),'archive':str(archive),
             'next_step':'Review the draft with SME, architect, business owner and technical lead. No phase approval was fabricated.'}

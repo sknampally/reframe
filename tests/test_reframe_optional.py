@@ -99,7 +99,11 @@ class OptionalModeTests(unittest.TestCase):
         optional.decide_context(self.root, accepted['id'], 'accepted', 'Ari', 'Approved target change')
         optional.design_export(self.root, self.project, 'v5', 'reimagine', 'unspecified')
         deltas = json.loads((self.root / 'previews' / 'v5' / 'future-state' / 'deltas.json').read_text())
-        self.assertEqual(deltas['proposals'][0]['status'], 'accepted')
+        self.assertEqual(deltas['proposals'][0]['status'], 'proposed_unapproved')
+        self.assertIn('Combine the amount check and the receipt.', deltas['proposals'][0]['change'])
+        self.assertNotEqual(deltas['proposals'][0].get('authorization'), 'implementation_requirement')
+        approved = optional.approve_delta(self.root, 'v5', deltas['proposals'][0]['id'], 'Ari', 'Behavior change approved')
+        self.assertEqual(approved['authorization'], 'implementation_requirement')
         extra = self.root / 'later.md'
         extra.write_text('A later note.\n')
         optional.import_context(self.root, extra, 'Ari', 'architect', 'clarification', [])
@@ -125,10 +129,10 @@ class OptionalModeTests(unittest.TestCase):
         optional.decide_context(self.root, placed['id'], 'accepted', 'Ari', 'Keep it private')
         with self.assertRaisesRegex(optional.Blocked, 'Re-export'):
             optional.package_export(self.root, self.project, 'v7', 'functional-parity')
-        optional.design_export(self.root, self.project, 'v7', 'functional-parity', '')
+        optional.design_export(self.root, self.project, 'v9', 'functional-parity', '')
         self.assertFalse(archive.exists())
         with self.assertRaisesRegex(optional.Blocked, 'local workspace path'):
-            optional.package_export(self.root, self.project, 'v7', 'functional-parity')
+            optional.package_export(self.root, self.project, 'v9', 'functional-parity')
         self.assertFalse(archive.exists())
         secret = self.root / 'secret.md'
         secret.write_text('token AKIAIOSFODNN7EXAMPLE\n')
@@ -235,3 +239,150 @@ class OptionalModeTests(unittest.TestCase):
         with zipfile.ZipFile(self.root / packaged['archive']) as archive:
             archive.extractall(extracted)
         self.assertIn('NOT RUN', (extracted / 'README.md').read_text())
+
+    def test_changed_stack_reuse_allocates_the_next_revision(self):
+        optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        first = (self.root / 'previews' / 'v1' / 'design.json').read_bytes()
+        with self.assertRaisesRegex(optional.Blocked, 'immutable'):
+            optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'cobol')
+        with self.assertRaisesRegex(optional.Blocked, 'immutable'):
+            optional.design_export(self.root, self.project, 'v1', 'reimagine', 'java')
+        self.assertEqual((self.root / 'previews' / 'v1' / 'design.json').read_bytes(), first)
+        self.assertEqual(json.loads(first)['stack'], 'java')
+        optional.design_export(self.root, self.project, 'v2', 'reimagine', 'cobol')
+        self.assertEqual(json.loads((self.root / 'previews' / 'v2' / 'design.json').read_text())['stack'], 'cobol')
+        self.assertEqual(json.loads((self.root / 'previews' / 'v2' / 'design.json').read_text())['mode'], 'reimagine')
+        self.assertEqual((self.root / 'previews' / 'v1' / 'design.json').read_bytes(), first)
+
+    def test_changed_baseline_reuse_allocates_the_next_revision(self):
+        self.project['selected'] = 'run-1'
+        self.project['assessments'] = {'run-1': {'sha256': 'a' * 64}}
+        self.project['source']['commit'] = 'a' * 40
+        optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        saved = json.loads((self.root / 'previews' / 'v1' / 'design.json').read_text())
+        self.assertEqual(saved['provenance']['assessment_sha256'], 'a' * 64)
+        self.project['assessments']['run-1']['sha256'] = 'b' * 64
+        with self.assertRaisesRegex(optional.Blocked, 'next revision'):
+            optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        self.assertEqual(json.loads((self.root / 'previews' / 'v1' / 'design.json').read_text())['provenance']['assessment_sha256'], 'a' * 64)
+        self.project['source']['commit'] = 'b' * 40
+        optional.design_export(self.root, self.project, 'v2', 'functional-parity', 'java')
+        revised = json.loads((self.root / 'previews' / 'v2' / 'design.json').read_text())
+        self.assertEqual(revised['provenance']['assessment_sha256'], 'b' * 64)
+        self.assertEqual(revised['provenance']['source_commit'], 'b' * 40)
+        self.assertEqual(json.loads((self.root / 'previews' / 'v1' / 'design.json').read_text())['provenance']['source_commit'], 'a' * 40)
+
+    def test_context_revision_allocation_preserves_the_completed_version(self):
+        optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        before = json.loads((self.root / 'previews' / 'v1' / 'mode.json').read_text())['context_fingerprint']
+        note = self.root / 'cutoff.md'
+        note.write_text('Cutoff is 5.\n')
+        imported = optional.import_context(self.root, note, 'Ari', 'architect', 'current-state', ['s1'])
+        optional.decide_context(self.root, imported['id'], 'accepted', 'Ari', 'Use the cutoff')
+        with self.assertRaisesRegex(optional.Blocked, 'v2'):
+            optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        optional.design_export(self.root, self.project, 'v2', 'functional-parity', 'java')
+        self.assertEqual(json.loads((self.root / 'previews' / 'v1' / 'mode.json').read_text())['context_fingerprint'], before)
+        self.assertIn('Cutoff is 5.', (self.root / 'previews' / 'v2' / 'current-state' / 'index.html').read_text())
+        self.assertNotIn('Cutoff is 5.', (self.root / 'previews' / 'v1' / 'current-state' / 'index.html').read_text())
+
+    def test_partial_generation_resumes_without_a_model_call(self):
+        optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        mode = self.root / 'previews' / 'v1' / 'mode.json'
+        record = json.loads(mode.read_text())
+        self.assertIn('repository', record['selection'])
+        self.assertIn('assessment_sha256', record['selection'])
+        record['status'] = 'generating'
+        mode.write_text(json.dumps(record))
+        for name in ('design.json', 'current-state/openapi.json', 'current-state/screens.json'):
+            (self.root / 'previews' / 'v1' / name).unlink()
+        optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        self.assertEqual(json.loads(mode.read_text())['status'], 'complete')
+        self.assertTrue((self.root / 'previews' / 'v1' / 'current-state' / 'openapi.json').is_file())
+        self.assertTrue((self.root / 'previews' / 'v1' / 'design.json').is_file())
+
+    def test_artifact_corruption_is_an_integrity_failure(self):
+        optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        api = self.root / 'previews' / 'v1' / 'current-state' / 'api.html'
+        design = (self.root / 'previews' / 'v1' / 'design.json').read_bytes()
+        api.write_text('corrupted')
+        with self.assertRaisesRegex(optional.Blocked, 'integrity failure'):
+            optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        self.assertEqual(api.read_text(), 'corrupted')
+        self.assertEqual((self.root / 'previews' / 'v1' / 'design.json').read_bytes(), design)
+        packaged = None
+        api.write_bytes(design[:0])
+        optional.design_export(self.root, self.project, 'v2', 'functional-parity', 'java')
+        packaged = optional.package_export(self.root, self.project, 'v2', 'functional-parity')
+        screens = self.root / 'previews' / 'v2' / 'current-state' / 'screens.json'
+        saved = screens.read_bytes()
+        screens.write_text('[]')
+        with self.assertRaisesRegex(optional.Blocked, 'integrity failure'):
+            optional.package_export(self.root, self.project, 'v2', 'functional-parity')
+        self.assertEqual(screens.read_text(), '[]')
+        self.assertTrue((self.root / packaged['archive']).is_file())
+
+    def test_conflict_resolution_matches_the_backend_and_keeps_the_draft(self):
+        source = self.root / 'human.md'
+        source.write_text('Contradicts: R1\nThe cutoff is 9.\n')
+        imported = optional.import_context(self.root, source, 'Ari', 'architect', 'current-state', ['s1'])
+        optional.decide_context(self.root, imported['id'], 'accepted', 'Ari', 'Recorded')
+        conflict = optional.open_conflicts(self.root)[0]['id']
+        with self.assertRaisesRegex(optional.Blocked, 'keep-human-statement'):
+            optional.resolve_conflict(self.root, conflict, 'keep-context', 'Ari', 'Wrong choice')
+        optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+        packaged = optional.package_export(self.root, self.project, 'v1', 'functional-parity')
+        self.assertEqual(packaged['status'], 'DRAFT_BLOCKED_FOR_APPROVAL')
+        self.assertTrue((self.root / packaged['archive']).is_file())
+        optional.resolve_conflict(self.root, conflict, 'keep-human-statement', 'Ari', 'Use the human statement')
+        self.assertEqual(optional.open_conflicts(self.root), [])
+        with self.assertRaisesRegex(optional.Blocked, 'immutable'):
+            optional.design_export(self.root, self.project, 'v1', 'functional-parity', 'java')
+
+    def test_delta_approval_is_consistent_across_design_html_and_package(self):
+        note = self.root / 'future-note.md'
+        note.write_text('Combine the amount check and the receipt.\n')
+        imported = optional.import_context(self.root, note, 'Ari', 'owner', 'future-state', ['pay'])
+        optional.decide_context(self.root, imported['id'], 'accepted', 'Ari', 'Target only')
+        optional.design_export(self.root, self.project, 'v1', 'reimagine', 'java')
+        proposal = json.loads((self.root / 'previews' / 'v1' / 'future-state' / 'deltas.json').read_text())['proposals'][0]
+        self.assertNotEqual(proposal['authorization'], 'implementation_requirement')
+        optional.approve_delta(self.root, 'v1', proposal['id'], 'Ari', 'Behavior change approved')
+        design = json.loads((self.root / 'previews' / 'v1' / 'design.json').read_text())
+        future = json.loads((self.root / 'previews' / 'v1' / 'future-state' / 'screens.json').read_text())
+        page = (self.root / 'previews' / 'v1' / 'future-state' / 'index.html').read_text()
+        self.assertEqual(design['proposals'][0]['authorization'], 'implementation_requirement')
+        self.assertEqual(future['screens'][0]['proposed_status'], 'implementation_requirement')
+        self.assertIn('implementation_requirement', page)
+        packaged = optional.package_export(self.root, self.project, 'v1', 'reimagine')
+        with zipfile.ZipFile(self.root / packaged['archive']) as archive:
+            self.assertIn('implementation_requirement', archive.read('deltas.json').decode())
+            self.assertIn('implementation_requirement', archive.read('future-state.html').decode())
+            self.assertIn('implementation_requirement', archive.read('future-screens.json').decode())
+            self.assertIn('implementation_requirement', archive.read('design.json').decode())
+
+    def test_substantive_reimagine_content_uses_evidence(self):
+        optional.design_export(self.root, self.project, 'v1', 'reimagine', 'java')
+        deltas = json.loads((self.root / 'previews' / 'v1' / 'future-state' / 'deltas.json').read_text())
+        proposal = deltas['proposals'][0]
+        future = json.loads((self.root / 'previews' / 'v1' / 'future-state' / 'screens.json').read_text())
+        self.assertEqual(proposal['status'], 'proposed_unapproved')
+        self.assertIn('s1', proposal['evidence'])
+        self.assertTrue(proposal['change'].startswith('Before:'))
+        self.assertIn('After:', proposal['change'])
+        self.assertIn('Amount', proposal['change'])
+        self.assertNotIn('Keep journey', proposal['change'])
+        self.assertNotIn(' future', future['screens'][0]['title'])
+        self.assertIn('Confirm Save', future['screens'][0]['actions'])
+        self.assertIn('proposed_unapproved', (self.root / 'previews' / 'v1' / 'future-state' / 'index.html').read_text())
+        note = self.root / 'accepted-future.md'
+        note.write_text('Combine the amount check and the receipt.\n')
+        imported = optional.import_context(self.root, note, 'Ari', 'owner', 'future-state', ['pay'])
+        optional.decide_context(self.root, imported['id'], 'accepted', 'Ari', 'Target only')
+        optional.design_export(self.root, self.project, 'v2', 'reimagine', 'java')
+        accepted = json.loads((self.root / 'previews' / 'v2' / 'future-state' / 'deltas.json').read_text())['proposals'][0]
+        accepted_screens = json.loads((self.root / 'previews' / 'v2' / 'future-state' / 'screens.json').read_text())
+        self.assertEqual(accepted['status'], 'proposed_unapproved')
+        self.assertIn('Combine the amount check and the receipt.', accepted['change'])
+        self.assertIn('Combine the amount check and the receipt.', accepted_screens['screens'][0]['fields'][0])
+        self.assertNotEqual(accepted.get('authorization'), 'implementation_requirement')

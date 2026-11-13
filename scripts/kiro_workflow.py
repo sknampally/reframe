@@ -22,7 +22,7 @@ from pilot import Blocked, git, require, save, sha, tracked_file
 FRAMEWORK = Path(__file__).resolve().parent.parent
 DEFAULTS = {
     'kiro_command': ['kiro-cli'], 'executor_model': None, 'reviewer_model': None, 'wireframes_model': None,
-    'max_model_calls': 16, 'max_rounds': 2, 'call_timeout_seconds': 600,
+    'max_model_calls': None, 'max_rounds': 2, 'call_timeout_seconds': 600,
     'max_context_bytes': 180000, 'max_read_bytes': 50000,
     'max_assessment_bytes': 250000000, 'max_source_upload_bytes': 100000000,
     'poll_seconds': 60, 'max_polls_per_resume': 120, 'allow_new_assessments': False, 'transform': {},
@@ -37,6 +37,21 @@ def private_save(path, value):
     """Save JSON and restrict the file to the owner."""
     save(path, value)
     path.chmod(0o600)
+
+
+def call_limit(settings):
+    """Return an explicit call cap. Null means the workload is not capped."""
+    value = (settings or {}).get('max_model_calls', None)
+    if value is None:
+        return None
+    require(type(value) is int and value > 0, 'Call cap must be a positive integer when it is set, or null when it is not')
+    return value
+
+
+def within_call_limit(settings, consumed):
+    """True when another model call is allowed. An unset cap does not stop the call."""
+    limit = call_limit(settings)
+    return True if limit is None else consumed < limit
 
 
 def source_ok(run):
@@ -73,7 +88,9 @@ def settings(path):
         require(isinstance(supplied, dict), 'Settings must be an object')
         require(not set(supplied) - set(DEFAULTS), 'Unknown settings keys')
         config.update(supplied)
-    for name in ['max_model_calls', 'max_rounds', 'call_timeout_seconds', 'max_context_bytes',
+    require(config['max_model_calls'] is None or (type(config['max_model_calls']) is int and config['max_model_calls'] > 0),
+            'Call cap must be a positive integer when it is set, or null when it is not')
+    for name in ['max_rounds', 'call_timeout_seconds', 'max_context_bytes',
                  'max_read_bytes', 'max_assessment_bytes', 'max_source_upload_bytes', 'poll_seconds', 'max_polls_per_resume']:
         require(type(config[name]) is int and config[name] > 0, 'Positive integer required: ' + name)
     require(config['poll_seconds'] >= 5, 'Poll interval must be at least five seconds')
@@ -1110,7 +1127,7 @@ def agent_step(run, directory, runtime=kiro_call):
     """Give the executor or reviewer one turn, then store a read, a candidate, or a review."""
     root = source_ok(run)
     role, number = run['role'], run['round']
-    require(run['model_calls'] < run['settings']['max_model_calls'], 'Total model-call budget exhausted')
+    require(within_call_limit(run['settings'], run['model_calls']), 'Total model call budget exhausted')
     if role == 'reviewer':
         require(sha(directory / f'candidate-{number}.json') == run['candidate_sha256'], 'Candidate changed after handoff')
     key = f'{number}:{role}'
@@ -1118,7 +1135,7 @@ def agent_step(run, directory, runtime=kiro_call):
     protocol = (FRAMEWORK / 'prompts' / 'automated' / (role + '.md')).read_text()
     context = {'protocol': protocol, 'task': {'objective': run['objective'], 'source': run['source'],
                'assessment_provenance': run.get('assessment_provenance'), 'round': number,
-               'remaining_model_calls': run['settings']['max_model_calls'] - run['model_calls']},
+               'remaining_model_calls': None if call_limit(run['settings']) is None else call_limit(run['settings']) - run['model_calls']},
                'source_files': inventory(run), 'assessment_files': run['assessment_index'], 'history': history}
     if role == 'reviewer':
         context['candidate'] = json.loads((directory / f'candidate-{number}.json').read_text())
