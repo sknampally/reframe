@@ -103,6 +103,9 @@ def validate_spec(spec, source):
                 'Incomplete work item')
         require(item['id'] not in seen and strings(item.get('depends_on')) and set(item['depends_on']) <= seen,
                 'Work items must have unique IDs in dependency order')
+        if 'rule_ids' in item:
+            require(strings(item.get('rule_ids')) and set(item['rule_ids']) <= ids,
+                    'Work item rule_ids must list known rule ids')
         seen.add(item['id'])
     require(strings(spec.get('monorepo_layout')) and spec['monorepo_layout'], 'monorepo_layout must be a nonempty array of strings, e.g. ["apps/ui: proposed interface"], not objects')
 

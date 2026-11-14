@@ -102,6 +102,11 @@ class CheckpointTests(unittest.TestCase):
             return self.runtime(provider, run, directory, role, message)
         first = app.pipeline(self.work, self.project, self.args('validate'), runtime)
         self.assertEqual(first['status'], 'REWORK_LIMIT')
+        self.assertIn('Synthesis review returned REWORK', first['reason'])
+        self.assertIn('RV', first['reason'])
+        from reframe_setup import next_step
+        self.assertIn('reframe resume', next_step(self.project))
+        self.assertNotIn('feedback --unit', next_step(self.project))
         self.assertEqual(reviews['n'], 2)
         self.project = app.read(self.work / 'project.json')
         second = app.pipeline(self.work, self.project, self.args('resume'), runtime)
@@ -1317,3 +1322,165 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(trace['coverage'], saved['coverage'])
         self.assertIn('evidence_only', html)
         self.assertIn(saved['assessment_evidence'][0].get('assessment_path') or saved['assessment_evidence'][0]['source_path'], html)
+
+    def test_explicit_mappings_are_kept_and_prose_does_not_fill_gaps(self):
+        question = {'id': 'U0075-Q1', 'question': 'Which customer key length is authoritative?',
+                    'impact': 'The record layout stays unresolved.', 'owner': 'SME', 'blocks': 'Customer data layout'}
+        data = 'One file uses a 9 byte customer key and another uses 10 bytes.'
+        spec = self.spec()
+        spec['rules'].append({'id': 'R-POST-01', 'statement': 'Post the named account.', 'source_path': 'rule.cbl',
+                              'source_anchor': 'lines 1-1', 'evidence_status': 'SOURCE_VERIFIED'})
+        spec['sections']['data']['specification'] = data
+        spec['sections']['delivery']['specification'] = 'Delivery prose assigns R-POST-01 to W1.'
+        spec['sections']['delivery']['rule_ids'] = ['R1']
+        spec['work_items'][0]['acceptance'] = 'W1 implements R-POST-01'
+        spec['work_items'][0]['rule_ids'] = ['R1', 'U0020-F2']
+        spec['questions'] = [question]
+        plan = {'units': [{'id': 'U0001', 'segments': [{'area': 'source', 'path': 'rule.cbl'}]},
+                          {'id': 'U0020', 'segments': [{'area': 'assessment', 'path': 'batch.json'}]}]}
+        capsules = [
+            {'unit': 'U0001', 'checkpoint': {'findings': [{
+                'id': 'U0001-F1', 'kind': 'business_rule', 'statement': 'Reject a zero amount.',
+                'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'source', 'path': 'rule.cbl', 'start': 1, 'end': 1}]}],
+                'questions': []}},
+            {'unit': 'U0020', 'checkpoint': {'findings': [{
+                'id': 'U0020-F2', 'kind': 'business_rule', 'statement': 'The report names an inferred cutoff.',
+                'status': 'INFERRED', 'citations': [{'area': 'assessment', 'path': 'batch.json', 'start': 4, 'end': 4}]}],
+                'questions': []}},
+        ]
+        cp.complete_synthesis(spec, capsules, plan)
+        self.assertEqual(spec['sections']['data']['specification'], data)
+        self.assertEqual(spec['questions'], [question])
+        self.assertEqual(spec['work_items'][0]['rule_ids'], ['R1'])
+        self.assertEqual(spec['sections']['delivery']['rule_ids'], ['R1'])
+        self.assertNotIn('R-POST-01', spec['work_items'][0]['rule_ids'])
+        self.assertEqual(spec['coverage'], cp.coverage_dispositions(spec))
+        rows = {row['id']: row for row in spec['coverage']}
+        self.assertEqual(rows['R1']['work_items'], ['W1'])
+        self.assertNotIn('work_item', rows['R1']['gaps'])
+        self.assertIn('work_item', rows['R-POST-01']['gaps'])
+        self.assertIn('section', rows['R-POST-01']['gaps'])
+        self.assertEqual(rows['U0020-F2']['disposition'], 'evidence_only')
+        self.assertNotIn('U0020-F2', spec['work_items'][0]['rule_ids'])
+
+    def test_saved_call_299_review_corrects_synthesis_and_status_shows_the_reason(self):
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = app.read(plan_path)
+        segment = plan['units'][0]['segments'][0]
+        plan['units'] = [{'id': f'U{number:04d}', 'focus': segment['path'], 'segments': [segment]} for number in range(1, 113)]
+        app.write(plan_path, plan)
+        self.project['checkpoints']['plan_sha256'] = sha(plan_path)
+        area = self.work / 'preparation'
+        units = {}
+        for unit in plan['units']:
+            ident = unit['id']
+            candidate = {'kind': 'checkpoint', 'summary': 'passed', 'findings': [{
+                'id': ident + '-F1', 'kind': 'business_rule', 'statement': 'Reject a zero amount.',
+                'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'source', 'path': segment['path'], 'start': 1, 'end': 1}]}],
+                'questions': [], 'coverage': []}
+            review = {'kind': 'review', 'decision': 'PASS', 'report': 'passed', 'findings': []}
+            candidate_path = area / ('saved-' + ident + '-candidate.json')
+            review_path = area / ('saved-' + ident + '-review.json')
+            app.write(candidate_path, candidate)
+            app.write(review_path, review)
+            units[ident] = {'status': 'PASS', 'attempt': 1, 'role': 'reviewer',
+                            'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                            'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path)}
+        question = {'id': 'U0075-Q1', 'question': 'Which customer key length is authoritative?',
+                    'impact': 'The record layout stays unresolved.', 'owner': 'SME', 'blocks': 'Customer data layout'}
+        data = 'One file uses a 9 byte customer key and another uses 10 bytes.'
+        spec = self.spec()
+        spec['rules'].append({'id': 'R-POST-01', 'statement': 'Post the named account.', 'source_path': segment['path'],
+                              'source_anchor': 'lines 1-1', 'evidence_status': 'SOURCE_VERIFIED'})
+        spec['sections']['data']['specification'] = data
+        spec['sections']['delivery']['specification'] = 'Delivery prose assigns R-POST-01 to W1.'
+        spec['sections']['delivery']['rule_ids'] = ['R1']
+        spec['work_items'][0]['acceptance'] = 'W1 implements R-POST-01'
+        spec['work_items'][0]['rule_ids'] = ['R1']
+        spec['questions'] = [question]
+        reply_298 = {'kind': 'candidate', 'specification': spec}
+        reply_299 = {'kind': 'review', 'decision': 'REWORK',
+                     'report': 'Coverage still disagrees with the delivery prose, and the key length conflict stays open.',
+                     'findings': [
+                         {'id': 'RF1-R', 'area': 'coverage', 'severity': 'major',
+                          'statement': 'Work item prose names a rule that rule_ids omits.',
+                          'required_action': 'Put the mapping in rule_ids or keep the gap and remove the prose claim.'},
+                         {'id': 'RF5', 'area': 'data', 'severity': 'minor',
+                          'statement': 'The data section must keep the key-length conflict open.',
+                          'required_action': 'Do not choose an authoritative layout.'}]}
+        app.write(area / 'reply-298.json', reply_298)
+        app.write(area / 'reply-299.json', reply_299)
+        app.write(area / 'checkpoint-review-2.json', reply_299)
+        app.write(area / 'checkpoint-candidate-2.json', spec)
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['settings']['max_model_calls'] = None
+        self.project['active_assessment'] = self.project['selected']
+        self.project['pipeline'].update(calls=299, status='REWORK_LIMIT', role='reviewer', round=2,
+                                         candidate_sha256=sha(area / 'checkpoint-candidate-2.json'),
+                                         previous_review={'kind': 'review', 'decision': 'REWORK', 'report': 'older review',
+                                                          'findings': [{'id': 'RF1', 'statement': 'older finding', 'required_action': 'older'}]})
+        self.project['pipeline'].pop('reason', None)
+        self.project['stage'] = 'REWORK_LIMIT'
+        app.persist(self.work, self.project)
+        passed = copy.deepcopy(units)
+        approvals = copy.deepcopy(self.project['approvals'])
+        seen = {}
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'executor':
+                seen['correction'] = context['candidate_correction']
+                return self.runtime(provider, run, directory, role, message)
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Corrected candidate keeps the open key question', 'findings': []}
+
+        reports = []
+        with patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            status = app.main(['--workspace', str(self.work), 'status'], reporter=reports.append)
+        self.assertEqual(status, 2)
+        self.assertIn('RF1-R', reports[0]['reason'])
+        self.assertIn('RF5', reports[0]['reason'])
+        self.assertNotIn('RF1.', reports[0]['reason'])
+        self.assertIn('reframe resume', reports[0]['next_step'])
+        self.assertNotIn('feedback --unit', reports[0]['next_step'])
+        self.assertIsNone(app.read(self.work / 'project.json')['pipeline'].get('reason'))
+        with patch.object(app, 'model_call', runtime), patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            code = app.main(['--workspace', str(self.work), 'resume'], reporter=reports.append)
+        self.assertEqual(code, 0)
+        correction = seen['correction']
+        self.assertEqual([item['id'] for item in correction['review_findings']], ['RF1-R', 'RF5'])
+        self.assertIn('rule_ids', correction['instruction'])
+        self.assertIn('authoritative layout', correction['instruction'])
+        corrected = correction['rejected_specification']
+        self.assertIn(question, corrected['questions'])
+        self.assertEqual(corrected['sections']['data']['specification'], data)
+        self.assertEqual(corrected['work_items'][0]['rule_ids'], ['R1'])
+        self.assertNotIn('R-POST-01', corrected['work_items'][0]['rule_ids'])
+        self.assertEqual(corrected['coverage'], cp.coverage_dispositions(corrected))
+        rows = {row['id']: row for row in corrected['coverage']}
+        self.assertIn('work_item', rows['R-POST-01']['gaps'])
+        saved = app.read(self.work / 'project.json')
+        self.assertEqual(saved['checkpoints']['units'], passed)
+        self.assertEqual(saved['approvals'], approvals)
+        self.assertEqual(saved['pipeline']['calls'], 301)
+
+    def test_unrelated_blocked_resume_does_not_start_synthesis(self):
+        self.plan()
+        self.project['stage'] = 'BLOCKED'
+        self.project['pipeline'] = {'calls': 4, 'status': 'BLOCKED', 'role': 'executor', 'round': 1,
+                                     'reason': 'Evidence missing', 'contexts': {}, 'reads': {}}
+        self.project['active_assessment'] = self.project['selected']
+        app.persist(self.work, self.project)
+
+        def runtime(*_args):
+            raise AssertionError('model call')
+
+        reports = []
+        with patch.object(app, 'model_call', runtime), patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            code = app.main(['--workspace', str(self.work), 'resume'], reporter=reports.append)
+        self.assertEqual(code, 2)
+        self.assertEqual(reports[0]['status'], 'BLOCKED')
+        self.assertNotIn('targeted synthesis correction', reports[0]['next_step'])
+        self.assertEqual(app.read(self.work / 'project.json')['pipeline']['calls'], 4)
+        self.assertEqual(app.read(self.work / 'project.json')['stage'], 'BLOCKED')

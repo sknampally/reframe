@@ -22,14 +22,18 @@ Return `{"kind":"candidate","specification":{...}}` with this exact structure:
   source path, and do not mark an assessment-only finding SOURCE_VERIFIED.
 - `sections`: exactly architecture, ui, services, data, infrastructure, security,
   migration, testing, operations, delivery. Each is an object with `specification`,
-  `implementation_prompt`, `rule_ids` (array of known rule IDs).
+  `implementation_prompt`, `rule_ids` (array of known rule IDs). A section maps a
+  rule only when that id is in `rule_ids`. Naming a rule in the prose is not a mapping.
 - `questions`: array of `{id,question,impact,owner,blocks}`. Explain every material
   inference, missing oracle, external dependency and SME/architect decision.
 - `tests`: array of at least three `{id,rule_id,category,given,when,then,oracle,status}` records.
   Include categories `normal`, `rejection`, `boundary`; every rule needs a scenario.
   All statuses MUST be NOT RUN. Include normal, rejection and boundary scenarios.
-- `work_items`: nonempty array of `{id,title,depends_on,acceptance}`, in dependency
-  order; depends_on is an array of preceding work item IDs.
+- `work_items`: nonempty array of `{id,title,depends_on,acceptance,rule_ids}`, in
+  dependency order. depends_on is an array of preceding work item IDs. `rule_ids`
+  is an array of known source rule IDs, or an empty array when the work item maps
+  no rule. Acceptance prose is not a mapping. Do not infer that similarly named
+  rules are the same rule, and do not copy a mapping from a section title.
 - `monorepo_layout`: nonempty array of proposed relative paths and their purposes.
 
 Sections must be substantive for the selected scope. UI: screen flows, validation,
@@ -41,6 +45,10 @@ network and operational requirements, without real resource IDs. Migration: data
 reconciliation, sequencing, rollback and dependencies. Testing: legacy oracle gaps
 and measurable acceptance. Delivery: dependency-ordered work and repository boundaries.
 Explicitly explain non-applicable sections rather than inventing requirements.
+A rule absent from every section and work-item `rule_ids` array is an honest gap.
+Leave the gap. Do not claim in prose that the rule is assigned. When cited
+evidence disagrees, keep the conflict as an open question with both citations.
+Do not choose an authoritative layout, key length, or record format.
 Implementation prompts must be self-contained task instructions referring to the
 approved structured package and unresolved decisions. They must not authorize
 production changes or pretend that application code has already been built.

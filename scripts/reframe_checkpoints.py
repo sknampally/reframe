@@ -443,6 +443,61 @@ def inspected_source_paths(spec):
     return paths
 
 
+SYNTHESIS_CORRECTION = (
+    'Return a complete corrected candidate. rejected_specification is the assembled candidate. '
+    'review_findings are the latest reviewer findings. Change only what those findings require. '
+    'Section and work-item mappings exist only in rule_ids arrays. '
+    'Do not infer a mapping from prose, titles, or similar rule names. '
+    'A rule omitted from rule_ids stays an honest gap. '
+    'Do not invent a source path for assessment evidence. '
+    'Preserve every open question exactly. '
+    'When cited evidence disagrees, keep the conflict as an open question and do not choose an authoritative layout.'
+)
+
+
+def explicit_rule_ids(value, removed):
+    """Keep string ids. Drop ids that belong to assessment evidence. Do not parse prose."""
+    if not isinstance(value, list):
+        return None
+    return [item for item in value if isinstance(item, str) and item not in removed]
+
+
+def preserve_explicit_mappings(spec, removed):
+    """Retain structured section and work-item mappings. Missing ids stay gaps."""
+    for section in (spec.get('sections') or {}).values():
+        if isinstance(section, dict) and 'rule_ids' in section:
+            kept = explicit_rule_ids(section.get('rule_ids'), removed)
+            if kept is not None:
+                section['rule_ids'] = kept
+    for item in spec.get('work_items') or []:
+        if isinstance(item, dict) and 'rule_ids' in item:
+            kept = explicit_rule_ids(item.get('rule_ids'), removed)
+            if kept is not None:
+                item['rule_ids'] = kept
+
+
+def synthesis_pause_reason(reply):
+    """The latest synthesis review, including its finding ids and report."""
+    findings = reply.get('findings') if isinstance(reply, dict) else []
+    ids = []
+    if isinstance(findings, list):
+        for index, finding in enumerate(findings, 1):
+            if isinstance(finding, dict):
+                ident = finding.get('id') or finding.get('finding_id')
+                if isinstance(ident, str) and ident.strip():
+                    ids.append(ident.strip())
+            elif isinstance(finding, str) and finding.strip():
+                ids.append('R' + str(index))
+    reason = 'Synthesis review returned REWORK.'
+    if ids:
+        reason += ' Findings: ' + ', '.join(ids) + '.'
+    report = reply.get('report') if isinstance(reply, dict) and isinstance(reply.get('report'), str) else ''
+    report = ' '.join(report.split())
+    if report:
+        reason += ' ' + report
+    return reason
+
+
 def assembly_gap_reason(gaps):
     """One reason naming every incomplete assembled record and the fields it lacks."""
     parts = [str(gap.get('id') or '(missing id)') + ' missing ' + ', '.join(gap.get('missing') or []) for gap in gaps]
@@ -494,6 +549,7 @@ def complete_synthesis(spec, capsules, plan):
         questions.append(item)
         seen.add(item['id'])
     spec['questions'] = questions
+    preserve_explicit_mappings(spec, evidence_ids)
     spec.setdefault('tests', [])
     covered = {case.get('rule_id') for case in spec['tests'] if isinstance(case, dict)}
     for rule in rules:
@@ -573,6 +629,8 @@ def validate_synthesis(spec, capsules, plan):
                 'Synthesis has no coverage disposition for ' + rule['id'])
         require(bool(row.get('gaps')) == (row.get('disposition') == 'gap'),
                 'Coverage disposition does not match the gaps for ' + rule['id'])
+    require(spec.get('coverage') == coverage_dispositions(spec),
+            'Coverage does not match the final candidate')
     evidence_ids = {record['id'] for record in evidence}
     linked = set()
     for section in (spec.get('sections') or {}).values():

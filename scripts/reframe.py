@@ -1213,8 +1213,93 @@ def preparation_plan(work, project, args):
             'next_step':'Review the plan and budget before reframe validate; no model calls were made.'}
 
 
-def pipeline(work, project, args, runtime=model_call):
+def recoverable_synthesis(project):
+    """A synthesis pause that resume may continue. Other BLOCKED states stay stopped."""
+    checkpoints = project.get('checkpoints') or {}
+    state = project.get('pipeline') or {}
+    if checkpoints.get('status') != 'READY_FOR_SYNTHESIS' or project.get('specification'):
+        return False
+    stage = project.get('stage')
+    if stage == 'REWORK_LIMIT' and state.get('candidate_sha256'):
+        used = state.get('limit_corrections') or (1 if state.get('limit_corrected') else 0)
+        return used < 2
+    return stage == 'BLOCKED' and state.get('reason') == 'Three invalid synthesis candidates; inspect validation feedback'
+
+
+def latest_synthesis_review(work, project):
+    """Review for this synthesis round. The saved review file wins over an older previous_review."""
+    state = project.get('pipeline') or {}
+    area = Path(work) / 'preparation'
+    calls = state.get('calls') or 0
+    number = state.get('round') or 1
+    for path in (area / f'checkpoint-review-{number}.json', area / f'reply-{calls}.json'):
+        if not path.is_file():
+            continue
+        reply = read(path)
+        if isinstance(reply, dict) and reply.get('kind') == 'review':
+            return reply
+    review = state.get('previous_review')
+    return review if isinstance(review, dict) else None
+
+
+def displayed_synthesis_reason(work, project):
+    """Saved synthesis reason, or the latest review when that pause left the reason empty."""
+    state = project.get('pipeline') or {}
+    if state.get('reason'):
+        return state['reason']
+    if project.get('stage') != 'REWORK_LIMIT':
+        return None
+    if (project.get('checkpoints') or {}).get('status') != 'READY_FOR_SYNTHESIS':
+        return None
+    review = latest_synthesis_review(work, project)
+    if not review:
+        return None
+    import reframe_checkpoints as cp
+    return cp.synthesis_pause_reason(review)
+
+
+def attach_synthesis_correction(context, work, state, capsules, plan):
+    """Pass the assembled candidate and the latest review findings to one synthesis correction."""
+    if not capsules:
+        return
+    review = state.get('previous_review')
+    if not isinstance(review, dict):
+        return
+    if review.get('kind') != 'review' and review.get('decision') not in {'REWORK', 'BLOCKED'}:
+        return
+    import reframe_checkpoints as cp
+    area = Path(work) / 'preparation'
+    assembled = None
+    for number in range(state.get('calls') or 0, 0, -1):
+        path = area / f'reply-{number}.json'
+        if not path.is_file():
+            continue
+        reply = read(path)
+        if reply.get('kind') == 'candidate' and isinstance(reply.get('specification'), dict):
+            assembled = copy.deepcopy(reply['specification'])
+            break
+    if assembled is None:
+        return
+    cp.complete_synthesis(assembled, capsules, plan)
+    findings = cp.review_defects(review)
+    current = context.get('candidate_correction')
+    if isinstance(current, dict):
+        current['review_findings'] = findings
+        current['rejected_specification'] = assembled
+        current.setdefault('instruction', cp.SYNTHESIS_CORRECTION)
+        return
+    context['candidate_correction'] = {
+        'error': 'Synthesis review returned REWORK',
+        'instruction': cp.SYNTHESIS_CORRECTION,
+        'rejected_specification': assembled,
+        'review_findings': findings,
+    }
+
+
+def pipeline(work, project, args, runtime=None):
     """Run preparation. A new project uses reviewed evidence units; an older project keeps its saved loop."""
+    if runtime is None:
+        runtime = model_call
     if getattr(args, 'command', None) == 'resume':
         require_run_pins(project)
     require_stage_contract(work, 'task')
@@ -1266,9 +1351,9 @@ def legacy_pipeline(work, project, args, runtime=model_call):
     if (state.get('status') == 'REWORK_LIMIT' and state.get('candidate_sha256') and used < 2
             and not project.get('specification')
             and (project.get('checkpoints') or {}).get('status') == 'READY_FOR_SYNTHESIS'):
-        review_path = work / 'preparation' / f'checkpoint-review-{state.get("round", 1)}.json'
-        if review_path.is_file():
-            state['previous_review'] = read(review_path)
+        review = latest_synthesis_review(work, project)
+        if review:
+            state['previous_review'] = review
         state.update(status='RUNNING', role='executor', round=state.get('round', 1) + 1, limit_corrections=used + 1)
         state.pop('reason', None)
         state.pop('limit_corrected', None)
@@ -1319,6 +1404,9 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                     'Do not restate every business rule or SME question. The controller keeps every source-backed '
                     'business rule, keeps assessment-derived findings as assessment evidence with their own paths, '
                     'and keeps the exact SME question objects. Do not invent a source path for an assessment finding. '
+                    'Map a rule to a section or work item only by listing its id in rule_ids. '
+                    'Prose is not a mapping. Leave an honest gap when the id is absent. '
+                    'When cited evidence disagrees, keep the open question and do not choose an authoritative layout. '
                     'A short candidate is valid. This is full selected-scope integration, not permission to narrow scope. '
                     'Do not claim runtime equivalence.')
             else:
@@ -1358,6 +1446,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                         project['stage'] = 'RUNNING_REVIEWER'
                         persist(work, project)
                         continue
+            if capsules:
+                attach_synthesis_correction(context, work, state, capsules, plan)
         if role == 'reviewer':
             candidate_path = area / f'{artifact_prefix}candidate-{number}.json'
             require(sha(candidate_path) == state['candidate_sha256'], 'Candidate changed after handoff')
@@ -1462,6 +1552,9 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             if reply['decision'] == 'BLOCKED' or number >= project['settings']['max_rounds']:
                 state['status'] = 'BLOCKED' if reply['decision'] == 'BLOCKED' else 'REWORK_LIMIT'
                 project['stage'] = state['status']
+                if state['status'] == 'REWORK_LIMIT' and capsules:
+                    state['previous_review'] = reply
+                    state['reason'] = cp.synthesis_pause_reason(reply)
                 break
             state.update(round=number + 1, role='executor', previous_review=reply)
         else:
@@ -1984,6 +2077,9 @@ def main(argv=None, reporter=None):
                       'assessments': {k: read(Path(v['directory']) / 'run.json')['status'] for k, v in project['assessments'].items()},
                       'progress': saved_progress(work),
                       'approvals': list(project['approvals']), 'package': project.get('package'), 'next_step': next_step(project)}
+            reason = displayed_synthesis_reason(work, project)
+            if reason:
+                result['reason'] = reason
             if project.get('checkpoints'):
                 import reframe_checkpoints as cp
                 plan, capsules = cp.verified_capsules(work, project, sys.modules[__name__])
@@ -2022,7 +2118,7 @@ def main(argv=None, reporter=None):
                         else: result = review_site(work, project, SimpleNamespace(provider=pending.get('provider')))
                         project.pop('pending_action', None)
                         persist(work, project)
-                    elif args.command == 'resume' and (project['stage'] in {'ASSESSMENT_APPROVED', 'PREPARATION_PLANNED', 'REVISION_PENDING', 'RUNNING_EXECUTOR', 'RUNNING_REVIEWER'} or (project['stage'] == 'WAITING_FOR_RUNTIME' and project.get('pipeline')) or (project['stage'] == 'REWORK_LIMIT' and project.get('checkpoints'))):
+                    elif args.command == 'resume' and (project['stage'] in {'ASSESSMENT_APPROVED', 'PREPARATION_PLANNED', 'REVISION_PENDING', 'RUNNING_EXECUTOR', 'RUNNING_REVIEWER'} or (project['stage'] == 'WAITING_FOR_RUNTIME' and project.get('pipeline')) or (project['stage'] == 'REWORK_LIMIT' and project.get('checkpoints')) or recoverable_synthesis(project)):
                         result = pipeline(work, project, args)
                     elif args.command == 'resume' and project['stage'] == 'VALIDATION_APPROVED':
                         result = review_site(work, project, SimpleNamespace(provider=None))
