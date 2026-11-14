@@ -35,19 +35,13 @@ When correction_request is present, candidate is the checkpoint being corrected.
 Keep every correction_request finding id, and add one disposition for each:
 {"finding_id":"the reviewer finding id","disposition":"corrected|disputed|needs_human",
  "evidence":"The quote or decision that supports this disposition"}
-corrected must change the words of the targeted finding. Whitespace, capitalization,
-and punctuation alone are not a correction. disputed must quote the supplied evidence
-that supports leaving the claim. needs_human leaves that defect unresolved for a person.
-Do not leave a defective claim unchanged and do not drop the finding to make it pass.
-
-When correction_request is present, candidate is the checkpoint being corrected.
-Keep every correction_request finding id, and add one disposition for each:
-{"finding_id":"the reviewer finding id","disposition":"corrected|disputed|needs_human",
- "evidence":"The quote or decision that supports this disposition"}
-corrected must change the words of the targeted finding. Whitespace, capitalization,
-and punctuation alone are not a correction. disputed must quote the supplied evidence
-that supports leaving the claim. needs_human leaves that defect unresolved for a person.
-Do not leave a defective claim unchanged and do not drop the finding to make it pass.
+A finding may name target, or location such as candidate.questions[U0001-Q2].impact,
+plus required_change. corrected must change the words at that target or location.
+Whitespace, capitalization, and punctuation alone are not a correction. When location
+names a question, keep that question id, owner, and blocks. disputed must quote the
+supplied evidence that supports leaving the claim. needs_human leaves that defect
+unresolved for a person. Do not leave the defective text unchanged and do not drop
+the question or finding to make it pass.
 
 For json-pointer-records-v1 evidence, line numbers refer to a deterministic JSON
 projection, NOT original file lines. Each record names the original JSON pointer.

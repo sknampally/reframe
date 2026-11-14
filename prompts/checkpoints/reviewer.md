@@ -19,13 +19,9 @@ unreadable evidence as reviewed, or a source-proof claim depends on another file
 Do not open a correction round to enlarge the inventory.
 
 Review the candidate supplied in this request. A later review must see the corrected
-candidate, not an earlier file. REWORK when a cited claim is unchanged after a requested
-correction. Name the same finding id and target the candidate finding that is still wrong.
-Do not pass a defect to finish the unit.
-
-Review the candidate supplied in this request. A later review must see the corrected
-candidate, not an earlier file. REWORK when a cited claim is unchanged after a requested
-correction. Name the same finding id and target the candidate finding that is still wrong.
+candidate, not an earlier file. REWORK when a cited finding statement or a question
+property named by location is unchanged after a requested correction. Name the same
+finding id. A question correction must keep that question's owner and blocked work.
 Do not pass a defect to finish the unit.
 
 Return exactly one JSON object:

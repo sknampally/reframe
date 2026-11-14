@@ -755,6 +755,117 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(seen['command'], 'resume')
         self.assertEqual(code, 2)
 
+    def test_saved_question_impact_location_must_change_and_reach_review(self):
+        review = {'kind': 'review', 'decision': 'REWORK',
+                  'report': 'U0001 question impact omits the blocked screen decision',
+                  'findings': [{
+                      'id': 'R-U0001-2', 'severity': 'defect',
+                      'location': 'candidate.questions[U0001-Q2].impact',
+                      'issue': 'Question impact omits the blocked screen decision.',
+                      'required_change': 'State that the unresolved account name blocks the screen decision.',
+                  }]}
+        defect = cp.review_defects(review)[0]
+        self.assertEqual(defect['location'], 'candidate.questions[U0001-Q2].impact')
+        self.assertEqual(defect['required_change'], review['findings'][0]['required_change'])
+        self.assertEqual(defect['required_action'], defect['required_change'])
+        self.assertEqual(defect['problem'], review['findings'][0]['issue'])
+        self.assertEqual(defect['severity'], 'defect')
+        for location in ('candidate.questions[U0001-Q2].impact + ""',
+                         '__import__("os").system("id")',
+                         'candidate.questions[U0001-Q2].owner',
+                         'candidate["questions"][0].impact'):
+            with self.assertRaisesRegex(Blocked, 'Unsupported correction location'):
+                cp.correction_location(location)
+        saved = {'id': 'U0001-Q2', 'question': 'Who confirms the account name on this screen?',
+                 'impact': 'The account name stays unresolved for this screen.',
+                 'owner': 'SME', 'blocks': 'Screen decision'}
+        self.plan()
+        plan = app.read(self.work / self.project['checkpoints']['plan_path'])
+        area = self.work / 'preparation'
+        units = {}
+        for unit in plan['units']:
+            ident = unit['id']
+            if ident == 'U0001':
+                candidate = {'kind': 'checkpoint', 'summary': 'saved', 'findings': [], 'questions': [saved], 'coverage': []}
+                candidate_path = area / 'saved-U0001-candidate.json'
+                review_path = area / 'saved-U0001-review.json'
+                app.write(candidate_path, candidate)
+                app.write(review_path, review)
+                units[ident] = {'status': 'REWORK_LIMIT', 'attempt': 2, 'role': 'reviewer', 'limit_rereviewed': True,
+                                'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                                'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path),
+                                'previous_review': review, 'reason': review['report']}
+                continue
+            candidate = {'kind': 'checkpoint', 'summary': 'passed', 'findings': [], 'questions': [], 'coverage': []}
+            passed_review = {'kind': 'review', 'decision': 'PASS', 'report': 'passed', 'findings': []}
+            candidate_path = area / ('saved-' + ident + '-candidate.json')
+            review_path = area / ('saved-' + ident + '-review.json')
+            app.write(candidate_path, candidate)
+            app.write(review_path, passed_review)
+            units[ident] = {'status': 'PASS', 'attempt': 1, 'role': 'reviewer',
+                            'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                            'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path)}
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'PLANNED'
+        self.project['pipeline'].update(calls=4, status='REWORK_LIMIT', role='reviewer')
+        self.project['stage'] = 'REWORK_LIMIT'
+        app.persist(self.work, self.project)
+        passed = {ident: copy.deepcopy(record) for ident, record in units.items() if ident != 'U0001'}
+        phase = {'n': 0}
+        reviewed = []
+
+        def place(reply, impact, owner='SME'):
+            reply['questions'] = [item for item in reply['questions'] if item['id'] != 'U0001-Q2']
+            reply['questions'].append({**saved, 'impact': impact, 'owner': owner})
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if 'unit_id' not in context:
+                raise AssertionError('synthesis is outside this correction')
+            if role == 'reviewer':
+                question = next(item for item in context['candidate']['questions'] if item['id'] == 'U0001-Q2')
+                reviewed.append(question)
+                return {'kind': 'review', 'decision': 'PASS', 'report': 'U0001 question impact now states the blocked work', 'findings': []}
+            request = context['correction_request']['findings'][0]
+            self.assertEqual(request['id'], 'R-U0001-2')
+            self.assertEqual(request['location'], 'candidate.questions[U0001-Q2].impact')
+            self.assertEqual(request['required_change'], review['findings'][0]['required_change'])
+            self.assertEqual(context['candidate']['questions'][0]['impact'], saved['impact'])
+            reply = self.checkpoint(context)
+            reply.pop('dispositions', None)
+            phase['n'] += 1
+            if phase['n'] == 1:
+                place(reply, 'The account name stays unresolved, for this screen.')
+            elif phase['n'] == 2:
+                place(reply, 'The unresolved account name blocks the screen decision.', owner='Architect')
+            else:
+                place(reply, 'The unresolved account name blocks the screen decision.')
+            reply['dispositions'] = [{'finding_id': 'R-U0001-2', 'disposition': 'corrected', 'evidence': 'screen decision'}]
+            return reply
+
+        with patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            paused = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(paused['status'], 'REWORK_LIMIT')
+        self.assertIn('Unchanged defective content', paused['reason'])
+        self.assertIn('R-U0001-2', paused['reason'])
+        self.assertEqual(reviewed, [])
+        self.assertEqual(self.project['pipeline']['calls'], 5)
+        self.assertEqual({ident: self.project['checkpoints']['units'][ident] for ident in passed}, passed)
+        app.feedback(self.work, self.project, self.args(
+            'feedback', '--unit', 'U0001', '--authorize-correction', '--by', 'Fixture owner', '--note', 'Correct the question impact'))
+        with patch.object(app, 'legacy_pipeline', return_value={'status': 'READY_FOR_SYNTHESIS'}), \
+                patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            done = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(done['status'], 'READY_FOR_SYNTHESIS')
+        self.assertEqual(len(reviewed), 1)
+        self.assertEqual(reviewed[0]['impact'], 'The unresolved account name blocks the screen decision.')
+        self.assertEqual(reviewed[0]['owner'], 'SME')
+        self.assertEqual(reviewed[0]['blocks'], 'Screen decision')
+        self.assertEqual(reviewed[0]['question'], saved['question'])
+        self.assertEqual(phase['n'], 3)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['attempt'], 2)
+        self.assertEqual({ident: self.project['checkpoints']['units'][ident] for ident in passed}, passed)
+
     def test_sanitized_saved_rework_keeps_passed_units_and_corrects_each_paused_unit(self):
         self.plan()
         plan_path = self.work / self.project['checkpoints']['plan_path']
