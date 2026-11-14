@@ -2,6 +2,7 @@
 """Reverse-engineer mainframe source into an AI-DLC handoff for any language. Never builds or deploys an application."""
 import argparse
 import contextlib
+import copy
 import difflib
 import fcntl
 import html
@@ -1480,6 +1481,27 @@ def feedback(work, project, args):
         unit_id = getattr(args, 'unit', None)
         require(unit_id in project['checkpoints']['units'], 'Specify the blocked evidence unit with --unit')
         unit = project['checkpoints']['units'][unit_id]
+        if getattr(args, 'authorize_correction', False):
+            import reframe_checkpoints as cp
+            require(unit['status'] == 'REWORK_LIMIT', 'Authorize a correction only after that unit is paused')
+            require(not cp.corrections_remaining(unit), 'A bounded correction is still available; resume uses it before authorizing another')
+            passed = {key: copy.deepcopy(other) for key, other in project['checkpoints']['units'].items() if other.get('status') == 'PASS'}
+            unit['correction_authorizations'] = int(unit.get('correction_authorizations') or 0) + 1
+            unit.setdefault('correction_authorizations_log', []).append({
+                'by': args.by, 'note': args.note, 'at': time.time(),
+                'calls_consumed': state['calls'], 'attempt': unit.get('attempt'),
+                'corrections_used': int(unit.get('corrections_used') or 0),
+            })
+            state.update(status='RUNNING', role='executor')
+            state.pop('reason', None)
+            project['stage'] = 'RUNNING_EXECUTOR'
+            require(all(project['checkpoints']['units'][key] == value for key, value in passed.items()),
+                    'Passed units stay sealed')
+            persist(work, project)
+            return {'status': project['stage'], 'unit': unit_id, 'calls_consumed': state['calls'],
+                    'attempts': unit.get('attempt'), 'corrections_used': int(unit.get('corrections_used') or 0),
+                    'correction_authorizations': unit['correction_authorizations'],
+                    'next_step': 'reframe resume'}
         require(unit['status'] in {'BLOCKED', 'REWORK_LIMIT'}, 'Feedback can reopen only a blocked unit, not a passed unit')
         require(unit['attempt'] < project['settings']['max_rounds'], 'Unit revision limit exhausted; inspect the plan and limits')
         unit.setdefault('human_feedback', []).append({'by':args.by, 'note':args.note, 'at':time.time(),
@@ -1815,6 +1837,8 @@ def parser():
     u.add_argument('--provider', choices=['claude', 'codex'])
     f = commands.add_parser('feedback')
     f.add_argument('--unit', help='Blocked evidence unit to revise; passed units remain sealed')
+    f.add_argument('--authorize-correction', action='store_true',
+                   help='Record one more targeted correction after the bounded allowance is exhausted')
     f.add_argument('--by', required=True)
     f.add_argument('--note', required=True)
     commands.add_parser('package')
@@ -1936,7 +1960,7 @@ def main(argv=None, reporter=None):
                         else: result = review_site(work, project, SimpleNamespace(provider=pending.get('provider')))
                         project.pop('pending_action', None)
                         persist(work, project)
-                    elif args.command == 'resume' and (project['stage'] in {'ASSESSMENT_APPROVED', 'PREPARATION_PLANNED', 'REVISION_PENDING', 'RUNNING_EXECUTOR', 'RUNNING_REVIEWER'} or (project['stage'] == 'WAITING_FOR_RUNTIME' and project.get('pipeline'))):
+                    elif args.command == 'resume' and (project['stage'] in {'ASSESSMENT_APPROVED', 'PREPARATION_PLANNED', 'REVISION_PENDING', 'RUNNING_EXECUTOR', 'RUNNING_REVIEWER'} or (project['stage'] == 'WAITING_FOR_RUNTIME' and project.get('pipeline')) or (project['stage'] == 'REWORK_LIMIT' and project.get('checkpoints'))):
                         result = pipeline(work, project, args)
                     elif args.command == 'resume' and project['stage'] == 'VALIDATION_APPROVED':
                         result = review_site(work, project, SimpleNamespace(provider=None))

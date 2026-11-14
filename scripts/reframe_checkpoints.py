@@ -255,7 +255,11 @@ def validate_checkpoint(reply, unit, supplied):
     """Reject a checkpoint that does not cover the evidence it was given."""
     require(reply.get('kind') == 'checkpoint' and isinstance(reply.get('summary'), str)
             and reply['summary'].strip(), 'Return checkpoint with a nonempty summary')
-    require(len(json.dumps(reply).encode()) <= CHECKPOINT_BYTES, 'Checkpoint exceeds 14000 bytes; return concise cited findings')
+    measured = dict(reply)
+    dispositions = measured.pop('dispositions', None)
+    require(len(json.dumps(measured).encode()) <= CHECKPOINT_BYTES, 'Checkpoint exceeds 14000 bytes; return concise cited findings')
+    if dispositions is not None:
+        require(len(json.dumps(dispositions).encode()) <= 4000, 'Dispositions exceed 4000 bytes')
     coverage = reply.get('coverage')
     keys = {(p['area'], p['path'], p['start'], p['end']) for p in supplied}
     require(isinstance(coverage, list) and all(isinstance(c, dict) and isinstance(c.get('area'), str) and isinstance(c.get('path'), str)
@@ -407,6 +411,164 @@ def verified_capsules(work, project, app):
     return plan, capsules
 
 
+def review_defects(review):
+    """Actionable reviewer findings, with a stable id when the model omitted one."""
+    findings = review.get('findings') if isinstance(review, dict) else None
+    if not isinstance(findings, list):
+        return []
+    defects = []
+    for index, finding in enumerate(findings, 1):
+        if isinstance(finding, str) and finding.strip():
+            defects.append({'id': 'R' + str(index), 'target': '', 'problem': finding.strip(), 'required_action': ''})
+            continue
+        if not isinstance(finding, dict):
+            continue
+        ident = finding.get('id') or finding.get('finding_id') or ('R' + str(index))
+        problem = finding.get('problem') or finding.get('issue') or finding.get('statement') or ''
+        defects.append({
+            'id': str(ident),
+            'target': finding.get('target') if isinstance(finding.get('target'), str) else '',
+            'problem': problem if isinstance(problem, str) else '',
+            'required_action': finding.get('required_action') if isinstance(finding.get('required_action'), str) else '',
+        })
+    return defects
+
+
+def claim_text(candidate, target):
+    """The statement a reviewer targeted, when that finding is present."""
+    if not target or not isinstance(candidate, dict):
+        return None
+    for finding in candidate.get('findings') or []:
+        if isinstance(finding, dict) and finding.get('id') == target:
+            statement = finding.get('statement')
+            return statement if isinstance(statement, str) else ''
+    return None
+
+
+def normalized_claim(text):
+    """Words only, so spacing and punctuation cannot impersonate a correction."""
+    return ' '.join(re.findall(r'[a-z0-9]+', (text or '').lower()))
+
+
+def evidence_supports(evidence, supplied):
+    """True when disputed evidence quotes a line the unit actually supplied."""
+    bodies = []
+    for part in supplied:
+        raw = part.get('text') or ''
+        bodies.append('\n'.join(line.split(': ', 1)[-1] for line in raw.splitlines()))
+    blob = '\n'.join(bodies)
+    text = evidence.strip()
+    if text and text in blob:
+        return True
+    return any(quote in blob for quote in re.findall(r'"([^"]{8,})"', text))
+
+
+def correction_allowance(record):
+    """One automatic correction, plus one for each recorded authorization."""
+    return 1 + int(record.get('correction_authorizations') or 0)
+
+
+def corrections_remaining(record):
+    """Targeted corrections still allowed. Passed units have none."""
+    if record.get('status') == 'PASS':
+        return 0
+    return max(0, correction_allowance(record) - int(record.get('corrections_used') or 0))
+
+
+def remember_correction(record, state, outcome, finding_ids, candidate_sha=None):
+    """Append one correction outcome without clearing earlier attempts or call counts."""
+    record.setdefault('correction_history', []).append({
+        'outcome': outcome,
+        'finding_ids': list(finding_ids),
+        'calls': state.get('calls'),
+        'attempt': record.get('attempt'),
+        'candidate_sha256': candidate_sha,
+    })
+
+
+def validate_dispositions(reply, defects, previous_candidate, supplied):
+    """Require a disposition per defect and reject an unchanged corrected claim."""
+    rows = reply.get('dispositions')
+    require(isinstance(rows, list), 'Each reviewer defect needs a disposition')
+    found = {}
+    expected = {defect['id'] for defect in defects}
+    for row in rows:
+        require(isinstance(row, dict), 'Disposition must be an object')
+        ident = row.get('finding_id')
+        disposition = row.get('disposition')
+        evidence = row.get('evidence')
+        require(isinstance(ident, str) and ident in expected, 'Disposition must name a reviewer finding id')
+        require(ident not in found, 'Duplicate disposition')
+        require(disposition in {'corrected', 'disputed', 'needs_human'},
+                'Disposition must be corrected, disputed, or needs_human')
+        require(isinstance(evidence, str) and evidence.strip(), 'Disposition needs supporting evidence')
+        if disposition == 'disputed':
+            require(evidence_supports(evidence, supplied), 'A disputed defect needs a quote from the supplied evidence')
+        found[ident] = row
+    require(set(found) == expected, 'Every reviewer defect needs one disposition')
+    unchanged = []
+    for defect in defects:
+        row = found[defect['id']]
+        if row['disposition'] != 'corrected' or not defect.get('target'):
+            continue
+        before = claim_text(previous_candidate, defect['target'])
+        after = claim_text(reply, defect['target'])
+        if before is None:
+            continue
+        if after is not None and normalized_claim(before) == normalized_claim(after):
+            unchanged.append(defect['id'])
+    require(not unchanged, 'Unchanged defective content: ' + ', '.join(unchanged))
+    return {'needs_human': [defect['id'] for defect in defects if found[defect['id']]['disposition'] == 'needs_human']}
+
+
+def recovery_instruction(rows):
+    """Tell a person how to authorize one more correction. No assessment is involved."""
+    units = ', '.join(row['unit'] for row in rows) or 'the paused unit'
+    return ('Authorize one targeted correction with reframe feedback --unit ' + units.split(',')[0].strip()
+            + ' --authorize-correction --by NAME --note REASON. '
+            + 'Paused units: ' + units + '. Passed units stay sealed. No assessment job is created.')
+
+
+def unresolved_rows(project, plan):
+    """One record per unfinished unit, using that unit's own review."""
+    rows = []
+    for unit in plan['units']:
+        record = project['checkpoints']['units'].get(unit['id'], {})
+        if record.get('status') == 'PASS':
+            continue
+        defects = review_defects(record.get('previous_review'))
+        reason = record.get('reason') or 'Review paused before this unit passed'
+        if not str(reason).startswith(unit['id']):
+            reason = unit['id'] + ': ' + str(reason)
+        rows.append({
+            'unit': unit['id'],
+            'status': record.get('status'),
+            'attempts': record.get('attempt'),
+            'corrections_used': int(record.get('corrections_used') or 0),
+            'correction_authorizations': int(record.get('correction_authorizations') or 0),
+            'defects': [{'id': defect['id'], 'target': defect.get('target') or ''} for defect in defects],
+            'reason': reason,
+        })
+    return rows
+
+
+def rework_result(project, plan, state):
+    """Stop with every paused unit beside its own defects. Do not borrow another unit's report."""
+    rows = unresolved_rows(project, plan)
+    reason = ' | '.join(row['reason'] for row in rows) or 'A program reached its review limit'
+    state.update(status='REWORK_LIMIT', reason=reason, unresolved_units=[row['unit'] for row in rows])
+    project['stage'] = 'REWORK_LIMIT'
+    return {'status': 'REWORK_LIMIT',
+            'unit': rows[0]['unit'] if len(rows) == 1 else ', '.join(row['unit'] for row in rows),
+            'attempts': rows[0]['attempts'] if len(rows) == 1 else [row['attempts'] for row in rows],
+            'defects': rows[0]['defects'] if len(rows) == 1 else rows,
+            'unresolved': rows,
+            'reason': reason,
+            'calls': state.get('calls'),
+            'recovery': recovery_instruction(rows),
+            'next_step': recovery_instruction(rows)}
+
+
 def run(work, project, args, runtime, app):
     """Review each evidence unit until they are accepted or the call budget stops."""
     app.verify_source(project)
@@ -417,13 +579,19 @@ def run(work, project, args, runtime, app):
     area = work / 'preparation'
     app.check_provider_refusals(area)
     plan, capsules = verified_capsules(work, project, app)
+    saved_units = project['checkpoints']['units']
+    if plan['units'] and all(unit['id'] in saved_units for unit in plan['units']):
+        pending = [saved_units[unit['id']] for unit in plan['units'] if saved_units[unit['id']].get('status') != 'PASS']
+        if pending and all(record.get('status') == 'REWORK_LIMIT' and not corrections_remaining(record) for record in pending):
+            result = rework_result(project, plan, state)
+            app.persist(work, project)
+            return result
     def remaining_calls_for(record):
-        """Calls still required for one program, including one correction after a failed extra review."""
+        """Calls still required for one program. An exhausted unit does not reserve another review."""
         if record.get('status') == 'PASS':
             return 0
-        if (record.get('status') == 'REWORK_LIMIT' and record.get('limit_rereviewed') is True
-                and (record.get('review_path') or record.get('previous_review'))):
-            return 2
+        if record.get('status') == 'REWORK_LIMIT':
+            return 2 if corrections_remaining(record) and record.get('candidate_path') else 0
         return 1 if record.get('role') == 'reviewer' else 2
 
     minimum = 2 + sum(remaining_calls_for(project['checkpoints']['units'].get(u['id'], {})) for u in plan['units'])
@@ -442,16 +610,21 @@ def run(work, project, args, runtime, app):
         record = project['checkpoints']['units'].setdefault(unit['id'], {'status':'PENDING', 'attempt':1, 'role':'executor'})
         if record['status'] == 'PASS':
             continue
-        # The saved candidate gets one more review after the round limit. If that review still
-        # names a contradiction, the executor gets one correction and then one review.
-        if record['status'] == 'REWORK_LIMIT' and record.get('candidate_path') and not record.get('limit_rereviewed'):
-            record.update(status='PENDING', role='reviewer', limit_rereviewed=True)
-        elif (record['status'] == 'REWORK_LIMIT' and record.get('candidate_path')
-              and record.get('limit_rereviewed') is True and (record.get('review_path') or record.get('previous_review'))):
-            if record.get('review_path'):
-                record['previous_review'] = app.read(work / record['review_path'])
-            record.update(status='PENDING', role='executor', limit_rereviewed='corrected')
-        require(record['status'] not in {'BLOCKED', 'REWORK_LIMIT'}, 'Resolve the blocked evidence unit before resuming')
+        if record['status'] == 'BLOCKED':
+            reason = unit['id'] + ': ' + str(record.get('reason') or 'Blocked')
+            state.update(status='BLOCKED', reason=reason)
+            project['stage'] = 'BLOCKED'
+            app.persist(work, project)
+            return {'status': 'BLOCKED', 'unit': unit['id'], 'reason': reason, 'calls': state['calls']}
+        # A bounded correction goes to the executor with the latest candidate. It does not
+        # review that same file again, and it does not reset attempts or call counts.
+        if record['status'] == 'REWORK_LIMIT':
+            if corrections_remaining(record) and record.get('candidate_path') and review_defects(record.get('previous_review')):
+                if record.get('review_path'):
+                    record['previous_review'] = app.read(work / record['review_path'])
+                record.update(status='PENDING', role='executor', correction_active=True)
+            else:
+                continue
         while record['status'] != 'PASS':
             if not app.kw.within_call_limit(project['settings'], state['calls']):
                 state.update(status='BLOCKED', reason='Total model call budget exhausted')
@@ -464,12 +637,24 @@ def run(work, project, args, runtime, app):
                 identity = (part['area'],part['path'],part['start'],part['end'])
                 if identity not in seen_ranges:
                     supplied.append(part); seen_ranges.add(identity)
+            defects = review_defects(record.get('previous_review'))
+            previous_candidate = None
             context = {'protocol': (app.FRAMEWORK / 'prompts/checkpoints' / (role + '.md')).read_text(),
                        'unit_id': unit['id'], 'scope': project['scope'], 'evidence': supplied,
                        'source_files': sorted({part['path'] for part in unit['segments'] if part['area'] == 'source'}),
                        'assessment_files': sorted({part['path'] for part in unit['segments'] if part['area'] == 'assessment'}),
                        'previous_review': record.get('previous_review'), 'validation_error':record.get('validation_error'),
                        'human_feedback':record.get('human_feedback', [])}
+            if role == 'executor' and defects and record.get('candidate_path'):
+                require(sha(work / record['candidate_path']) == record['candidate_sha256'], 'Unit candidate changed before correction')
+                previous_candidate = app.read(work / record['candidate_path'])
+                context['candidate'] = previous_candidate
+                context['correction_request'] = {
+                    'instruction': 'Return the full checkpoint and one disposition for every finding id. '
+                                   'corrected must change that finding\'s words. Whitespace and punctuation alone do not count. '
+                                   'disputed must quote supplied evidence. needs_human leaves the defect for a person.',
+                    'findings': defects,
+                }
             if role == 'reviewer':
                 require(sha(work / record['candidate_path']) == record['candidate_sha256'], 'Unit candidate changed after handoff')
                 context['candidate'] = app.read(work / record['candidate_path'])
@@ -526,6 +711,16 @@ def run(work, project, args, runtime, app):
             try:
                 if role == 'executor':
                     validate_checkpoint(reply, unit, supplied)
+                    if defects and previous_candidate is not None:
+                        outcome = validate_dispositions(reply, defects, previous_candidate, supplied)
+                        if outcome['needs_human']:
+                            record['corrections_used'] = int(record.get('corrections_used') or 0) + 1
+                            record['correction_active'] = False
+                            remember_correction(record, state, 'needs_human', outcome['needs_human'], record.get('candidate_sha256'))
+                            record.update(status='REWORK_LIMIT', role='executor',
+                                          reason=unit['id'] + ': ' + ', '.join(outcome['needs_human']) + ' needs a human decision')
+                            app.persist(work, project)
+                            break
                 else:
                     require(reply.get('kind') == 'review' and reply.get('decision') in {'PASS','REWORK','BLOCKED'}
                             and isinstance(reply.get('findings'), list) and isinstance(reply.get('report'), str)
@@ -533,6 +728,14 @@ def run(work, project, args, runtime, app):
                     require(reply['decision'] != 'PASS' or not reply['findings'], 'PASS cannot retain reviewer defects')
                     require(reply['decision'] != 'REWORK' or reply['findings'], 'REWORK needs actionable findings')
             except Blocked as error:
+                if str(error).startswith('Unchanged defective content'):
+                    record['corrections_used'] = int(record.get('corrections_used') or 0) + 1
+                    record['correction_active'] = False
+                    ident = [part.strip() for part in str(error).split(':', 1)[-1].split(',') if part.strip()]
+                    remember_correction(record, state, 'unchanged', ident, record.get('candidate_sha256'))
+                    record.update(status='REWORK_LIMIT', role='executor', reason=str(error))
+                    app.persist(work, project)
+                    break
                 record['validation_error'] = str(error)
                 record['invalid_replies'] = record.get('invalid_replies', 0) + 1
                 if record['invalid_replies'] >= 3:
@@ -545,6 +748,10 @@ def run(work, project, args, runtime, app):
             record.pop('validation_error', None)
             if role == 'executor':
                 record.update(candidate_path=str(receipt.relative_to(work)), candidate_sha256=sha(receipt), role='reviewer')
+                if record.get('correction_active'):
+                    record['corrections_used'] = int(record.get('corrections_used') or 0) + 1
+                    record['correction_active'] = False
+                    remember_correction(record, state, 'submitted', [defect['id'] for defect in defects], record['candidate_sha256'])
             else:
                 record.update(review_path=str(receipt.relative_to(work)), review_sha256=sha(receipt))
                 if reply['decision'] == 'PASS':
@@ -552,11 +759,15 @@ def run(work, project, args, runtime, app):
                 elif reply['decision'] == 'BLOCKED' or record['attempt'] >= project['settings']['max_rounds']:
                     if reply['decision'] == 'REWORK':
                         record['previous_review'] = reply
-                    record.update(status='BLOCKED' if reply['decision'] == 'BLOCKED' else 'REWORK_LIMIT', reason=reply['report'])
-                    state.update(status=record['status'], reason=record['reason']); project['stage']=record['status']
-                    app.persist(work, project)
+                    record.update(status='BLOCKED' if reply['decision'] == 'BLOCKED' else 'REWORK_LIMIT',
+                                  reason=reply['report'])
                     if record['status'] == 'BLOCKED':
-                        return {'status':record['status'], 'unit':unit['id'], 'reason':record['reason']}
+                        reason = unit['id'] + ': ' + record['reason']
+                        state.update(status='BLOCKED', reason=reason)
+                        project['stage'] = 'BLOCKED'
+                        app.persist(work, project)
+                        return {'status': 'BLOCKED', 'unit': unit['id'], 'reason': reason, 'calls': state['calls']}
+                    app.persist(work, project)
                     break
                 else:
                     record.update(role='executor', attempt=record['attempt']+1, previous_review=reply)
@@ -564,10 +775,9 @@ def run(work, project, args, runtime, app):
     unfinished = [unit['id'] for unit in plan['units']
                   if project['checkpoints']['units'].get(unit['id'], {}).get('status') != 'PASS']
     if unfinished:
-        state.update(status='REWORK_LIMIT', reason=state.get('reason') or 'A program reached its review limit')
-        project['stage'] = 'REWORK_LIMIT'
+        result = rework_result(project, plan, state)
         app.persist(work, project)
-        return {'status':'REWORK_LIMIT', 'unit': unfinished[0], 'reason': state['reason']}
+        return result
     project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
     state.update(status='RUNNING', role='executor')
     state.pop('reason', None)

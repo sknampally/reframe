@@ -63,6 +63,20 @@ class GuidedFlowTests(unittest.TestCase):
         run(ui)
         ui.invoke.assert_called_once_with(['assessment-report'])
 
+    def test_rework_limit_resumes_without_a_new_assessment(self):
+        project = {'stage': 'REWORK_LIMIT', 'approvals': {'assessment': True},
+                   'pipeline': {'calls': 4, 'status': 'REWORK_LIMIT'},
+                   'checkpoints': {'status': 'PLANNED', 'units': {}}}
+        ui = self.ui(project, ['continue'])
+        ui.last_report = {'unit': 'U0001', 'next_step': 'reframe feedback --unit U0001 --authorize-correction --by NAME --note REASON'}
+        run(ui)
+        commands = [call.args[0] for call in ui.invoke.call_args_list]
+        self.assertEqual(commands, [['resume']])
+        said = ' '.join(str(call.args[0]) for call in ui.say.call_args_list)
+        self.assertIn('U0001', said)
+        self.assertIn('No new assessment job is created.', said)
+        self.assertNotIn('assess', str(commands))
+
     def test_running_assessment_resumes_without_new_job(self):
         ui = self.ui({'stage':'ASSESSING','active_assessment':'run-1'}, ['continue'])
         run(ui)

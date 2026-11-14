@@ -220,7 +220,7 @@ class Terminal:
         for key,value in result.items():
             if key=='status':continue
             # Hide values that can contain paths, resource identifiers or arbitrary error text.
-            if self.private and key not in {'next_step','model_calls','calls','round','changed_files','semantic_review','hint','units','minimum_calls','calls_consumed','calls_remaining','reviewed_units','opaque_segments','remaining_calls','minimum_additional_calls','total_cap'}:
+            if self.private and key not in {'next_step','model_calls','calls','round','changed_files','semantic_review','hint','units','unit','attempts','minimum_calls','calls_consumed','calls_remaining','reviewed_units','opaque_segments','remaining_calls','minimum_additional_calls','total_cap'}:
                 value='Details hidden by presentation privacy; /privacy reveals local results.'
             table.add_row(clean(key.replace('_',' ').title()),clean(value))
         self.last_report = dict(result)

@@ -636,6 +636,8 @@ def next_step(project):
     if stage == 'AWAITING_SPECIFICATIONS_APPROVAL': return 'Review the HTML, then reframe approve specifications'
     if stage == 'VALIDATION_APPROVED': return 'reframe review-site'
     if stage == 'AWAITING_VALIDATION_APPROVAL': return 'Record SME decisions, then reframe approve validation'
+    if stage == 'REWORK_LIMIT':
+        return 'Authorize one targeted correction with reframe feedback --unit UNIT --authorize-correction --by NAME --note REASON'
     if stage in {'ASSESSMENT_APPROVED', 'REVISION_PENDING', 'WAITING_FOR_RUNTIME'}: return 'reframe validate --reviewer claude-code'
     if stage == 'AWAITING_ASSESSMENT_APPROVAL': return 'Inspect findings, then reframe approve assessment'
     if project.get('active_assessment') and project.get('assessments') and stage in {'INITIALIZED', 'READY_TO_ASSESS'}:
@@ -654,9 +656,14 @@ def prepare_command(args, work, project):
             if not source.startswith(('https://', 's3://')): matches = str(Path(source).expanduser().resolve()) == project['source']['root']
             require(matches, 'Source differs from setup. Use reframe init with a new workspace to pin different source')
         if not args.label:
-            if args.command == 'resume':
+            review_stages = {'ASSESSMENT_APPROVED', 'PREPARATION_PLANNED', 'REVISION_PENDING',
+                             'RUNNING_EXECUTOR', 'RUNNING_REVIEWER', 'REWORK_LIMIT', 'WAITING_FOR_RUNTIME'}
+            continuing_review = args.command == 'resume' and project.get('pipeline') and project.get('stage') in review_stages
+            if args.command == 'resume' and not continuing_review:
                 require(project.get('active_assessment'), 'No active assessment to resume; use reframe assess')
                 args.label = project['active_assessment']
+            elif args.command == 'resume':
+                args.label = project.get('active_assessment')
             else:
                 args.label = 'run-' + str(len(project['assessments']) + 1)
         if args.command == 'assess' and args.label not in project['assessments']:

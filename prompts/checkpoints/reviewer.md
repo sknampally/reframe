@@ -18,6 +18,16 @@ cited lines contradict a written claim, a quote is not in those lines, coverage 
 unreadable evidence as reviewed, or a source-proof claim depends on another file.
 Do not open a correction round to enlarge the inventory.
 
+Review the candidate supplied in this request. A later review must see the corrected
+candidate, not an earlier file. REWORK when a cited claim is unchanged after a requested
+correction. Name the same finding id and target the candidate finding that is still wrong.
+Do not pass a defect to finish the unit.
+
+Review the candidate supplied in this request. A later review must see the corrected
+candidate, not an earlier file. REWORK when a cited claim is unchanged after a requested
+correction. Name the same finding id and target the candidate finding that is still wrong.
+Do not pass a defect to finish the unit.
+
 Return exactly one JSON object:
 {"kind":"review","decision":"PASS|REWORK|BLOCKED",
  "report":"Concise review result with evidence references","findings":[]}

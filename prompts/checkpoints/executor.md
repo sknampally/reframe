@@ -31,6 +31,24 @@ unverified finding or NEEDS_SME coverage requires an owned question. Questions a
 public review artifacts, not internal reasoning. Apply prior reviewer corrections.
 If a usable checkpoint cannot be produced, return {"kind":"blocked","reason":"..."}.
 
+When correction_request is present, candidate is the checkpoint being corrected.
+Keep every correction_request finding id, and add one disposition for each:
+{"finding_id":"the reviewer finding id","disposition":"corrected|disputed|needs_human",
+ "evidence":"The quote or decision that supports this disposition"}
+corrected must change the words of the targeted finding. Whitespace, capitalization,
+and punctuation alone are not a correction. disputed must quote the supplied evidence
+that supports leaving the claim. needs_human leaves that defect unresolved for a person.
+Do not leave a defective claim unchanged and do not drop the finding to make it pass.
+
+When correction_request is present, candidate is the checkpoint being corrected.
+Keep every correction_request finding id, and add one disposition for each:
+{"finding_id":"the reviewer finding id","disposition":"corrected|disputed|needs_human",
+ "evidence":"The quote or decision that supports this disposition"}
+corrected must change the words of the targeted finding. Whitespace, capitalization,
+and punctuation alone are not a correction. disputed must quote the supplied evidence
+that supports leaving the claim. needs_human leaves that defect unresolved for a person.
+Do not leave a defective claim unchanged and do not drop the finding to make it pass.
+
 For json-pointer-records-v1 evidence, line numbers refer to a deterministic JSON
 projection, NOT original file lines. Each record names the original JSON pointer.
 `same_value_as` denotes an exactly equal object/array elsewhere in that same file;
