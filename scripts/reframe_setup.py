@@ -637,6 +637,15 @@ def next_step(project):
     if stage == 'VALIDATION_APPROVED': return 'reframe review-site'
     if stage == 'AWAITING_VALIDATION_APPROVAL': return 'Record SME decisions, then reframe approve validation'
     if stage == 'REWORK_LIMIT':
+        checkpoints = project.get('checkpoints') or {}
+        state = project.get('pipeline') or {}
+        if checkpoints.get('status') == 'READY_FOR_SYNTHESIS' and not project.get('specification'):
+            used = state.get('limit_corrections') or (1 if state.get('limit_corrected') else 0)
+            if state.get('candidate_sha256') and used < 2:
+                return ('reframe resume. One targeted synthesis correction uses the saved candidate and the latest review. '
+                        'Passed units stay sealed. No assessment job is created.')
+            return ('Synthesis correction limit reached. Inspect the saved review before another correction. '
+                    'Passed units stay sealed. No assessment job is created.')
         return 'Authorize one targeted correction with reframe feedback --unit UNIT --authorize-correction --by NAME --note REASON'
     if stage in {'ASSESSMENT_APPROVED', 'REVISION_PENDING', 'WAITING_FOR_RUNTIME'}: return 'reframe validate --reviewer claude-code'
     if stage == 'AWAITING_ASSESSMENT_APPROVAL': return 'Inspect findings, then reframe approve assessment'

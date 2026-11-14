@@ -500,8 +500,12 @@ def run(ui):
                 if updated.get('stage') == 'REWORK_LIMIT':
                     if recovery_used:
                         report = getattr(ui, 'last_report', None) or {}
-                        ui.say('Review paused on unit ' + str(report.get('unit') or 'unknown') + '.')
-                        ui.say(str(report.get('next_step') or 'Authorize one targeted correction with reframe feedback --authorize-correction.'))
+                        if (updated.get('checkpoints') or {}).get('status') == 'READY_FOR_SYNTHESIS':
+                            ui.say(str(report.get('reason') or 'Synthesis review paused.'))
+                            ui.say(str(report.get('next_step') or 'reframe resume'))
+                        else:
+                            ui.say('Review paused on unit ' + str(report.get('unit') or 'unknown') + '.')
+                            ui.say(str(report.get('next_step') or 'Authorize one targeted correction with reframe feedback --authorize-correction.'))
                         ui.say('No new assessment job is created.')
                         return
                     recovery_used = True
