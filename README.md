@@ -145,7 +145,14 @@ After the package exists you can optionally export a **Functional Parity** (curr
 reframe status
 ```
 
-`status` shows the current stage, the approvals recorded and the next command to run. `reframe resume` continues interrupted work. Inside the workspace folder:
+`status` shows the current stage, the approvals recorded and the next command to run. `reframe resume` continues interrupted work. If a framework update changed the preparation prompts, `resume` keeps the saved prompt pin and tells you to authorize the change. From a clean checkout:
+
+```bash
+reframe upgrade-framework --note "Adopt the synthesis prompt changes for this saved review" --adopt-prompts
+reframe resume
+```
+
+That records the old and new prompt hashes for the calls and passed units already saved, then lets the saved review continue. It does not restart the assessment or the passed units. Inside the workspace folder:
 
 | Folder | Contents |
 | --- | --- |

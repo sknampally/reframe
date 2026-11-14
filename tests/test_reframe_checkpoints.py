@@ -1484,3 +1484,156 @@ class CheckpointTests(unittest.TestCase):
         self.assertNotIn('targeted synthesis correction', reports[0]['next_step'])
         self.assertEqual(app.read(self.work / 'project.json')['pipeline']['calls'], 4)
         self.assertEqual(app.read(self.work / 'project.json')['stage'], 'BLOCKED')
+
+    def test_authorized_prompt_migration_repairs_a_partial_upgrade_and_resumes_synthesis(self):
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = app.read(plan_path)
+        segment = plan['units'][0]['segments'][0]
+        plan['units'] = [{'id': f'U{number:04d}', 'focus': segment['path'], 'segments': [segment]} for number in range(1, 113)]
+        app.write(plan_path, plan)
+        self.project['checkpoints']['plan_sha256'] = sha(plan_path)
+        area = self.work / 'preparation'
+        units = {}
+        for unit in plan['units']:
+            ident = unit['id']
+            candidate = {'kind': 'checkpoint', 'summary': 'passed', 'findings': [{
+                'id': ident + '-F1', 'kind': 'business_rule', 'statement': 'Reject a zero amount.',
+                'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'source', 'path': segment['path'], 'start': 1, 'end': 1}]}],
+                'questions': [], 'coverage': []}
+            review = {'kind': 'review', 'decision': 'PASS', 'report': 'passed', 'findings': []}
+            candidate_path = area / ('saved-' + ident + '-candidate.json')
+            review_path = area / ('saved-' + ident + '-review.json')
+            app.write(candidate_path, candidate)
+            app.write(review_path, review)
+            units[ident] = {'status': 'PASS', 'attempt': 1, 'role': 'reviewer',
+                            'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                            'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path)}
+        question = {'id': 'U0075-Q1', 'question': 'Which customer key length is authoritative?',
+                    'impact': 'The record layout stays unresolved.', 'owner': 'SME', 'blocks': 'Customer data layout'}
+        spec = self.spec()
+        spec['questions'] = [question]
+        reply_298 = {'kind': 'candidate', 'specification': spec}
+        reply_299 = {'kind': 'review', 'decision': 'REWORK', 'report': 'Coverage mappings are still prose.',
+                     'findings': [{'id': 'RF1-R', 'statement': 'Put mappings in rule_ids.', 'required_action': 'Use rule_ids or keep the gap.'}]}
+        app.write(area / 'reply-298.json', reply_298)
+        app.write(area / 'reply-299.json', reply_299)
+        app.write(area / 'checkpoint-review-2.json', reply_299)
+        app.write(area / 'checkpoint-candidate-2.json', spec)
+        label = self.project['selected']
+        directory = Path(self.project['assessments'][label]['directory'])
+        run = app.read(directory / 'run.json')
+        run['framework_commit'] = 'a' * 40
+        app.write(directory / 'run.json', run)
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['settings']['max_model_calls'] = None
+        self.project['active_assessment'] = label
+        self.project['framework_commit'] = 'a' * 40
+        self.project.setdefault('events', []).append({
+            'event': 'framework_upgraded', 'from': 'b' * 40, 'to': 'a' * 40,
+            'reason': 'Record revision 47b05a9 without the prompt hash'})
+        self.project['pipeline'].update(calls=299, status='REWORK_LIMIT', role='reviewer', round=2,
+                                         candidate_sha256=sha(area / 'checkpoint-candidate-2.json'))
+        self.project['stage'] = 'REWORK_LIMIT'
+        old_hash = 'd' * 64
+        new_hash = 'c' * 64
+        models = (self.project['pins']['executor_model'], self.project['pins']['reviewer_model'])
+        self.project['pins'].update(framework_commit='a' * 40, prompt_hash=old_hash,
+                                     aws_job_id='job-kept', assessment_label=label)
+        app.persist(self.work, self.project)
+        before = (self.work / 'project.json').read_bytes()
+        run_before = (directory / 'run.json').read_bytes()
+        passed = copy.deepcopy(units)
+        approvals = copy.deepcopy(self.project['approvals'])
+        source_commit = self.project['source']['commit']
+        assessment_sha = self.project['assessments'][label]['sha256']
+        reports = []
+
+        def refuse_model(*_args):
+            raise AssertionError('model call')
+
+        with patch.object(app, 'preparation_protocol_hash', return_value=new_hash), \
+                patch.object(app, 'model_call', refuse_model), \
+                patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            status = app.main(['--workspace', str(self.work), 'status'], reporter=reports.append)
+            self.assertEqual(status, 2)
+            self.assertIn('--adopt-prompts', reports[-1]['next_step'])
+            refused_resume = app.main(['--workspace', str(self.work), 'resume'], reporter=reports.append)
+            self.assertEqual(refused_resume, 2)
+            self.assertIn('prompt_hash', reports[-1]['reason'])
+            self.assertIn('--adopt-prompts', reports[-1]['hint'])
+            self.assertEqual((self.work / 'project.json').read_bytes(), before)
+            refused_upgrade = app.main(['--workspace', str(self.work), 'upgrade-framework', '--note', 'Adopt synthesis prompts'],
+                                       reporter=reports.append)
+            self.assertEqual(refused_upgrade, 2)
+            self.assertIn('was not recorded', reports[-1]['reason'])
+            self.assertIn('--adopt-prompts', reports[-1]['hint'])
+            self.assertEqual((self.work / 'project.json').read_bytes(), before)
+            self.assertEqual((directory / 'run.json').read_bytes(), run_before)
+            adopted = app.main(['--workspace', str(self.work), 'upgrade-framework', '--note', 'Adopt synthesis prompts', '--adopt-prompts'],
+                               reporter=reports.append)
+        self.assertEqual(adopted, 0)
+        self.assertEqual(reports[-1]['prompt_migration'], 'adopted')
+        self.assertEqual(reports[-1]['phase'], 'synthesis')
+        saved = app.read(self.work / 'project.json')
+        self.assertEqual(saved['pins']['prompt_hash'], new_hash)
+        self.assertEqual(saved['pins']['framework_commit'], 'a' * 40)
+        self.assertEqual((saved['pins']['executor_model'], saved['pins']['reviewer_model']), models)
+        self.assertEqual(saved['pins']['aws_job_id'], 'job-kept')
+        self.assertEqual(saved['pipeline']['calls'], 299)
+        self.assertEqual(saved['checkpoints']['units'], passed)
+        self.assertEqual(saved['approvals'], approvals)
+        self.assertEqual(saved['source']['commit'], source_commit)
+        self.assertEqual(saved['assessments'][label]['sha256'], assessment_sha)
+        self.assertEqual((directory / 'run.json').read_bytes(), run_before)
+        migration = saved['events'][-1]
+        self.assertEqual(migration['event'], 'prompt_migrated')
+        self.assertEqual(migration['phase'], 'synthesis')
+        self.assertEqual(migration['rationale'], 'Adopt synthesis prompts')
+        self.assertEqual(migration['from_prompt_hash'], old_hash)
+        self.assertEqual(migration['to_prompt_hash'], new_hash)
+        self.assertEqual(migration['from_framework_commit'], 'b' * 40)
+        self.assertEqual(migration['to_framework_commit'], 'a' * 40)
+        self.assertEqual(migration['calls_completed'], 299)
+        self.assertEqual(migration['passed_units'], 112)
+        history = saved['prompt_history'][-1]
+        self.assertEqual(history['prompt_hash'], old_hash)
+        self.assertEqual(history['through_call'], 299)
+        self.assertEqual(history['phase'], 'synthesis')
+        self.assertEqual(set(history['passed_units']), set(passed))
+        saved['settings']['reviewer_model'] = 'other-model'
+        app.write(self.work / 'project.json', saved)
+        with patch.object(app, 'preparation_protocol_hash', return_value=new_hash), \
+                patch.object(app, 'model_call', refuse_model), \
+                patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            blocked_model = app.main(['--workspace', str(self.work), 'resume'], reporter=reports.append)
+        self.assertEqual(blocked_model, 2)
+        self.assertIn('reviewer_model', reports[-1]['reason'])
+        self.assertNotIn('prompt_hash', reports[-1]['reason'])
+        self.assertEqual(app.read(self.work / 'project.json')['pipeline']['calls'], 299)
+        saved = app.read(self.work / 'project.json')
+        saved['settings']['reviewer_model'] = models[1]
+        app.write(self.work / 'project.json', saved)
+        seen = {}
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'executor':
+                seen['findings'] = [item['id'] for item in context['candidate_correction']['review_findings']]
+                return self.runtime(provider, run, directory, role, message)
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Corrected candidate keeps the saved units', 'findings': []}
+
+        with patch.object(app, 'preparation_protocol_hash', return_value=new_hash), \
+                patch.object(app, 'model_call', runtime), \
+                patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            resumed = app.main(['--workspace', str(self.work), 'resume'], reporter=reports.append)
+        self.assertEqual(resumed, 0)
+        self.assertEqual(seen['findings'], ['RF1-R'])
+        recovered = app.read(self.work / 'project.json')
+        self.assertEqual(recovered['pipeline']['calls'], 301)
+        self.assertEqual(recovered['checkpoints']['units'], passed)
+        self.assertEqual(recovered['approvals'], approvals)
+        self.assertEqual(recovered['assessments'][label]['sha256'], assessment_sha)
+        self.assertEqual(recovered['pins']['aws_job_id'], 'job-kept')
+        self.assertEqual(recovered['prompt_history'][-1]['prompt_hash'], old_hash)
