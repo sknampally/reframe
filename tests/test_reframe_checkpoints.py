@@ -1,6 +1,10 @@
 import argparse
 import copy
 import json
+import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 import zipfile
 from pathlib import Path
@@ -10,6 +14,7 @@ import test_reframe as fixtures
 import reframe as app
 import reframe_artifacts as artifacts
 import reframe_checkpoints as cp
+import pilot
 from pilot import Blocked, sha
 
 
@@ -67,6 +72,8 @@ class CheckpointTests(unittest.TestCase):
             return {'kind':'review','decision':'PASS','report':'Independent fixture review','findings':[]}
         if role == 'reviewer':
             return {'kind':'review','decision':'PASS','report':'Integration fixture review','findings':[]}
+        if context.get('candidate_correction') and 'reviewed_evidence_units' not in context:
+            return {'kind': 'candidate', 'specification': self.spec()}
         capsules = context['reviewed_evidence_units']
         rule = next(f for c in capsules for f in c['checkpoint']['findings'] if f['kind']=='business_rule')
         spec = self.spec()
@@ -1407,7 +1414,7 @@ class CheckpointTests(unittest.TestCase):
                           'statement': 'Work item prose names a rule that rule_ids omits.',
                           'required_action': 'Put the mapping in rule_ids or keep the gap and remove the prose claim.'},
                          {'id': 'RF5', 'area': 'data', 'severity': 'minor',
-                          'statement': 'The data section must keep the key-length conflict open.',
+                          'statement': 'The data section must keep the U0075-Q1 key-length conflict open.',
                           'required_action': 'Do not choose an authoritative layout.'}]}
         app.write(area / 'reply-298.json', reply_298)
         app.write(area / 'reply-299.json', reply_299)
@@ -1432,7 +1439,11 @@ class CheckpointTests(unittest.TestCase):
             context = json.loads(message)
             if role == 'executor':
                 seen['correction'] = context['candidate_correction']
-                return self.runtime(provider, run, directory, role, message)
+                seen['message'] = context
+                seen['bytes'] = len(message.encode())
+                return {'kind': 'correction', 'base_sha256': context['candidate_correction']['base_sha256'], 'edits': [{
+                    'op': 'replace_text', 'target': 'section', 'id': 'data', 'field': 'specification',
+                    'text': data + ' U0075-Q1 stays open. Neither length is authoritative.'}]}
             return {'kind': 'review', 'decision': 'PASS', 'report': 'Corrected candidate keeps the open key question', 'findings': []}
 
         reports = []
@@ -1452,12 +1463,16 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual([item['id'] for item in correction['review_findings']], ['RF1-R', 'RF5'])
         self.assertIn('rule_ids', correction['instruction'])
         self.assertIn('authoritative layout', correction['instruction'])
-        corrected = correction['rejected_specification']
+        self.assertNotIn('rejected_specification', correction)
+        self.assertNotIn('reviewed_evidence_units', seen['message'])
+        self.assertEqual(correction['focus']['sections']['data']['specification'], data)
+        self.assertIn(question, correction['focus']['questions'])
+        corrected = app.read(area / 'checkpoint-candidate-3.json')
         self.assertIn(question, corrected['questions'])
-        self.assertEqual(corrected['sections']['data']['specification'], data)
-        self.assertEqual(corrected['work_items'][0]['rule_ids'], ['R1'])
-        self.assertNotIn('R-POST-01', corrected['work_items'][0]['rule_ids'])
-        self.assertEqual(corrected['coverage'], cp.coverage_dispositions(corrected))
+        self.assertIn('Neither length is authoritative', corrected['sections']['data']['specification'])
+        self.assertIn('9 byte', corrected['sections']['data']['specification'])
+        self.assertIn('10 bytes', corrected['sections']['data']['specification'])
+        self.assertNotIn('R-POST-01', corrected['work_items'][0].get('rule_ids') or [])
         rows = {row['id']: row for row in corrected['coverage']}
         self.assertIn('work_item', rows['R-POST-01']['gaps'])
         saved = app.read(self.work / 'project.json')
@@ -1637,3 +1652,448 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(recovered['assessments'][label]['sha256'], assessment_sha)
         self.assertEqual(recovered['pins']['aws_job_id'], 'job-kept')
         self.assertEqual(recovered['prompt_history'][-1]['prompt_hash'], old_hash)
+
+    def _passed_units(self, plan, area, findings_for):
+        units = {}
+        for unit in plan['units']:
+            ident = unit['id']
+            candidate = {'kind': 'checkpoint', 'summary': 'passed', 'findings': findings_for(ident),
+                         'questions': [], 'coverage': []}
+            review = {'kind': 'review', 'decision': 'PASS', 'report': 'passed', 'findings': []}
+            candidate_path = area / ('saved-' + ident + '-candidate.json')
+            review_path = area / ('saved-' + ident + '-review.json')
+            app.write(candidate_path, candidate)
+            app.write(review_path, review)
+            units[ident] = {'status': 'PASS', 'attempt': 1, 'role': 'reviewer',
+                            'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                            'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path)}
+        return units
+
+    def test_saved_size_correction_edits_the_canonical_spec_and_exports(self):
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = app.read(plan_path)
+        segment = plan['units'][0]['segments'][0]
+        plan['units'] = [{'id': f'U{number:04d}', 'focus': segment['path'], 'segments': [segment]} for number in range(1, 113)]
+        app.write(plan_path, plan)
+        self.project['checkpoints']['plan_sha256'] = sha(plan_path)
+        area = self.work / 'preparation'
+        pad = 'PADRULE ' + ('x' * 4500)
+        rule_pad = 'SPECPAD ' + ('y' * 6800)
+
+        def findings_for(ident):
+            return [{'id': ident + '-F1', 'kind': 'business_rule', 'statement': pad,
+                     'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'source', 'path': segment['path'], 'start': 1, 'end': 1}]}]
+
+        units = self._passed_units(plan, area, findings_for)
+        question = {'id': 'U0075-Q1', 'question': 'Which customer key length is authoritative?',
+                    'impact': 'The record layout stays unresolved.', 'owner': 'SME', 'blocks': 'Customer data layout'}
+        spec = self.spec()
+        spec['rules'] = [{'id': 'R-KEEP', 'statement': 'Keep the named account.', 'source_path': segment['path'],
+                          'source_anchor': 'lines 1-1', 'evidence_status': 'SOURCE_VERIFIED'}]
+        spec['rules'].extend({'id': f'U{number:04d}-F1', 'statement': 'Named source rule.', 'source_path': segment['path'],
+                              'source_anchor': 'lines 1-1', 'evidence_status': 'SOURCE_VERIFIED'} for number in range(1, 113))
+        spec['rules'].extend({'id': f'P{number:04d}', 'statement': rule_pad, 'source_path': segment['path'],
+                              'source_anchor': 'lines 1-1', 'evidence_status': 'SOURCE_VERIFIED'} for number in range(72))
+        for section in spec['sections'].values():
+            section['rule_ids'] = []
+        spec['sections']['data']['specification'] = 'The data section currently states one customer key length.'
+        spec['work_items'][0]['id'] = 'W1'
+        spec['work_items'][0]['rule_ids'] = []
+        spec['questions'] = [question]
+        spec['tests'] = [{'id': 'T-' + category, 'rule_id': 'R-KEEP', 'category': category, 'given': 'fixture input',
+                          'when': 'submit', 'then': 'fixture outcome', 'oracle': segment['path'], 'status': 'NOT RUN'}
+                         for category in ('normal', 'rejection', 'boundary')]
+        spec['tests'].extend({'id': rule['id'] + '-accept', 'rule_id': rule['id'], 'category': 'boundary',
+                              'given': 'fixture input', 'when': 'submit', 'then': 'fixture outcome',
+                              'oracle': segment['path'], 'status': 'NOT RUN'}
+                             for rule in spec['rules'] if rule['id'] != 'R-KEEP')
+        evidence_bytes = len(json.dumps([cp.synthesis_view({'unit': unit['id'], 'checkpoint': {'findings': findings_for(unit['id']), 'questions': []}}) for unit in plan['units']]).encode())
+        spec_bytes = len(json.dumps(spec).encode())
+        self.assertGreater(evidence_bytes, 500000)
+        self.assertGreater(spec_bytes, 500000)
+        self.assertGreater(evidence_bytes + spec_bytes, 600000)
+        review = {'kind': 'review', 'decision': 'REWORK', 'report': 'Map the named rule and keep the key conflict open.',
+                  'findings': [
+                      {'id': 'RF1-R', 'area': 'coverage', 'severity': 'major', 'statement': 'Map R-KEEP to W1.',
+                       'required_action': 'Set work item W1 rule_ids to R-KEEP.'},
+                      {'id': 'RF5', 'area': 'data', 'severity': 'minor',
+                       'statement': 'Keep U0075-Q1 open. One layout is 9 bytes and the other is 10 bytes.',
+                       'required_action': 'Do not choose an authoritative layout.'}]}
+        app.write(area / 'reply-298.json', {'kind': 'candidate', 'specification': spec})
+        app.write(area / 'reply-299.json', review)
+        app.write(area / 'checkpoint-review-2.json', review)
+        app.write(area / 'checkpoint-candidate-2.json', spec)
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['settings']['max_model_calls'] = None
+        self.project['active_assessment'] = self.project['selected']
+        self.project['pipeline'].update(calls=299, status='RUNNING', role='executor', round=3, limit_corrections=1,
+                                         candidate_sha256=sha(area / 'checkpoint-candidate-2.json'))
+        self.project['stage'] = 'PREPARATION_PLANNED'
+        app.persist(self.work, self.project)
+        passed = copy.deepcopy(units)
+        approvals = copy.deepcopy(self.project['approvals'])
+        seen = {}
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'executor':
+                seen['bytes'] = len(message.encode())
+                seen['components'] = {key: len(json.dumps(value).encode()) for key, value in context.items()}
+                self.assertNotIn('PADRULE', message)
+                self.assertNotIn('reviewed_evidence_units', context)
+                self.assertNotIn('rejected_specification', context.get('candidate_correction', {}))
+                self.assertEqual([item['id'] for item in context['candidate_correction']['review_findings']], ['RF1-R', 'RF5'])
+                self.assertIn('U0075-Q1', json.dumps(context['candidate_correction']['focus']['questions']))
+                return {'kind': 'correction', 'base_sha256': context['candidate_correction']['base_sha256'], 'edits': [
+                    {'op': 'set_rule_ids', 'target': 'work_item', 'id': 'W1', 'rule_ids': ['R-KEEP']},
+                    {'op': 'set_rule_ids', 'target': 'section', 'id': 'delivery', 'rule_ids': ['R-KEEP']},
+                    {'op': 'replace_text', 'target': 'section', 'id': 'data', 'field': 'specification',
+                     'text': 'CUSTFILE uses 9 bytes and DEFCUST uses 10 bytes. U0075-Q1 stays open. Neither length is authoritative.'}]}
+            plan, capsules = cp.verified_capsules(self.work, app.read(self.work / 'project.json'), app)
+            cp.validate_synthesis(context['candidate'], capsules, plan)
+            seen['validated_before_review'] = True
+            seen['review_bytes'] = len(message.encode())
+            self.assertIn('SPECPAD', message)
+            self.assertNotIn('PADRULE', message)
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'The corrected specification keeps the open key question', 'findings': []}
+
+        reports = []
+        with patch.object(app, 'assessment', side_effect=AssertionError('assessment job')), \
+                patch.object(app, 'model_call', runtime):
+            code = app.main(['--workspace', str(self.work), 'resume'], reporter=reports.append)
+        self.assertEqual(code, 0, str({key: reports[-1].get(key) for key in ('status', 'reason', 'hint', 'context_bytes')})[:800] if reports else '')
+        self.assertLess(seen['bytes'], 600000)
+        self.assertLess(seen['review_bytes'], 600000)
+        self.assertTrue(seen['validated_before_review'])
+        self.assertLess(seen['components']['candidate_correction'], 20000)
+        self.assertNotIn('candidate', seen['components'])
+        self.assertGreater(evidence_bytes + spec_bytes, seen['bytes'])
+        saved = app.read(self.work / 'project.json')
+        self.assertEqual(saved['pipeline']['calls'], 301)
+        self.assertEqual(saved['pipeline']['limit_corrections'], 1)
+        self.assertEqual(saved['checkpoints']['units'], passed)
+        self.assertEqual(saved['approvals'], approvals)
+        corrected = app.read(self.work / saved['specification']['path'])
+        self.assertEqual(corrected['questions'], spec['questions'])
+        self.assertEqual({rule['id']: rule['statement'] for rule in corrected['rules']},
+                         {rule['id']: rule['statement'] for rule in spec['rules']})
+        self.assertEqual({case['id']: case['then'] for case in corrected['tests']},
+                         {case['id']: case['then'] for case in spec['tests']})
+        self.assertIn('9 bytes', corrected['sections']['data']['specification'])
+        self.assertIn('10 bytes', corrected['sections']['data']['specification'])
+        self.assertIn('Neither length is authoritative', corrected['sections']['data']['specification'])
+        self.assertEqual(corrected['work_items'][0]['rule_ids'], ['R-KEEP'])
+        self.assertEqual(corrected['sections']['delivery']['rule_ids'], ['R-KEEP'])
+        self.assertIn('SPECPAD', json.dumps(corrected['rules']))
+        self.assertEqual(len([rule for rule in corrected['rules'] if rule['statement'] == rule_pad]), 72)
+        evidence_file = (self.work / units['U0001']['candidate_path']).read_text()
+        self.assertIn(pad, evidence_file)
+        self.assertEqual(evidence_file.count('x'), pad.count('x'))
+        covered = {row['id']: row for row in corrected['coverage']}
+        self.assertEqual(covered['R-KEEP']['work_items'], ['W1'])
+        self.assertIn('delivery', covered['R-KEEP']['sections'])
+        self.assertEqual(covered['P0001']['disposition'], 'gap')
+        self.assertIn('work_item', covered['P0001']['gaps'])
+        self.assertIn('Neither length is authoritative', (self.work / saved['preparation_report']['path']).read_text())
+        for item in corrected['questions']:
+            app.decision(self.work, saved, self.args(
+                'decide', '--question', item['id'], '--by', 'SME', '--answer', 'Keep both lengths open', '--disposition', 'resolved'))
+        app.approve(self.work, saved, self.args('approve', 'validation', '--by', 'Fixture owner', '--note', 'Fixture review'))
+        screens = fixtures.PreparationTests.screens(self)
+        for screen in screens['screens']:
+            screen['rule_ids'] = ['R-KEEP']
+        for api in screens['apis']:
+            api['rule_ids'] = ['R-KEEP']
+        app.review_site(self.work, saved, self.args('review-site'), lambda *_args: screens)
+        app.approve(self.work, saved, self.args('approve', 'specifications', '--by', 'Fixture owner', '--note', 'Fixture review'))
+        packaged = app.package(self.work, saved)
+        with zipfile.ZipFile(packaged['archive']) as archive:
+            exported = json.loads(archive.read('specification.json'))
+            trace = json.loads(archive.read('traceability.json'))
+            html = archive.read('sme-architect-review.html').decode()
+        self.assertIn(question, exported['questions'])
+        self.assertIn('Neither length is authoritative', exported['sections']['data']['specification'])
+        self.assertEqual(exported['work_items'][0]['rule_ids'], ['R-KEEP'])
+        self.assertEqual(trace['coverage'], exported['coverage'])
+        self.assertIn('Neither length is authoritative', html)
+
+    def test_oversized_correction_context_does_not_consume_the_correction(self):
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = app.read(plan_path)
+        segment = plan['units'][0]['segments'][0]
+        plan['units'] = [{'id': f'U{number:04d}', 'focus': segment['path'], 'segments': [segment]} for number in range(1, 113)]
+        app.write(plan_path, plan)
+        self.project['checkpoints']['plan_sha256'] = sha(plan_path)
+        area = self.work / 'preparation'
+        huge = 'Q' * 700000
+
+        def findings_for(ident):
+            statement = huge if ident == 'U0001' else 'Reject a zero amount.'
+            return [{'id': ident + '-F1', 'kind': 'business_rule', 'statement': statement,
+                     'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'source', 'path': segment['path'], 'start': 1, 'end': 1}]}]
+
+        units = self._passed_units(plan, area, findings_for)
+        spec = self.spec()
+        spec['rules'][0]['id'] = 'U0001-F1'
+        spec['rules'][0]['source_path'] = segment['path']
+        for section in spec['sections'].values():
+            section['rule_ids'] = ['U0001-F1']
+        for test in spec['tests']:
+            test['rule_id'] = 'U0001-F1'
+        review = {'kind': 'review', 'decision': 'REWORK', 'report': 'The named finding does not fit in one request.',
+                  'findings': [{'id': 'RF1-R', 'area': 'coverage', 'statement': 'Inspect U0001-F1 before editing.',
+                                'required_action': 'Keep the saved specification.'}]}
+        app.write(area / 'reply-298.json', {'kind': 'candidate', 'specification': spec})
+        app.write(area / 'reply-299.json', review)
+        app.write(area / 'checkpoint-review-2.json', review)
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['settings']['max_model_calls'] = None
+        self.project['active_assessment'] = self.project['selected']
+        history = {'2:reviewer': [{'request': {'kind': 'read', 'area': 'source', 'paths': [segment['path']]}, 'response': [{'area': 'source', 'path': segment['path']}]}]}
+        prompt_history = [{'prompt_hash': 'kept-hash', 'through_call': 299, 'passed_units': ['U0001'], 'phase': 'synthesis'}]
+        self.project['pipeline'].update(calls=299, status='RUNNING', role='executor', round=3, limit_corrections=1,
+                                         contexts=history, candidate_sha256=sha(area / 'reply-298.json'))
+        self.project['prompt_history'] = prompt_history
+        self.project['stage'] = 'PREPARATION_PLANNED'
+        app.persist(self.work, self.project)
+        passed = copy.deepcopy(units)
+
+        def runtime(*_args):
+            raise AssertionError('model call')
+
+        reports = []
+        with patch.object(app, 'model_call', runtime), patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            code = app.main(['--workspace', str(self.work), 'resume'], reporter=reports.append)
+        self.assertEqual(code, 2)
+        self.assertIn('Preparation context is', reports[-1]['reason'])
+        self.assertIn('Components:', reports[-1]['reason'])
+        self.assertIn('limit is 600000', reports[-1]['reason'])
+        self.assertGreater(reports[-1]['context_bytes'], 600000)
+        saved = app.read(self.work / 'project.json')
+        self.assertEqual(reports[-1]['status'], 'CONTEXT_LIMIT')
+        self.assertEqual(saved['pipeline']['calls'], 299)
+        self.assertEqual(saved['pipeline']['limit_corrections'], 1)
+        self.assertEqual(saved['pipeline']['status'], 'RUNNING')
+        self.assertEqual(saved['pipeline']['role'], 'executor')
+        self.assertEqual(saved['pipeline']['round'], 3)
+        self.assertEqual(saved['pipeline']['contexts']['2:reviewer'], history['2:reviewer'])
+        self.assertEqual(saved['prompt_history'], prompt_history)
+        self.assertEqual(saved['stage'], 'PREPARATION_PLANNED')
+        self.assertEqual(saved['checkpoints']['units'], passed)
+        self.assertFalse((area / 'reply-300.json').exists())
+
+    def test_allowlisted_edits_reject_unauthorized_unknown_conflicting_and_stale_changes(self):
+        spec = self.spec()
+        original = copy.deepcopy(spec)
+        with self.assertRaisesRegex(Blocked, 'unauthorized field'):
+            cp.apply_synthesis_edits(spec, [{'op': 'replace_text', 'target': 'section', 'id': 'data',
+                                            'field': 'specification', 'text': 'Keep the open question.', 'statement': 'changed'}])
+        with self.assertRaisesRegex(Blocked, 'unknown section'):
+            cp.apply_synthesis_edits(spec, [{'op': 'replace_text', 'target': 'section', 'id': 'missing',
+                                            'field': 'specification', 'text': 'Keep the open question.'}])
+        with self.assertRaisesRegex(Blocked, 'unknown work item'):
+            cp.apply_synthesis_edits(spec, [{'op': 'set_rule_ids', 'target': 'work_item', 'id': 'missing', 'rule_ids': ['R1']}])
+        with self.assertRaisesRegex(Blocked, 'saved source rules'):
+            cp.apply_synthesis_edits(spec, [{'op': 'set_rule_ids', 'target': 'section', 'id': 'data', 'rule_ids': ['NO-SUCH']}])
+        with self.assertRaisesRegex(Blocked, 'conflict'):
+            cp.apply_synthesis_edits(spec, [
+                {'op': 'replace_text', 'target': 'section', 'id': 'data', 'field': 'specification', 'text': 'First text.'},
+                {'op': 'replace_text', 'target': 'section', 'id': 'data', 'field': 'specification', 'text': 'Second text.'},
+            ])
+        self.assertEqual(spec, original)
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = app.read(plan_path)
+        segment = plan['units'][0]['segments'][0]
+        plan['units'] = [{'id': 'U0001', 'focus': segment['path'], 'segments': [segment]}]
+        app.write(plan_path, plan)
+        self.project['checkpoints']['plan_sha256'] = sha(plan_path)
+        area = self.work / 'preparation'
+        units = self._passed_units(plan, area, lambda ident: [{
+            'id': ident + '-F1', 'kind': 'business_rule', 'statement': 'Reject a zero amount.',
+            'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'source', 'path': segment['path'], 'start': 1, 'end': 1}]}])
+        saved_spec = self.spec()
+        saved_spec['rules'][0]['id'] = 'U0001-F1'
+        saved_spec['rules'][0]['source_path'] = segment['path']
+        saved_spec['rules'][0]['source_anchor'] = 'lines 1-1'
+        for section in saved_spec['sections'].values():
+            section['rule_ids'] = ['U0001-F1']
+        for case in saved_spec['tests']:
+            case['rule_id'] = 'U0001-F1'
+        review = {'kind': 'review', 'decision': 'REWORK', 'report': 'Keep the saved rule.',
+                  'findings': [{'id': 'RF1', 'area': 'data', 'statement': 'Update the data section.',
+                                'required_action': 'Replace the data specification.'}]}
+        app.write(area / 'reply-298.json', {'kind': 'candidate', 'specification': saved_spec})
+        app.write(area / 'reply-299.json', review)
+        app.write(area / 'checkpoint-candidate-2.json', saved_spec)
+        app.write(area / 'checkpoint-review-2.json', review)
+        before = app.read(area / 'checkpoint-candidate-2.json')
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['settings']['max_model_calls'] = None
+        self.project['active_assessment'] = self.project['selected']
+        self.project['pipeline'].update(calls=299, status='RUNNING', role='executor', round=3, limit_corrections=1,
+                                         candidate_sha256=sha(area / 'checkpoint-candidate-2.json'))
+        self.project['stage'] = 'PREPARATION_PLANNED'
+        app.persist(self.work, self.project)
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'executor' and not seen:
+                seen['stale'] = True
+                return {'kind': 'correction', 'base_sha256': 'stale-hash', 'edits': [{
+                    'op': 'replace_text', 'target': 'section', 'id': 'data', 'field': 'specification',
+                    'text': 'This edit must not be applied.'}]}
+            if role == 'executor':
+                self.assertEqual(app.read(area / 'checkpoint-candidate-2.json'), before)
+                self.assertFalse((area / 'checkpoint-candidate-3.json').exists())
+                return {'kind': 'correction', 'base_sha256': context['candidate_correction']['base_sha256'], 'edits': [{
+                    'op': 'replace_text', 'target': 'section', 'id': 'data', 'field': 'specification',
+                    'text': 'The data section stays descriptive.'}]}
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Corrected after the stale edit was rejected', 'findings': []}
+
+        seen = {}
+        with patch.object(app, 'model_call', runtime), patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            code = app.main(['--workspace', str(self.work), 'resume'], reporter=lambda _result: None)
+        self.assertEqual(code, 0)
+        self.assertTrue(seen['stale'])
+        self.assertEqual(app.read(area / 'checkpoint-candidate-2.json'), before)
+        saved = app.read(self.work / 'project.json')
+        self.assertEqual(saved['pipeline']['calls'], 302)
+        self.assertEqual(saved['pipeline']['limit_corrections'], 1)
+        self.assertNotIn('This edit must not be applied.', json.dumps(app.read(area / 'checkpoint-candidate-3.json')))
+
+    def test_sanitized_carddemo_recovery_builds_exact_requests(self):
+        live = Path('/Users/satish_byndr/Documents/workspace-intraedge/aws-mainframe-modernization-carddemo_assessment')
+        if not (live / 'project.json').is_file():
+            self.skipTest('saved CardDemo workspace is not on this machine')
+        project = json.loads((live / 'project.json').read_text())
+        work = Path(tempfile.mkdtemp(prefix='reframe-sanitized-'))
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        area = work / 'preparation'
+        area.mkdir()
+        ids = set()
+
+        def collect(value):
+            if isinstance(value, dict):
+                if isinstance(value.get('id'), str):
+                    ids.add(value['id'])
+                sections = value.get('sections')
+                if isinstance(sections, dict):
+                    ids.update(name for name in sections if isinstance(name, str))
+                for item in value.values():
+                    collect(item)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+
+        def protect(text):
+            ordered = sorted((ident for ident in ids if ident), key=len, reverse=True)
+            if not ordered:
+                return text
+            pattern = re.compile('(?<![A-Za-z0-9-])(?:' + '|'.join(re.escape(ident) for ident in ordered) + ')(?![A-Za-z0-9-])')
+            pieces, cursor = [], 0
+            for match in pattern.finditer(text):
+                pieces.append((text[cursor:match.start()], False))
+                pieces.append((match.group(0), True))
+                cursor = match.end()
+            pieces.append((text[cursor:], False))
+            chars = []
+            for piece, keep in pieces:
+                if keep:
+                    chars.append(piece)
+                    continue
+                for char in piece:
+                    chars.append('x' if char.isascii() and char.isalpha() else char)
+            return ''.join(chars)
+
+        prose = {'statement', 'report', 'required_action', 'required_change', 'question', 'impact', 'specification',
+                 'implementation_prompt', 'acceptance', 'title', 'summary', 'given', 'when', 'then', 'problem', 'issue', 'text', 'blocks'}
+
+        def sanitize(value):
+            if isinstance(value, dict):
+                return {key: protect(item) if key in prose and isinstance(item, str) else sanitize(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [sanitize(item) for item in value]
+            return value
+
+        def write_sanitized(relative, payload):
+            app.write(work / relative, sanitize(payload))
+
+        plan_relative = project['checkpoints']['plan_path']
+        plan = json.loads((live / plan_relative).read_text())
+        stored = [(plan_relative, plan)]
+        for unit in plan['units']:
+            record = project['checkpoints']['units'][unit['id']]
+            for kind in ('candidate_path', 'review_path'):
+                relative = record[kind]
+                stored.append((relative, json.loads((live / relative).read_text())))
+        for name in ('reply-298.json', 'reply-299.json', 'checkpoint-candidate-2.json', 'checkpoint-review-2.json'):
+            stored.append(('preparation/' + name, json.loads((live / 'preparation' / name).read_text())))
+        for _relative, payload in stored:
+            collect(payload)
+        collect(project.get('pipeline', {}).get('previous_review'))
+        for relative, payload in stored:
+            write_sanitized(relative, payload)
+        project['checkpoints']['plan_sha256'] = sha(work / plan_relative)
+        for unit in plan['units']:
+            record = project['checkpoints']['units'][unit['id']]
+            record['candidate_sha256'] = sha(work / record['candidate_path'])
+            record['review_sha256'] = sha(work / record['review_path'])
+        project['pipeline']['candidate_sha256'] = sha(work / 'preparation' / 'checkpoint-candidate-2.json')
+        project['pipeline']['previous_review'] = sanitize(project['pipeline'].get('previous_review'))
+        app.write(work / 'project.json', project)
+        seen = {}
+
+        def source_ok(saved):
+            root = Path(saved['source']['root'])
+            app.require(app.git(root, 'rev-parse', 'HEAD') == saved['source']['commit'], 'Pinned source commit changed')
+            app.require(not app.git(root, 'status', '--porcelain'), 'Source checkout is not clean')
+            app.require(app.git(app.FRAMEWORK, 'rev-parse', 'HEAD') == saved['framework_commit'], 'Framework revision changed')
+            return root
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            seen[role] = len(message.encode())
+            seen[role + '_components'] = {key: len(json.dumps(value).encode()) for key, value in context.items()}
+            if role == 'executor':
+                self.assertNotIn('reviewed_evidence_units', context)
+                self.assertNotIn('rejected_specification', context['candidate_correction'])
+                section = context['candidate_correction']['focus']['sections']['data']
+                return {'kind': 'correction', 'base_sha256': context['candidate_correction']['base_sha256'], 'edits': [{
+                    'op': 'replace_text', 'target': 'section', 'id': 'data', 'field': 'specification',
+                    'text': section['specification']}]}
+            plan_now, capsules = cp.verified_capsules(work, app.read(work / 'project.json'), app)
+            cp.validate_synthesis(context['candidate'], capsules, plan_now)
+            seen['validated_before_review'] = True
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Sanitized review passed', 'findings': []}
+
+        def real_git(root, *args):
+            result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True)
+            app.require(result.returncode == 0, 'Git inspection failed')
+            return result.stdout.strip()
+
+        import reframe_models
+        reports = []
+        with patch.object(app, 'git', side_effect=real_git), \
+                patch.object(app.kw, 'git', side_effect=real_git), \
+                patch.object(pilot, 'git', side_effect=real_git), \
+                patch.object(app.kw, 'source_ok', source_ok), \
+                patch.object(reframe_models, 'claude_uses_api_key', return_value=False), \
+                patch.object(app, 'model_call', runtime), \
+                patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            code = app.main(['--workspace', str(work), 'resume'], reporter=reports.append)
+        detail = ''
+        if code != 0 and reports:
+            saved = json.loads((work / 'project.json').read_text())
+            event = next((item.get('reason') for item in reversed(saved.get('events') or []) if item.get('reason')), '')
+            detail = str(reports[-1].get('status')) + ' ' + str(reports[-1].get('reason') or '')[:160] + ' event=' + str(event)[:200]
+        self.assertEqual(code, 0, detail + ' correction=' + str(seen.get('executor')) + ' reviewer=' + str(seen.get('reviewer')))
+        self.assertTrue(seen['validated_before_review'])
+        self.assertLess(seen['executor'], 600000)
+        self.assertLess(seen['reviewer'], 600000)
+        self.assertLess(seen['executor_components']['candidate_correction'], seen['reviewer_components']['candidate'])

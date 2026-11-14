@@ -1,4 +1,5 @@
 """Bounded, independently reviewed evidence units. No cloud or model calls in planning."""
+import copy
 import json
 import re
 from pathlib import Path
@@ -444,15 +445,157 @@ def inspected_source_paths(spec):
 
 
 SYNTHESIS_CORRECTION = (
-    'Return a complete corrected candidate. rejected_specification is the assembled candidate. '
-    'review_findings are the latest reviewer findings. Change only what those findings require. '
-    'Section and work-item mappings exist only in rule_ids arrays. '
+    'Return {"kind":"correction","edits":[...]} . Do not return the saved specification. '
+    'The controller keeps that specification and applies only these edits. '
+    'set_rule_ids targets a section or work_item and lists known source rule ids. '
+    'replace_text targets a section specification or implementation_prompt. '
     'Do not infer a mapping from prose, titles, or similar rule names. '
     'A rule omitted from rule_ids stays an honest gap. '
-    'Do not invent a source path for assessment evidence. '
-    'Preserve every open question exactly. '
-    'When cited evidence disagrees, keep the conflict as an open question and do not choose an authoritative layout.'
+    'Do not change questions, rules, tests, or assessment evidence. '
+    'When cited evidence disagrees, keep the conflict open and do not choose an authoritative layout. '
+    'Named review ids are included in full. evidence_index lists every other saved finding and question id. '
+    'Request one of those ids with {"kind":"correction_read","ids":["ID"]} rather than guessing its text. '
+    'Echo base_sha256 from this request. A different hash is rejected and the saved specification stays unchanged.'
 )
+
+
+def _tokens(text, known):
+    """Exact ids named in text. A shorter id inside a longer id does not match."""
+    if not isinstance(text, str) or not text:
+        return set()
+    return {ident for ident in known
+            if ident and re.search(r'(?<![A-Za-z0-9-])' + re.escape(ident) + r'(?![A-Za-z0-9-])', text)}
+
+
+def review_text(finding):
+    """The reviewer fields that can name a section, work item, rule, or question."""
+    if not isinstance(finding, dict):
+        return ''
+    return '\n'.join(str(finding.get(key) or '') for key in ('id', 'area', 'target', 'statement', 'problem', 'issue', 'required_action', 'required_change'))
+
+
+def correction_focus(spec, capsules, findings):
+    """The records a correction may change, plus full evidence for ids the review names.
+
+    Every saved finding and question id stays in evidence_index. Unnamed statements
+    stay in the unit files; they are not shortened and they are not treated as absent.
+    """
+    sections = spec.get('sections') if isinstance(spec.get('sections'), dict) else {}
+    work_items = [item for item in spec.get('work_items') or [] if isinstance(item, dict)]
+    rules = [rule for rule in spec.get('rules') or [] if isinstance(rule, dict)]
+    questions = [item for item in spec.get('questions') or [] if isinstance(item, dict)]
+    known = set(sections) | {item.get('id') for item in work_items + rules + questions if isinstance(item.get('id'), str)}
+    named = set()
+    areas = set()
+    for finding in findings or []:
+        named |= _tokens(review_text(finding), known)
+        if isinstance(finding, dict) and finding.get('area') in sections:
+            areas.add(finding['area'])
+    named |= areas
+    focus_sections = {name: sections[name] for name in sections if name in named or name in areas}
+    focus_items = [item for item in work_items if item.get('id') in named]
+    focus_rules = [rule for rule in rules if rule.get('id') in named]
+    focus_questions = [item for item in questions if item.get('id') in named]
+    evidence = []
+    index = []
+    for capsule in capsules or []:
+        checkpoint = capsule.get('checkpoint') or {}
+        finding_ids, question_ids = [], []
+        for finding in checkpoint.get('findings') or []:
+            if not isinstance(finding, dict) or not isinstance(finding.get('id'), str):
+                continue
+            finding_ids.append(finding['id'])
+            if finding['id'] in named:
+                evidence.append({'unit': capsule.get('unit'), 'finding': finding})
+        for question in checkpoint.get('questions') or []:
+            if not isinstance(question, dict) or not isinstance(question.get('id'), str):
+                continue
+            question_ids.append(question['id'])
+            if question['id'] in named and question['id'] not in {item.get('id') for item in focus_questions}:
+                focus_questions.append(question)
+        index.append({'unit': capsule.get('unit'), 'finding_ids': finding_ids, 'question_ids': question_ids})
+    return {
+        'sections': focus_sections,
+        'work_items': focus_items,
+        'rules': focus_rules,
+        'questions': focus_questions,
+        'evidence': evidence,
+        'evidence_index': index,
+        'context_notice': 'evidence_index names every saved checkpoint finding and question. '
+                          'Full text is included for ids named by the latest review. '
+                          'Other statements remain in the saved unit files and were not shortened.',
+    }
+
+
+def evidence_by_ids(capsules, ids):
+    """Full checkpoint findings and questions for an explicit id list. Unknown ids are rejected."""
+    wanted = set(ids)
+    found = []
+    for capsule in capsules or []:
+        checkpoint = capsule.get('checkpoint') or {}
+        for collection in ('findings', 'questions'):
+            for record in checkpoint.get(collection) or []:
+                if isinstance(record, dict) and record.get('id') in wanted:
+                    found.append({'unit': capsule.get('unit'), collection: record})
+                    wanted.discard(record['id'])
+    require(not wanted, 'Correction read names an unknown id: ' + ', '.join(sorted(wanted)))
+    return found
+
+
+def apply_synthesis_edits(spec, edits):
+    """Apply allowlisted section and work-item edits. Questions, rules, tests, and evidence stay put."""
+    require(isinstance(edits, list) and edits, 'Correction needs at least one edit')
+    require(len(edits) <= 40, 'Correction has too many edits')
+    rules = {rule.get('id') for rule in spec.get('rules') or [] if isinstance(rule, dict) and isinstance(rule.get('id'), str)}
+    sections = spec.get('sections') if isinstance(spec.get('sections'), dict) else {}
+    before = {key: copy.deepcopy(spec.get(key)) for key in ('questions', 'rules', 'tests', 'assessment_evidence')}
+    prepared = []
+    seen = set()
+    for edit in edits:
+        require(isinstance(edit, dict), 'Correction edit must be an object')
+        op, target, ident = edit.get('op'), edit.get('target'), edit.get('id')
+        require(op in {'set_rule_ids', 'replace_text'}, 'Unsupported correction edit')
+        require(target in {'section', 'work_item'}, 'Unsupported correction target')
+        require(isinstance(ident, str) and ident.strip(), 'Correction edit needs an id')
+        if op == 'set_rule_ids':
+            require(set(edit) == {'op', 'target', 'id', 'rule_ids'}, 'Correction edit changes an unauthorized field')
+            values = edit.get('rule_ids')
+            require(isinstance(values, list) and all(isinstance(item, str) and item.strip() for item in values),
+                    'Correction rule_ids must list known rule ids')
+            require(set(values) <= rules, 'Correction rule_ids must name saved source rules')
+            if target == 'section':
+                require(isinstance(sections.get(ident), dict), 'Correction names an unknown section')
+            else:
+                require(any(isinstance(row, dict) and row.get('id') == ident for row in spec.get('work_items') or []),
+                        'Correction names an unknown work item')
+            key = ('set_rule_ids', target, ident)
+            require(key not in seen, 'Correction edits conflict')
+            seen.add(key)
+            prepared.append((op, target, ident, list(values), None))
+            continue
+        require(set(edit) == {'op', 'target', 'id', 'field', 'text'}, 'Correction edit changes an unauthorized field')
+        require(target == 'section', 'Only a section text edit is supported')
+        field = edit.get('field')
+        text = edit.get('text')
+        require(field in {'specification', 'implementation_prompt'}, 'Unsupported section field')
+        require(isinstance(text, str) and text.strip() and len(text.encode()) <= 8000, 'Section text edit is missing or too large')
+        require(isinstance(sections.get(ident), dict), 'Correction names an unknown section')
+        key = ('replace_text', ident, field)
+        require(key not in seen, 'Correction edits conflict')
+        seen.add(key)
+        prepared.append((op, target, ident, field, text))
+    for op, target, ident, first, second in prepared:
+        if op == 'set_rule_ids':
+            if target == 'section':
+                sections[ident]['rule_ids'] = first
+            else:
+                item = next(row for row in spec.get('work_items') or [] if isinstance(row, dict) and row.get('id') == ident)
+                item['rule_ids'] = first
+            continue
+        sections[ident][first] = second
+    for key, value in before.items():
+        require(spec.get(key) == value, 'Correction changed ' + key)
+    return spec
 
 
 def explicit_rule_ids(value, removed):

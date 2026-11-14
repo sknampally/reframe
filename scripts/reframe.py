@@ -1201,6 +1201,25 @@ def assessment_catalog(run):
     return result
 
 
+def context_component_sizes(context):
+    """UTF-8 size of each top-level context value, plus the encoded total."""
+    sizes = {key: len(json.dumps(value).encode()) for key, value in context.items()}
+    return sizes, len(json.dumps(context).encode())
+
+
+def context_budget_error(context, limit):
+    """Name every component when a request cannot be sent. Nothing is dropped to make it fit."""
+    sizes, total = context_component_sizes(context)
+    parts = ', '.join(f'{name}={size}' for name, size in sorted(sizes.items(), key=lambda item: item[1], reverse=True))
+    error = Blocked(f'Preparation context is {total} bytes and the limit is {limit}. Components: {parts}.')
+    error.components = sizes
+    error.context_bytes = total
+    error.hint = ('The saved specification and checkpoint evidence stay on disk. '
+                  'A synthesis correction sends the review findings and the records they name, not a second copy of every rule. '
+                  'Resume retries that correction. Calls and passed units stay unchanged.')
+    return error
+
+
 def bounded_preparation_context(context, limit):
     """Retain recent verbatim reads; explicitly index older reads instead of silently truncating."""
     context = dict(context)
@@ -1213,10 +1232,11 @@ def bounded_preparation_context(context, limit):
         omitted.append({'request':entry['request'], 'files':[{'area':x['area'],'path':x['path']}
                          for x in entry.get('response', [])]})
         context['earlier_reads'] = omitted
-        context['context_notice'] = 'Earlier read bodies were omitted to fit the context limit. Their full receipts remain saved. Request exact ranges again when needed; omission is not evidence.'
-    message = json.dumps(context)
-    require(len(message.encode()) <= limit, 'Preparation catalog/candidate exceeds context limit')
-    return message
+        if not context.get('context_notice'):
+            context['context_notice'] = 'Earlier read bodies were omitted to fit the context limit. Their full receipts remain saved. Request exact ranges again when needed; omission is not evidence.'
+    if len(json.dumps(context).encode()) > limit:
+        raise context_budget_error(context, limit)
+    return json.dumps(context)
 
 
 def preparation_plan(work, project, args):
@@ -1334,6 +1354,22 @@ def displayed_synthesis_reason(work, project):
     return cp.synthesis_pause_reason(review)
 
 
+def unused_synthesis_correction(state, area):
+    """True when a correction was reserved but the provider has not been called."""
+    if state.get('role') != 'executor' or not state.get('limit_corrections'):
+        return False
+    path = Path(area) / f'reply-{state.get("calls") or 0}.json'
+    if not path.is_file():
+        return False
+    reply = read(path)
+    return isinstance(reply, dict) and reply.get('kind') == 'review'
+
+
+def pause_unsent_correction(state, error):
+    """Record a request that was not sent. The reserved correction, calls, and history stay."""
+    state['reason'] = str(error)
+
+
 def attach_synthesis_correction(context, work, state, capsules, plan):
     """Pass the assembled candidate and the latest review findings to one synthesis correction."""
     if not capsules:
@@ -1358,17 +1394,23 @@ def attach_synthesis_correction(context, work, state, capsules, plan):
         return
     cp.complete_synthesis(assembled, capsules, plan)
     findings = cp.review_defects(review)
+    focus = cp.correction_focus(assembled, capsules, findings)
+    # The canonical specification stays on disk. The model edits the named parts.
+    context.pop('reviewed_evidence_units', None)
+    base_sha256 = state.get('candidate_sha256')
     current = context.get('candidate_correction')
-    if isinstance(current, dict):
+    if isinstance(current, dict) and 'rejected_specification' in current:
         current['review_findings'] = findings
-        current['rejected_specification'] = assembled
+        current['focus'] = focus
+        current['base_sha256'] = base_sha256
         current.setdefault('instruction', cp.SYNTHESIS_CORRECTION)
         return
     context['candidate_correction'] = {
         'error': 'Synthesis review returned REWORK',
         'instruction': cp.SYNTHESIS_CORRECTION,
-        'rejected_specification': assembled,
         'review_findings': findings,
+        'focus': focus,
+        'base_sha256': base_sha256,
     }
 
 
@@ -1447,6 +1489,11 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         require(len(capsules) == len(plan['units']), 'Every evidence unit needs independent review before synthesis')
         checkpoint_paths = {p['path'] for u in plan['units'] for p in u['segments'] if p['area'] == 'source' and not p.get('opaque')}
     check_provider_refusals(area)
+    if (capsules and state.get('role') == 'executor' and not isinstance(state.get('previous_review'), dict)
+            and (project.get('checkpoints') or {}).get('status') == 'READY_FOR_SYNTHESIS'):
+        review = latest_synthesis_review(work, project)
+        if isinstance(review, dict) and review.get('decision') == 'REWORK':
+            state['previous_review'] = review
     artifact_prefix = 'checkpoint-' if capsules else ''
     previous_signature, repeated_results = None, 0
     while kw.within_call_limit(project['settings'], state['calls']):
@@ -1531,11 +1578,25 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         if state.get('previous_review'):
             context['previous_review'] = state['previous_review']
         # Reviewed units are larger than one program. Synthesis may use the model window above the per-unit cap.
-        message = bounded_preparation_context(context, 600000 if capsules else project['settings']['max_context_bytes'])
-        require_stage_contract(work, 'task')
-        if role == 'reviewer':
-            require_stage_contract(work, 'review')
-        require_dollar_cap(project, role)
+        try:
+            message = bounded_preparation_context(context, 600000 if capsules else project['settings']['max_context_bytes'])
+            require_stage_contract(work, 'task')
+            if role == 'reviewer':
+                require_stage_contract(work, 'review')
+            require_dollar_cap(project, role)
+        except Blocked as error:
+            if capsules and unused_synthesis_correction(state, area):
+                pause_unsent_correction(state, error)
+                persist(work, project)
+                return {'status': 'CONTEXT_LIMIT', 'reason': str(error), 'calls': state['calls'],
+                        'context_bytes': getattr(error, 'context_bytes', None),
+                        'components': getattr(error, 'components', None),
+                        'hint': getattr(error, 'hint', None),
+                        'limit_corrections': state.get('limit_corrections'),
+                        'round': state.get('round'), 'role': state.get('role'),
+                        'next_step': 'reframe resume'}
+            raise
+        state.pop('reason', None)
         state['calls'] += 1
         run['model_calls'] = state['calls']
         project['stage'] = 'RUNNING_' + role.upper()
@@ -1572,10 +1633,61 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                     raise
                 history.append({'request':reply, 'response':[], 'read_error':str(error)})
             state['reads'] = run['role_reads']
+        elif role == 'executor' and reply.get('kind') == 'correction_read':
+            ids = reply.get('ids')
+            require(isinstance(ids, list) and ids and all(isinstance(item, str) for item in ids),
+                    'Correction read must name one or more saved ids')
+            found = cp.evidence_by_ids(capsules, ids)
+            require(len(json.dumps(found).encode()) <= 600000, 'Correction read exceeds context limit')
+            history.append({'request': reply, 'response': found})
         elif reply.get('kind') == 'blocked':
             state['status'], project['stage'] = 'BLOCKED', 'BLOCKED'
             state['reason'] = reply.get('reason', 'Evidence missing')
             break
+        elif role == 'executor' and reply.get('kind') == 'correction':
+            require(capsules, 'Correction edits require reviewed evidence units')
+            require(state['reads'].get(key) or checkpoint_paths, 'Executor must inspect source')
+            canonical = None
+            for number_in_reply in range(state['calls'] - 1, 0, -1):
+                saved_reply = area / f'reply-{number_in_reply}.json'
+                if not saved_reply.is_file():
+                    continue
+                prior = read(saved_reply)
+                if prior.get('kind') == 'candidate' and isinstance(prior.get('specification'), dict):
+                    canonical = copy.deepcopy(prior['specification'])
+                    break
+            require(canonical is not None, 'Correction needs the saved specification')
+            edits = reply.get('edits')
+            cp.complete_synthesis(canonical, capsules, plan)
+            try:
+                expected = state.get('candidate_sha256')
+                require(isinstance(reply.get('base_sha256'), str) and reply.get('base_sha256') == expected,
+                        'Correction base candidate is stale')
+                require(any(sha(path) == expected for path in area.glob(f'{artifact_prefix}candidate-*.json')),
+                        'Correction base candidate is stale')
+                cp.apply_synthesis_edits(canonical, edits)
+                cp.complete_synthesis(canonical, capsules, plan)
+                validate_spec(canonical, Path(project['source']['root']))
+                cp.validate_synthesis(canonical, capsules, plan)
+                cited = cp.inspected_source_paths(canonical)
+                require(cited <= checkpoint_paths, 'Executor must inspect every rule source file')
+                reply = {'kind': 'candidate', 'specification': canonical, 'edits': edits, 'base_sha256': expected}
+                write(area / f'reply-{state["calls"]}.json', reply)
+            except Blocked as error:
+                write(area / f'reply-{state["calls"]}.json', {'kind': 'correction', 'edits': edits if isinstance(edits, list) else []})
+                project.setdefault('events', []).append({'event': 'candidate_validation_failed',
+                    'at': time.time(), 'call': state['calls'], 'reason': str(error)})
+                state['invalid_candidates'] = state.get('invalid_candidates', 0) + 1
+                if state['invalid_candidates'] >= 3:
+                    state.update(status='BLOCKED', reason='Three invalid synthesis candidates; inspect validation feedback')
+                    project['stage'] = 'BLOCKED'
+                    break
+                persist(work, project)
+                continue
+            state['invalid_candidates'] = 0
+            write(area / f'{artifact_prefix}candidate-{number}.json', canonical)
+            state['candidate_sha256'] = sha(area / f'{artifact_prefix}candidate-{number}.json')
+            state['role'] = 'reviewer'
         elif role == 'executor' and reply.get('kind') == 'candidate':
             require(state['reads'].get(key) or checkpoint_paths, 'Executor must inspect source')
             require(any(x['request'].get('area') == 'assessment' and x.get('response') for x in history) or capsules, 'Executor must inspect assessment findings')
@@ -2285,7 +2397,7 @@ def main(argv=None, reporter=None):
         if project is not None and 'next_step' not in result:
             result['next_step'] = next_step(project)
         emit(result)
-        return 2 if result.get('status') in {'BLOCKED', 'REWORK_LIMIT', 'ASSESSMENT_FAILED', 'NEEDS_RECONCILIATION'} else 0
+        return 2 if result.get('status') in {'BLOCKED', 'REWORK_LIMIT', 'CONTEXT_LIMIT', 'ASSESSMENT_FAILED', 'NEEDS_RECONCILIATION'} else 0
     except KeyboardInterrupt:
         result = {'status': 'CANCELLED', 'reason': 'Cancelled by user. Saved work is retained.',
                   'next_step': 'reframe init' if args.command == 'init' else 'reframe status'}

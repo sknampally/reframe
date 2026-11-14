@@ -427,20 +427,21 @@ errors for private troubleshooting and safe reconciliation.
 
 ### Applying a controller fix during an assessment
 
-Stop the local watcher before updating Reframe; the AWS job remains intact. Menu **1** asks for a note and runs this update before approval when the checkout has moved. From a
-clean committed framework checkout, before a preparation candidate or downstream approval exists, you can also run:
+Stop the local watcher before updating Reframe; the AWS job remains intact. Menu **1** asks for a note and runs this update before approval when the checkout has moved. After the fix is reviewed and merged, start from a clean committed checkout of that revision, reinstall, then record the new revision:
 
 ```bash
-reframe upgrade-framework --note "Describe the controller fix being applied"
-reframe resume --wait
+git checkout main
+git pull origin main
+uv tool install --force --reinstall --managed-python --python 3.12 --editable .
+reframe upgrade-framework --note "Record the reviewed controller fix"
+reframe status
+reframe resume
 ```
 
-When that release also changes the preparation prompts, `upgrade-framework` stops
-before it writes anything and `resume` still reports `Run pin changed: prompt_hash`.
-Authorize the prompt change explicitly, then resume:
+A prompt migration recorded for an earlier revision does not authorize this framework commit. `upgrade-framework` records the checkout you just installed. When that release also changes the preparation prompts, `upgrade-framework` stops before it writes anything and `resume` still reports `Run pin changed: prompt_hash`. Adopt the prompts explicitly, then resume:
 
 ```bash
-reframe upgrade-framework --note "Adopt the synthesis prompt changes for this saved review" --adopt-prompts
+reframe upgrade-framework --note "Adopt the preparation prompt changes for this saved review" --adopt-prompts
 reframe status
 reframe resume
 ```
@@ -457,7 +458,7 @@ new assessment.
 
 This validates source integrity and records the old and new framework revisions in
 both project and run history. It preserves job identity, evidence and mutation
-receipts. It refuses upgrades after a preparation candidate or downstream approval, or while job creation is uncertain. An existing assessment approval is retained only after verifying its exact evidence fingerprint and original files.
+receipts. It refuses the upgrade after the specification is saved on the project, after a downstream approval, or while job creation is uncertain. A saved synthesis candidate that has not passed review can still record the new revision. An existing assessment approval is retained only after verifying its exact evidence fingerprint and original files.
 It does not change the assessment scope or approve findings. A run with such an
 upgrade must disclose that it used multiple controller revisions.
 
