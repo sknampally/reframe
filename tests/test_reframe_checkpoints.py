@@ -2,11 +2,13 @@ import argparse
 import copy
 import json
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 import test_reframe as fixtures
 import reframe as app
+import reframe_artifacts as artifacts
 import reframe_checkpoints as cp
 from pilot import Blocked, sha
 
@@ -975,3 +977,343 @@ class CheckpointTests(unittest.TestCase):
             self.assertEqual([row for row in seen if row[0] == ident], [
                 (ident, 'executor', claims[ident].replace('only for two named cases', 'for two named cases and the blank branch')),
                 (ident, 'reviewer', claims[ident].replace('only for two named cases', 'for two named cases and the blank branch'))])
+
+    def test_assessment_only_findings_keep_citation_provenance(self):
+        question = {'id': 'U0020-Q1', 'question': 'Who owns the cutoff?',
+                    'impact': 'The batch decision stays blocked.', 'owner': 'SME', 'blocks': 'Batch approval'}
+        plan = {'units': [
+            {'id': 'U0020', 'segments': [{'area': 'assessment', 'path': 'batch.json'}]},
+            {'id': 'U0086', 'segments': [{'area': 'source', 'path': 'rule.cbl'}, {'area': 'assessment', 'path': 'screen.json'}]},
+            {'id': 'U0018', 'segments': [{'area': 'source', 'path': 'rule.cbl'}]},
+            {'id': 'U0001', 'segments': [{'area': 'source', 'path': 'rule.cbl'}]},
+        ]}
+        capsules = [
+            {'unit': 'U0020', 'checkpoint': {'findings': [{
+                'id': 'U0020-F2', 'kind': 'business_rule', 'statement': 'The batch report names an inferred cutoff.',
+                'status': 'INFERRED', 'citations': [{'area': 'assessment', 'path': 'batch.json', 'start': 33, 'end': 33}]}],
+                'questions': [question]}},
+            {'unit': 'U0086', 'checkpoint': {'findings': [{
+                'id': 'U0086-F8', 'kind': 'business_rule', 'statement': 'The screen report names an inferred field.',
+                'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'assessment', 'path': 'screen.json', 'start': 7, 'end': 7}]}],
+                'questions': []}},
+            {'unit': 'U0018', 'checkpoint': {'findings': [{
+                'id': 'U0018-F8', 'kind': 'assessment_claim', 'statement': 'The transaction report restates a source range.',
+                'status': 'INFERRED', 'citations': [{'area': 'source', 'path': 'rule.cbl', 'start': 1, 'end': 1}]}],
+                'questions': []}},
+            {'unit': 'U0001', 'checkpoint': {'findings': [{
+                'id': 'U0001-F1', 'kind': 'business_rule', 'statement': 'Reject a zero amount.',
+                'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'source', 'path': 'rule.cbl', 'start': 1, 'end': 1}]}],
+                'questions': []}},
+        ]
+        spec = self.spec()
+        spec['rules'].append({'id': 'U0020-F2', 'statement': 'invented source claim', 'source_path': 'rule.cbl',
+                              'source_anchor': 'lines 1-1', 'evidence_status': 'SOURCE_VERIFIED'})
+        spec['rules'].append({'id': 'U0001-F1', 'statement': 'Reject a zero amount.', 'source_path': 'other.cbl',
+                              'source_anchor': 'lines 9-9', 'evidence_status': 'UNKNOWN'})
+        cp.complete_synthesis(spec, capsules, plan)
+        ids = {rule['id'] for rule in spec['rules']}
+        self.assertIn('R1', ids)
+        self.assertIn('U0001-F1', ids)
+        self.assertNotIn('U0020-F2', ids)
+        self.assertNotIn('U0086-F8', ids)
+        self.assertNotIn('U0018-F8', ids)
+        corrected = next(rule for rule in spec['rules'] if rule['id'] == 'U0001-F1')
+        self.assertEqual(corrected['source_path'], 'rule.cbl')
+        self.assertEqual(corrected['source_anchor'], 'lines 1-1')
+        self.assertEqual(corrected['evidence_status'], 'SOURCE_VERIFIED')
+        evidence = {record['id']: record for record in spec['assessment_evidence']}
+        self.assertEqual(evidence['U0020-F2']['assessment_path'], 'batch.json')
+        self.assertEqual(evidence['U0020-F2']['assessment_anchor'], 'lines 33-33')
+        self.assertNotIn('source_path', evidence['U0020-F2'])
+        self.assertEqual(evidence['U0020-F2']['evidence_status'], 'INFERRED')
+        self.assertEqual(evidence['U0086-F8']['evidence_status'], 'INFERRED')
+        self.assertNotIn('source_path', evidence['U0086-F8'])
+        self.assertEqual(evidence['U0018-F8']['source_path'], 'rule.cbl')
+        self.assertNotIn('assessment_path', evidence['U0018-F8'])
+        self.assertNotIn('U0020-F2-accept', {case['id'] for case in spec['tests']})
+        self.assertEqual(cp.assembly_gaps(capsules, plan), [])
+        cp.validate_synthesis(spec, capsules, plan)
+        artifacts.validate_spec(spec, self.source)
+        missing = [{'unit': 'U0099', 'checkpoint': {'findings': [{
+            'id': 'U0099-F1', 'kind': 'business_rule', 'statement': 'No citation was saved.',
+            'status': 'INFERRED', 'citations': []}], 'questions': []}}]
+        gaps = cp.assembly_gaps(missing, {'units': [{'id': 'U0099', 'segments': []}]})
+        self.assertEqual(gaps, [{'id': 'U0099-F1', 'missing': ['source_path', 'assessment_path']}])
+        self.assertIn('U0099-F1 missing source_path, assessment_path', cp.assembly_gap_reason(gaps))
+
+    def test_incomplete_assembly_stops_before_a_model_call(self):
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = app.read(plan_path)
+        area = self.work / 'preparation'
+        units = {}
+        for unit in plan['units']:
+            ident = unit['id']
+            if ident == 'U0001':
+                candidate = {'kind': 'checkpoint', 'summary': 'saved', 'coverage': [], 'questions': [],
+                             'findings': [{'id': 'U0001-F1', 'kind': 'business_rule', 'statement': 'A cutoff is claimed.',
+                                           'status': 'INFERRED', 'citations': []}]}
+            else:
+                candidate = {'kind': 'checkpoint', 'summary': 'passed', 'findings': [], 'questions': [], 'coverage': []}
+            review = {'kind': 'review', 'decision': 'PASS', 'report': 'passed', 'findings': []}
+            candidate_path = area / ('saved-' + ident + '-candidate.json')
+            review_path = area / ('saved-' + ident + '-review.json')
+            app.write(candidate_path, candidate)
+            app.write(review_path, review)
+            units[ident] = {'status': 'PASS', 'attempt': 1, 'role': 'reviewer',
+                            'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                            'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path)}
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['settings']['max_model_calls'] = None
+        self.project['pipeline'].update(calls=296, status='BLOCKED', role='executor',
+                                         reason='Three invalid synthesis candidates; inspect validation feedback')
+        self.project['stage'] = 'BLOCKED'
+        app.persist(self.work, self.project)
+        passed = copy.deepcopy(units)
+        approvals = copy.deepcopy(self.project['approvals'])
+        label = self.project['selected']
+        assessment_sha = self.project['assessments'][label]['sha256']
+
+        def runtime(*_args):
+            raise AssertionError('model call')
+
+        with patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            result = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(result['status'], 'BLOCKED')
+        self.assertEqual(result['calls'], 296)
+        self.assertEqual(result['gaps'], [{'id': 'U0001-F1', 'missing': ['source_path', 'assessment_path']}])
+        self.assertIn('U0001-F1 missing source_path, assessment_path', result['reason'])
+        self.assertEqual(self.project['pipeline']['calls'], 296)
+        self.assertEqual(self.project['checkpoints']['units'], passed)
+        self.assertEqual(self.project['approvals'], approvals)
+        self.assertEqual(self.project['assessments'][label]['sha256'], assessment_sha)
+
+    def test_saved_valid_assembly_reaches_review_without_another_executor_call(self):
+        self.plan()
+        plan = app.read(self.work / self.project['checkpoints']['plan_path'])
+        area = self.work / 'preparation'
+        units = {}
+        for unit in plan['units']:
+            ident = unit['id']
+            candidate = {'kind': 'checkpoint', 'summary': 'passed', 'findings': [], 'questions': [], 'coverage': []}
+            review = {'kind': 'review', 'decision': 'PASS', 'report': 'passed', 'findings': []}
+            candidate_path = area / ('saved-' + ident + '-candidate.json')
+            review_path = area / ('saved-' + ident + '-review.json')
+            app.write(candidate_path, candidate)
+            app.write(review_path, review)
+            units[ident] = {'status': 'PASS', 'attempt': 1, 'role': 'reviewer',
+                            'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                            'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path)}
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['settings']['max_model_calls'] = None
+        self.project['pipeline'].update(calls=296, status='BLOCKED', role='executor', round=1,
+                                         reason='Three invalid synthesis candidates; inspect validation feedback')
+        self.project['stage'] = 'BLOCKED'
+        app.write(area / 'reply-296.json', {'kind': 'candidate', 'specification': self.spec()})
+        app.persist(self.work, self.project)
+        passed = copy.deepcopy(units)
+        approvals = copy.deepcopy(self.project['approvals'])
+        roles = []
+
+        def runtime(provider, run, directory, role, message):
+            roles.append(role)
+            context = json.loads(message)
+            self.assertIn('assessment_evidence', context['candidate'])
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Assembled candidate keeps assessment evidence apart from source rules', 'findings': []}
+
+        with patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            result = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(result['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.assertEqual(roles, ['reviewer'])
+        self.assertEqual(self.project['pipeline']['calls'], 297)
+        self.assertEqual(self.project['checkpoints']['units'], passed)
+        self.assertEqual(self.project['approvals'], approvals)
+        saved = app.read(self.work / self.project['specification']['path'])
+        self.assertIn('assessment_evidence', saved)
+        self.assertTrue(saved['rules'])
+
+    def test_failed_synthesis_feedback_uses_the_assembled_candidate(self):
+        self.plan()
+        seen = []
+        held = {}
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if 'unit_id' in context or role != 'executor':
+                return self.runtime(provider, run, directory, role, message)
+            seen.append(context)
+            reply = self.runtime(provider, run, directory, role, message)
+            if len(seen) == 1:
+                reply['specification']['scope'] = ' '
+                return reply
+            rejected = context['candidate_correction']['rejected_specification']
+            held['rejected'] = rejected
+            self.assertTrue(rejected['rules'])
+            self.assertIn('assessment_evidence', rejected)
+            self.assertTrue(any(record.get('kind') == 'assessment_claim' for record in rejected['assessment_evidence']))
+            self.assertNotIn('reframe assess', context['candidate_correction']['instruction'])
+            return reply
+
+        result = app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(result['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.assertGreaterEqual(len(seen), 2)
+        evidence = {record['id']: record for record in held['rejected']['assessment_evidence']}
+        self.assertTrue(evidence)
+        for record in evidence.values():
+            if not record.get('source_path'):
+                self.assertNotEqual(record.get('evidence_status'), 'SOURCE_VERIFIED')
+        report = (self.work / self.project['preparation_report']['path']).read_text()
+        self.assertIn('Assessment evidence', report)
+        self.assertIn('not source-backed rules', report)
+
+    def test_saved_blocked_synthesis_reviews_the_assembled_candidate(self):
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = app.read(plan_path)
+        segment = plan['units'][0]['segments'][0]
+        source_path = segment['path']
+        assessment_only = {'U0020', 'U0042', 'U0044', 'U0051'}
+        plan['units'] = []
+        for number in range(1, 113):
+            ident = f'U{number:04d}'
+            if ident in assessment_only:
+                segments = [{'area': 'assessment', 'path': 'batch.json', 'start': 1, 'end': 1}]
+            else:
+                segments = [segment]
+            plan['units'].append({'id': ident, 'focus': source_path, 'segments': segments})
+        app.write(plan_path, plan)
+        self.project['checkpoints']['plan_sha256'] = sha(plan_path)
+        area = self.work / 'preparation'
+        units = {}
+        question = {'id': 'U0020-Q1', 'question': 'Who owns the cutoff?', 'impact': 'The batch decision stays blocked.',
+                    'owner': 'SME', 'blocks': 'Batch approval'}
+        for unit in plan['units']:
+            ident = unit['id']
+            findings, questions = [], []
+            if ident in assessment_only:
+                findings.append({'id': ident + '-F2', 'kind': 'business_rule', 'statement': 'The report names an inferred cutoff.',
+                                 'status': 'INFERRED', 'citations': [{'area': 'assessment', 'path': 'batch.json', 'start': 4, 'end': 4}]})
+                if ident == 'U0020':
+                    questions.append(question)
+            elif ident == 'U0086':
+                findings.append({'id': 'U0086-F8', 'kind': 'business_rule', 'statement': 'The screen report names an inferred field.',
+                                 'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'assessment', 'path': 'screen.json', 'start': 7, 'end': 7}]})
+            elif ident == 'U0018':
+                findings.append({'id': 'U0018-F8', 'kind': 'assessment_claim', 'statement': 'The report restates a source range.',
+                                 'status': 'INFERRED', 'citations': [{'area': 'source', 'path': source_path, 'start': 1, 'end': 1}]})
+            else:
+                findings.append({'id': ident + '-F1', 'kind': 'business_rule', 'statement': 'Reject a zero amount.',
+                                 'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'source', 'path': source_path, 'start': 1, 'end': 1}]})
+            candidate = {'kind': 'checkpoint', 'summary': 'passed', 'findings': findings, 'questions': questions, 'coverage': []}
+            review = {'kind': 'review', 'decision': 'PASS', 'report': 'passed', 'findings': []}
+            candidate_path = area / ('saved-' + ident + '-candidate.json')
+            review_path = area / ('saved-' + ident + '-review.json')
+            app.write(candidate_path, candidate)
+            app.write(review_path, review)
+            units[ident] = {'status': 'PASS', 'attempt': 1, 'role': 'reviewer',
+                            'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                            'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path)}
+        self.assertEqual(len(units), 112)
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['settings']['max_model_calls'] = None
+        self.project['pipeline'].update(calls=296, status='BLOCKED', role='executor', round=1, invalid_candidates=3,
+                                         reason='Three invalid synthesis candidates; inspect validation feedback')
+        self.project['stage'] = 'BLOCKED'
+        app.write(area / 'reply-296.json', {'kind': 'candidate', 'specification': self.spec()})
+        app.persist(self.work, self.project)
+        passed = copy.deepcopy(units)
+        approvals = copy.deepcopy(self.project['approvals'])
+        label = self.project['selected']
+        assessment_sha = self.project['assessments'][label]['sha256']
+        seen = {}
+
+        def runtime(provider, run, directory, role, message):
+            self.assertEqual(role, 'reviewer')
+            self.assertEqual(self.project['pipeline']['calls'], 297)
+            context = json.loads(message)
+            seen['candidate'] = context['candidate']
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Assembled candidate keeps assessment evidence apart from source rules', 'findings': []}
+
+        with patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            result = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(result['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.assertEqual(self.project['pipeline']['calls'], 297)
+        self.assertEqual(self.project['checkpoints']['units'], passed)
+        self.assertEqual(self.project['approvals'], approvals)
+        self.assertEqual(self.project['assessments'][label]['sha256'], assessment_sha)
+        candidate = seen['candidate']
+        saved = app.read(self.work / self.project['specification']['path'])
+        self.assertEqual(saved, candidate)
+        evidence = {record['id']: record for record in candidate['assessment_evidence']}
+        self.assertEqual(evidence['U0020-F2']['assessment_path'], 'batch.json')
+        self.assertNotIn('source_path', evidence['U0020-F2'])
+        self.assertEqual(evidence['U0020-F2']['evidence_status'], 'INFERRED')
+        self.assertEqual(evidence['U0086-F8']['evidence_status'], 'INFERRED')
+        self.assertNotIn('source_path', evidence['U0086-F8'])
+        self.assertEqual(evidence['U0018-F8']['source_path'], source_path)
+        self.assertEqual(evidence['U0018-F8']['evidence_status'], 'INFERRED')
+        coverage = {row['id']: row for row in candidate['coverage']}
+        self.assertEqual(coverage['U0020-F2']['disposition'], 'evidence_only')
+        self.assertEqual(coverage['U0020-F2']['assessment_path'], 'batch.json')
+        self.assertEqual(coverage['U0002-F1']['disposition'], 'gap')
+        self.assertIn('section', coverage['U0002-F1']['gaps'])
+        self.assertIn('work_item', coverage['U0002-F1']['gaps'])
+        self.assertNotIn('U0020-F2', {case['rule_id'] for case in candidate['tests']})
+        self.assertFalse(any('U0020-F2' in (item.get('rule_ids') or []) for item in candidate['work_items']))
+        report = (self.work / self.project['preparation_report']['path']).read_text()
+        self.assertIn('batch.json', report)
+        self.assertIn('evidence_only', report)
+        self.assertIn('SOURCE_VERIFIED appears only when a source citation supports it', report)
+
+    def test_assessment_evidence_survives_review_html_traceability_and_package(self):
+        seen = {}
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'reviewer' and 'unit_id' not in context:
+                seen['candidate'] = context['candidate']
+            return self.runtime(provider, run, directory, role, message)
+
+        result = app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(result['status'], 'AWAITING_VALIDATION_APPROVAL')
+        saved = app.read(self.work / self.project['specification']['path'])
+        self.assertEqual(saved['assessment_evidence'], seen['candidate']['assessment_evidence'])
+        self.assertEqual(saved['coverage'], seen['candidate']['coverage'])
+        self.assertTrue(saved['assessment_evidence'])
+        for record in saved['assessment_evidence']:
+            self.assertTrue(record.get('assessment_path') or record.get('source_path'))
+            row = next(item for item in saved['coverage'] if item['id'] == record['id'])
+            self.assertEqual(row['disposition'], 'evidence_only')
+            self.assertEqual(row.get('assessment_path') or '', record.get('assessment_path') or '')
+            self.assertEqual(row.get('source_path') or '', record.get('source_path') or '')
+            if not record.get('source_path'):
+                self.assertNotEqual(record['evidence_status'], 'SOURCE_VERIFIED')
+        report = (self.work / self.project['preparation_report']['path']).read_text()
+        self.assertIn(saved['assessment_evidence'][0]['id'], report)
+        for question in saved['questions']:
+            app.decision(self.work, self.project, self.args(
+                'decide', '--question', question['id'], '--by', 'SME', '--answer', 'Fixture answer', '--disposition', 'resolved'))
+        app.approve(self.work, self.project, self.args('approve', 'validation', '--by', 'Fixture owner', '--note', 'Fixture review'))
+        screens = fixtures.PreparationTests.screens(self)
+        rule_id = saved['rules'][0]['id']
+        for screen in screens['screens']:
+            screen['rule_ids'] = [rule_id]
+        for api in screens['apis']:
+            api['rule_ids'] = [rule_id]
+        app.review_site(self.work, self.project, self.args('review-site'), lambda *args: screens)
+        app.approve(self.work, self.project, self.args('approve', 'specifications', '--by', 'Fixture owner', '--note', 'Fixture review'))
+        packaged = app.package(self.work, self.project)
+        with zipfile.ZipFile(packaged['archive']) as archive:
+            spec = json.loads(archive.read('specification.json'))
+            trace = json.loads(archive.read('traceability.json'))
+            evidence = json.loads(archive.read('assessment-evidence.json'))
+            html = archive.read('sme-architect-review.html').decode()
+        self.assertEqual(evidence, saved['assessment_evidence'])
+        self.assertEqual(spec['assessment_evidence'], saved['assessment_evidence'])
+        self.assertEqual(trace['assessment_evidence'], saved['assessment_evidence'])
+        self.assertEqual(trace['coverage'], saved['coverage'])
+        self.assertIn('evidence_only', html)
+        self.assertIn(saved['assessment_evidence'][0].get('assessment_path') or saved['assessment_evidence'][0]['source_path'], html)

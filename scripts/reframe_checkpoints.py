@@ -317,30 +317,162 @@ def synthesis_view(capsule):
                            'questions': checkpoint.get('questions', [])}}
 
 
-def complete_synthesis(spec, capsules, plan):
-    """Keep every reviewed business rule and the exact SME questions in the candidate."""
-    rules = spec.setdefault('rules', [])
-    present = {rule.get('id') for rule in rules if isinstance(rule, dict)}
-    paths = {unit['id']: [part['path'] for part in unit['segments']
-                          if part['area'] == 'source' and not part.get('opaque')]
-             for unit in plan['units']}
+_STATUSES = {'SOURCE_VERIFIED', 'INFERRED', 'UNKNOWN'}
+
+
+def _allowed_sources(plan):
+    """Source files each unit actually reviewed. An opaque segment is not a usable path."""
+    allowed = {}
+    for unit in plan.get('units') or []:
+        allowed[unit.get('id')] = [part['path'] for part in unit.get('segments') or []
+                                   if part.get('area') == 'source' and not part.get('opaque')
+                                   and isinstance(part.get('path'), str)]
+    return allowed
+
+
+def _citation(finding, area, allowed=None):
+    """The first citation in one area. A source citation must name a file in that unit."""
+    for item in finding.get('citations') or []:
+        if not isinstance(item, dict) or item.get('area') != area:
+            continue
+        path = item.get('path')
+        if not isinstance(path, str) or not path.strip():
+            continue
+        if allowed is not None and path not in allowed:
+            continue
+        return item
+    return None
+
+
+def _anchor(citation):
+    """Line anchor copied from a citation. A missing range stays empty."""
+    if not citation:
+        return ''
+    start, end = citation.get('start'), citation.get('end')
+    if isinstance(start, int) and isinstance(end, int) and start > 0 and end >= start:
+        return f'lines {start}-{end}'
+    return ''
+
+
+def _status(finding, source_backed):
+    """Keep a reviewed status. Assessment text alone is not source-verified."""
+    status = finding.get('status')
+    if status not in _STATUSES:
+        status = 'UNKNOWN'
+    if status == 'SOURCE_VERIFIED' and not source_backed:
+        return 'INFERRED'
+    return status
+
+
+def reviewed_provenance(capsules, plan):
+    """Split reviewed findings into source-backed rules and assessment evidence.
+
+    A path is copied only from a citation. No source file is invented for an
+    assessment-only finding, and an assessment claim is not stored as a source rule.
+    """
+    allowed = _allowed_sources(plan)
+    rules, evidence = [], []
     for capsule in capsules:
-        allowed = paths.get(capsule['unit'], [])
-        for finding in capsule['checkpoint'].get('findings') or []:
-            if finding.get('kind') != 'business_rule' or not finding.get('id') or finding['id'] in present:
+        sources = allowed.get(capsule.get('unit'), [])
+        for finding in (capsule.get('checkpoint') or {}).get('findings') or []:
+            if not isinstance(finding, dict):
                 continue
-            citation = next((item for item in finding.get('citations') or []
-                             if item.get('area') == 'source' and item.get('path') in allowed), {})
-            source_path = citation.get('path') or (allowed[0] if allowed else '')
-            start, end = citation.get('start'), citation.get('end')
-            status = finding.get('status')
-            if status not in {'SOURCE_VERIFIED', 'INFERRED', 'UNKNOWN'}:
-                status = 'UNKNOWN'
-            rules.append({'id': finding['id'], 'statement': finding.get('statement') or finding['id'],
-                          'source_path': source_path,
-                          'source_anchor': f'lines {start}-{end}' if start and end else 'reviewed checkpoint',
-                          'evidence_status': status})
-            present.add(finding['id'])
+            kind = finding.get('kind')
+            if kind not in {'business_rule', 'assessment_claim'} or not finding.get('id'):
+                continue
+            source = _citation(finding, 'source', sources)
+            assessment = _citation(finding, 'assessment')
+            statement = finding.get('statement') if isinstance(finding.get('statement'), str) else ''
+            record = {'id': finding['id'], 'statement': statement,
+                      'evidence_status': _status(finding, bool(source))}
+            if source:
+                record['source_path'] = source['path']
+                record['source_anchor'] = _anchor(source)
+            if assessment:
+                record['assessment_path'] = assessment['path']
+                record['assessment_anchor'] = _anchor(assessment)
+            if kind == 'business_rule' and source:
+                rules.append(record)
+            else:
+                evidence.append({**record, 'kind': kind, 'unit': capsule.get('unit')})
+    return rules, evidence
+
+
+def provenance_gaps(records):
+    """IDs whose assembled provenance is missing a required field."""
+    gaps = []
+    for record in records:
+        if not isinstance(record, dict):
+            gaps.append({'id': '', 'missing': ['id']})
+            continue
+        missing = []
+        if not isinstance(record.get('id'), str) or not record['id'].strip():
+            missing.append('id')
+        if not isinstance(record.get('statement'), str) or not record['statement'].strip():
+            missing.append('statement')
+        if record.get('evidence_status') not in _STATUSES:
+            missing.append('evidence_status')
+        has_source = isinstance(record.get('source_path'), str) and bool(record['source_path'].strip())
+        has_assessment = isinstance(record.get('assessment_path'), str) and bool(record['assessment_path'].strip())
+        if not has_source and not has_assessment:
+            missing.extend(['source_path', 'assessment_path'])
+        if has_source and not (isinstance(record.get('source_anchor'), str) and record['source_anchor'].strip()):
+            missing.append('source_anchor')
+        if has_assessment and not (isinstance(record.get('assessment_anchor'), str) and record['assessment_anchor'].strip()):
+            missing.append('assessment_anchor')
+        if record.get('evidence_status') == 'SOURCE_VERIFIED' and not has_source and 'source_path' not in missing:
+            missing.append('source_path')
+        if missing:
+            gaps.append({'id': record.get('id') or '', 'missing': missing})
+    return gaps
+
+
+def assembly_gaps(capsules, plan):
+    """Provenance gaps in the controller's own assembly. This does not call a model."""
+    rules, evidence = reviewed_provenance(capsules, plan)
+    return provenance_gaps(rules + evidence)
+
+
+def inspected_source_paths(spec):
+    """Source files named by real citations on rules or assessment evidence."""
+    paths = set()
+    for collection in ('rules', 'assessment_evidence'):
+        for record in spec.get(collection) or []:
+            if isinstance(record, dict) and isinstance(record.get('source_path'), str) and record['source_path'].strip():
+                paths.add(record['source_path'])
+    return paths
+
+
+def assembly_gap_reason(gaps):
+    """One reason naming every incomplete assembled record and the fields it lacks."""
+    parts = [str(gap.get('id') or '(missing id)') + ' missing ' + ', '.join(gap.get('missing') or []) for gap in gaps]
+    return 'Incomplete assembled evidence: ' + '; '.join(parts)
+
+
+def complete_synthesis(spec, capsules, plan):
+    """Keep reviewed source rules, assessment evidence, and the exact SME questions."""
+    produced, evidence = reviewed_provenance(capsules, plan)
+    evidence_ids = {record['id'] for record in evidence}
+    rules = [rule for rule in spec.setdefault('rules', [])
+             if not isinstance(rule, dict) or rule.get('id') not in evidence_ids]
+    present = {rule.get('id'): index for index, rule in enumerate(rules) if isinstance(rule, dict)}
+    for record in produced:
+        if record['id'] in present:
+            current = rules[present[record['id']]]
+            current['source_path'] = record['source_path']
+            current['source_anchor'] = record['source_anchor']
+            current['evidence_status'] = record['evidence_status']
+            if not (isinstance(current.get('statement'), str) and current['statement'].strip()):
+                current['statement'] = record['statement']
+            for field in ('assessment_path', 'assessment_anchor'):
+                if field in record:
+                    current[field] = record[field]
+            continue
+        rules.append({field: record[field] for field in
+                      ('id', 'statement', 'source_path', 'source_anchor', 'evidence_status',
+                       'assessment_path', 'assessment_anchor') if field in record})
+    spec['rules'] = rules
+    spec['assessment_evidence'] = evidence
     layout = spec.get('monorepo_layout')
     if isinstance(layout, list):
         spec['monorepo_layout'] = [item if isinstance(item, str) else json.dumps(item, sort_keys=True)
@@ -375,14 +507,93 @@ def complete_synthesis(spec, capsules, plan):
             'then': rule.get('statement') or rule['id'],
             'oracle': 'Compare with ' + rule.get('source_path', '') + ' ' + rule.get('source_anchor', ''),
         })
+    spec['coverage'] = coverage_dispositions(spec)
     return spec
 
 
-def validate_synthesis(spec, capsules):
-    """Reject a specification that drops a rule or question from the reviewed units."""
-    required_rules = {f['id'] for c in capsules for f in c['checkpoint']['findings'] if f['kind'] == 'business_rule'}
+def coverage_dispositions(spec):
+    """Record how each retained rule is traced. Assessment claims stay evidence, not new work."""
+    section_refs, test_refs, work_refs = {}, {}, {}
+    for name, section in (spec.get('sections') or {}).items():
+        if not isinstance(section, dict):
+            continue
+        for ident in section.get('rule_ids') or []:
+            section_refs.setdefault(ident, []).append(name)
+    for case in spec.get('tests') or []:
+        if isinstance(case, dict) and isinstance(case.get('rule_id'), str):
+            test_refs.setdefault(case['rule_id'], []).append(case.get('id'))
+    for item in spec.get('work_items') or []:
+        if isinstance(item, dict):
+            for ident in item.get('rule_ids') or []:
+                work_refs.setdefault(ident, []).append(item.get('id'))
+    rows = []
+    for rule in spec.get('rules') or []:
+        if not isinstance(rule, dict) or not rule.get('id'):
+            continue
+        ident = rule['id']
+        gaps = [name for name, refs in (('section', section_refs), ('test', test_refs), ('work_item', work_refs))
+                if ident not in refs]
+        rows.append({'id': ident, 'kind': 'source_rule', 'disposition': 'gap' if gaps else 'covered', 'gaps': gaps,
+                     'sections': section_refs.get(ident, []), 'tests': test_refs.get(ident, []),
+                     'work_items': work_refs.get(ident, [])})
+    for record in spec.get('assessment_evidence') or []:
+        if not isinstance(record, dict) or not record.get('id'):
+            continue
+        rows.append({'id': record['id'], 'kind': record.get('kind') or 'assessment_evidence',
+                     'disposition': 'evidence_only', 'gaps': [], 'sections': [], 'tests': [], 'work_items': [],
+                     'evidence_status': record.get('evidence_status') or '',
+                     'source_path': record.get('source_path') or '',
+                     'assessment_path': record.get('assessment_path') or ''})
+    return rows
+
+
+def validate_synthesis(spec, capsules, plan):
+    """Reject a specification that drops a rule, assessment finding, or question."""
+    source_rules, evidence = reviewed_provenance(capsules, plan)
+    saved_rules = {rule['id']: rule for rule in spec.get('rules') or [] if isinstance(rule, dict) and rule.get('id')}
+    require({rule['id'] for rule in source_rules} <= set(saved_rules), 'Synthesis omitted checkpoint business rules')
+    for rule in source_rules:
+        saved = saved_rules[rule['id']]
+        require(saved.get('source_path') == rule['source_path'] and saved.get('evidence_status') == rule['evidence_status'],
+                'Synthesis changed source provenance for ' + rule['id'])
+    saved_evidence = {record['id']: record for record in spec.get('assessment_evidence') or []
+                      if isinstance(record, dict) and record.get('id')}
+    require({record['id'] for record in evidence} <= set(saved_evidence), 'Synthesis omitted assessment evidence')
+    require(set(saved_evidence).isdisjoint(saved_rules), 'Assessment evidence was copied into source rules')
+    for record in evidence:
+        saved = saved_evidence[record['id']]
+        require(saved.get('evidence_status') == record['evidence_status']
+                and saved.get('source_path') == record.get('source_path')
+                and saved.get('assessment_path') == record.get('assessment_path'),
+                'Synthesis changed assessment provenance for ' + record['id'])
+    rows = {row['id']: row for row in spec.get('coverage') or [] if isinstance(row, dict) and row.get('id')}
+    for rule in source_rules:
+        row = rows.get(rule['id'])
+        require(row and row.get('kind') == 'source_rule' and row.get('disposition') in {'covered', 'gap'},
+                'Synthesis has no coverage disposition for ' + rule['id'])
+        require(bool(row.get('gaps')) == (row.get('disposition') == 'gap'),
+                'Coverage disposition does not match the gaps for ' + rule['id'])
+    evidence_ids = {record['id'] for record in evidence}
+    linked = set()
+    for section in (spec.get('sections') or {}).values():
+        if isinstance(section, dict):
+            linked.update(section.get('rule_ids') or [])
+    for item in spec.get('work_items') or []:
+        if isinstance(item, dict):
+            linked.update(item.get('rule_ids') or [])
+    for case in spec.get('tests') or []:
+        if isinstance(case, dict) and case.get('rule_id'):
+            linked.add(case['rule_id'])
+    for record in evidence:
+        row = rows.get(record['id'])
+        require(row and row.get('disposition') == 'evidence_only',
+                'Assessment evidence needs an evidence-only disposition for ' + record['id'])
+        require(row.get('source_path', '') == (record.get('source_path') or '')
+                and row.get('assessment_path', '') == (record.get('assessment_path') or '')
+                and row.get('evidence_status') == record.get('evidence_status'),
+                'Coverage changed the citation for ' + record['id'])
+        require(record['id'] not in linked, 'Assessment evidence was turned into an implementation requirement: ' + record['id'])
     required_questions = {q['id'] for c in capsules for q in c['checkpoint']['questions']}
-    require(required_rules <= {r['id'] for r in spec['rules']}, 'Synthesis omitted checkpoint business rules')
     require(required_questions <= {q['id'] for q in spec['questions']}, 'Synthesis omitted checkpoint SME questions')
     preserved = {q['id']: q for q in spec['questions']}
     require(all(preserved[q['id']] == q for c in capsules for q in c['checkpoint']['questions']),

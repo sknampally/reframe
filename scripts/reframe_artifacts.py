@@ -33,12 +33,43 @@ def validate_spec(spec, source):
     require(isinstance(rules, list) and rules, 'At least one source-traceable rule required')
     ids = set()
     for rule in rules:
-        require(isinstance(rule, dict) and all(text(rule.get(k)) for k in
-                ('id', 'statement', 'source_path', 'source_anchor', 'evidence_status')), 'Incomplete rule')
+        missing = [key for key in ('id', 'statement', 'source_path', 'source_anchor', 'evidence_status')
+                   if not (isinstance(rule, dict) and text(rule.get(key)))]
+        ident = rule.get('id') if isinstance(rule, dict) and text(rule.get('id')) else '(missing id)'
+        require(not missing, 'Incomplete rule: ' + ident + ' missing ' + ', '.join(missing))
         require(rule['id'] not in ids, 'Duplicate rule ID')
         ids.add(rule['id'])
         require(rule['evidence_status'] in {'SOURCE_VERIFIED', 'INFERRED', 'UNKNOWN'}, 'Invalid evidence status')
         tracked_file(source, rule['source_path'])
+    evidence = spec.get('assessment_evidence', [])
+    if 'assessment_evidence' in spec:
+        require(isinstance(evidence, list), 'Assessment evidence must be a list')
+    seen_evidence = set()
+    for record in evidence:
+        require(isinstance(record, dict), 'Assessment evidence must be an object')
+        missing = [key for key in ('id', 'statement', 'evidence_status') if not text(record.get(key))]
+        has_source = text(record.get('source_path'))
+        has_assessment = text(record.get('assessment_path'))
+        if not has_source and not has_assessment:
+            missing.extend(['source_path', 'assessment_path'])
+        if has_source and not text(record.get('source_anchor')):
+            missing.append('source_anchor')
+        if has_assessment and not text(record.get('assessment_anchor')):
+            missing.append('assessment_anchor')
+        if record.get('evidence_status') == 'SOURCE_VERIFIED' and not has_source:
+            missing.append('source_path')
+        ident = record.get('id') if text(record.get('id')) else '(missing id)'
+        require(not missing, 'Incomplete assessment evidence: ' + ident + ' missing ' + ', '.join(missing))
+        require(record['evidence_status'] in {'SOURCE_VERIFIED', 'INFERRED', 'UNKNOWN'}, 'Invalid evidence status')
+        require(record['id'] not in ids and record['id'] not in seen_evidence,
+                'Assessment evidence reuses a rule id: ' + record['id'])
+        seen_evidence.add(record['id'])
+        if has_source:
+            tracked_file(source, record['source_path'])
+    require(all(r['evidence_status'] == 'SOURCE_VERIFIED' for r in rules)
+            and all(not isinstance(r, dict) or r.get('evidence_status') == 'SOURCE_VERIFIED' for r in evidence)
+            or spec['questions'],
+            'Inferred/unknown rules require explicit SME questions')
     require(isinstance(spec.get('sections'), dict) and set(spec['sections']) == set(SECTIONS),
             'All preparation sections required; use explicit not-applicable explanations')
     for section in spec['sections'].values():
@@ -52,8 +83,6 @@ def validate_spec(spec, source):
                 ('id', 'question', 'impact', 'owner', 'blocks')), 'SME question needs owner, impact and blocked work')
         require(question['id'] not in qids, 'Duplicate question ID')
         qids.add(question['id'])
-    require(all(r['evidence_status'] == 'SOURCE_VERIFIED' for r in rules) or spec['questions'],
-            'Inferred/unknown rules require explicit SME questions')
     require(isinstance(spec.get('tests'), list) and len(spec['tests']) >= 3, 'Normal, rejection and boundary scenarios required')
     require({x.get('category') for x in spec['tests'] if isinstance(x, dict)} == {'normal', 'rejection', 'boundary'},
             'Tests must cover normal, rejection and boundary categories')
