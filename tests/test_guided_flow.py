@@ -77,6 +77,25 @@ class GuidedFlowTests(unittest.TestCase):
         self.assertIn('No new assessment job is created.', said)
         self.assertNotIn('assess', str(commands))
 
+    def test_invalid_correction_resume_stays_on_the_saved_review(self):
+        project = {'stage': 'RUNNING_EXECUTOR', 'approvals': {'assessment': True},
+                   'pipeline': {'calls': 301, 'status': 'RUNNING', 'role': 'executor', 'limit_corrections': 1,
+                                'correction_error': {'call': 301, 'reason': 'Correction target must be the string section or work_item; received dict'}},
+                   'checkpoints': {'status': 'READY_FOR_SYNTHESIS', 'units': {'U0001': {'status': 'PASS'}}}}
+        ui = self.ui(project, ['continue'])
+        ui.invoke.return_value = 2
+        ui.last_report = {'status': 'CORRECTION_INVALID',
+                          'reason': project['pipeline']['correction_error']['reason'],
+                          'next_step': 'reframe resume. The saved correction was rejected before any edit was applied.'}
+        run(ui)
+        commands = [call.args[0] for call in ui.invoke.call_args_list]
+        self.assertEqual(commands, [['resume']])
+        said = ' '.join(str(call.args[0]) for call in ui.say.call_args_list)
+        self.assertIn('received dict', said)
+        self.assertIn('reframe resume', said)
+        self.assertIn('No new assessment job is created.', said)
+        self.assertNotIn('assess', str(commands))
+
     def test_running_assessment_resumes_without_new_job(self):
         ui = self.ui({'stage':'ASSESSING','active_assessment':'run-1'}, ['continue'])
         run(ui)

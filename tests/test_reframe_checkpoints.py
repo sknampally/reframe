@@ -1967,6 +1967,160 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(saved['pipeline']['limit_corrections'], 1)
         self.assertNotIn('This edit must not be applied.', json.dumps(app.read(area / 'checkpoint-candidate-3.json')))
 
+    def test_malformed_targets_do_not_change_the_specification(self):
+        spec = self.spec()
+        original = copy.deepcopy(spec)
+        rejected = [
+            ({'op': 'set_rule_ids', 'id': 'data', 'rule_ids': ['R1']}, 'missing'),
+            ({'op': 'set_rule_ids', 'target': None, 'id': 'data', 'rule_ids': ['R1']}, 'null'),
+            ({'op': 'set_rule_ids', 'target': {'type': 'section', 'id': 'data'}, 'rule_ids': ['R1']}, 'received dict'),
+            ({'op': 'set_rule_ids', 'target': ['section'], 'id': 'data', 'rule_ids': ['R1']}, 'received list'),
+            ({'op': 'set_rule_ids', 'target': 'question', 'id': 'data', 'rule_ids': ['R1']}, 'Unsupported correction target'),
+            ({'op': {'name': 'set_rule_ids'}, 'target': 'section', 'id': 'data', 'rule_ids': ['R1']}, 'Unsupported correction edit'),
+        ]
+        for edit, text in rejected:
+            with self.assertRaisesRegex(Blocked, text):
+                cp.apply_synthesis_edits(spec, [edit])
+            self.assertEqual(spec, original)
+        with self.assertRaisesRegex(Blocked, 'received dict'):
+            cp.apply_synthesis_edits(spec, [
+                {'op': 'set_rule_ids', 'target': 'section', 'id': 'data', 'rule_ids': ['R1']},
+                {'op': 'replace_text', 'target': {'type': 'section', 'id': 'data', 'field': 'specification'},
+                 'find': 'Fixture data', 'replace': 'changed'},
+            ])
+        self.assertEqual(spec, original)
+
+    def _synthesis_recovery_project(self, reply):
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = app.read(plan_path)
+        segment = plan['units'][0]['segments'][0]
+        plan['units'] = [{'id': 'U0001', 'focus': segment['path'], 'segments': [segment]}]
+        app.write(plan_path, plan)
+        self.project['checkpoints']['plan_sha256'] = sha(plan_path)
+        area = self.work / 'preparation'
+        units = self._passed_units(plan, area, lambda ident: [{
+            'id': ident + '-F1', 'kind': 'business_rule', 'statement': 'Reject a zero amount.',
+            'status': 'SOURCE_VERIFIED', 'citations': [{'area': 'source', 'path': segment['path'], 'start': 1, 'end': 1}]}])
+        saved_spec = self.spec()
+        saved_spec['rules'][0]['id'] = 'U0001-F1'
+        saved_spec['rules'][0]['source_path'] = segment['path']
+        saved_spec['rules'][0]['source_anchor'] = 'lines 1-1'
+        for section in saved_spec['sections'].values():
+            section['rule_ids'] = ['U0001-F1']
+        for case in saved_spec['tests']:
+            case['rule_id'] = 'U0001-F1'
+        review = {'kind': 'review', 'decision': 'REWORK', 'report': 'Keep the saved rule.',
+                  'findings': [{'id': 'RF1', 'area': 'data', 'statement': 'Update the data section.',
+                                'required_action': 'Replace the data specification.'}]}
+        app.write(area / 'reply-298.json', {'kind': 'candidate', 'specification': saved_spec})
+        app.write(area / 'reply-299.json', review)
+        app.write(area / 'checkpoint-candidate-2.json', saved_spec)
+        app.write(area / 'checkpoint-review-2.json', review)
+        app.write(area / 'reply-301.json', reply)
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'READY_FOR_SYNTHESIS'
+        self.project['settings']['max_model_calls'] = None
+        self.project['active_assessment'] = self.project['selected']
+        self.project.setdefault('events', []).append({'event': 'candidate_validation_failed', 'call': 300, 'reason': 'earlier'})
+        self.project['pipeline'].update(calls=301, status='RUNNING', role='executor', round=3, limit_corrections=1,
+                                         invalid_candidates=1, reads={}, previous_review=review,
+                                         candidate_sha256=sha(area / 'checkpoint-candidate-2.json'))
+        self.project['stage'] = 'RUNNING_EXECUTOR'
+        app.persist(self.work, self.project)
+        return area, units, saved_spec
+
+    def test_crashed_malformed_correction_resumes_without_a_provider_call(self):
+        edits = [{'op': 'set_rule_ids', 'target': {'type': 'work_item', 'id': 'W1'}, 'rule_ids': ['U0001-F1']}
+                 for _ in range(6)]
+        edits.extend({'op': 'set_rule_ids', 'target': {'type': 'section', 'id': 'data'}, 'rule_ids': ['U0001-F1']}
+                     for _ in range(2))
+        edits.append({'op': 'replace_text', 'target': {'type': 'section', 'id': 'data', 'field': 'specification'},
+                      'find': 'Fixture data', 'replace': 'Changed data'})
+        area, units, saved_spec = self._synthesis_recovery_project({'kind': 'correction', 'base_sha256': 'pending', 'edits': edits})
+        digest = sha(area / 'checkpoint-candidate-2.json')
+        reply = {'kind': 'correction', 'base_sha256': digest, 'edits': edits}
+        original_reply = json.dumps(reply, sort_keys=True)
+        app.write(area / 'reply-301.json', reply)
+        self.project['pipeline']['candidate_sha256'] = digest
+        app.persist(self.work, self.project)
+        passed = copy.deepcopy(units)
+        approvals = copy.deepcopy(self.project['approvals'])
+
+        def provider(*_args):
+            raise AssertionError('provider')
+
+        reports = []
+        with patch.object(app, 'model_call', provider), patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            code = app.main(['--workspace', str(self.work), 'resume'], reporter=reports.append)
+        self.assertEqual(code, 2)
+        self.assertEqual(reports[-1]['status'], 'CORRECTION_INVALID')
+        self.assertIn('received dict', reports[-1]['reason'])
+        self.assertIn('reframe resume', reports[-1]['next_step'])
+        self.assertIn('No assessment job is created.', reports[-1]['next_step'])
+        saved = app.read(self.work / 'project.json')
+        self.assertEqual(saved['pipeline']['calls'], 301)
+        self.assertEqual(saved['pipeline']['limit_corrections'], 1)
+        self.assertEqual(saved['pipeline']['invalid_candidates'], 2)
+        self.assertEqual(saved['pipeline']['role'], 'executor')
+        self.assertEqual(saved['pipeline']['round'], 3)
+        self.assertEqual(saved['stage'], 'RUNNING_EXECUTOR')
+        self.assertNotIn('specification', saved)
+        self.assertEqual(saved['approvals'], approvals)
+        self.assertEqual(saved['checkpoints']['units'], passed)
+        self.assertEqual(json.dumps(app.read(area / 'reply-301.json'), sort_keys=True), original_reply)
+        self.assertEqual(sha(area / 'checkpoint-candidate-2.json'), digest)
+        self.assertFalse((area / 'checkpoint-candidate-3.json').exists())
+        self.assertFalse((area / 'reply-302.json').exists())
+        self.assertEqual(app.read(area / 'checkpoint-candidate-2.json'), saved_spec)
+
+        def corrected(provider, run, directory, role, message):
+            context = json.loads(message)
+            if role == 'executor':
+                self.assertIn('received dict', context['candidate_correction']['error'])
+                self.assertIn('base_sha256', context['candidate_correction']['instruction'])
+                return {'kind': 'correction', 'base_sha256': context['candidate_correction']['base_sha256'], 'edits': [{
+                    'op': 'replace_text', 'target': 'section', 'id': 'data', 'field': 'specification',
+                    'text': 'The data section stays descriptive.'}]}
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Corrected after the malformed edit was rejected', 'findings': []}
+
+        with patch.object(app, 'model_call', corrected), patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            code = app.main(['--workspace', str(self.work), 'resume'], reporter=reports.append)
+        self.assertEqual(code, 0, reports[-1] if reports else '')
+        saved = app.read(self.work / 'project.json')
+        self.assertEqual(saved['pipeline']['calls'], 303)
+        self.assertEqual(saved['pipeline']['limit_corrections'], 1)
+        self.assertEqual(saved['checkpoints']['units'], passed)
+        self.assertEqual(sha(area / 'checkpoint-candidate-2.json'), digest)
+        self.assertNotIn('Changed data', json.dumps(app.read(area / 'checkpoint-candidate-3.json')))
+        self.assertIn('The data section stays descriptive.', json.dumps(app.read(area / 'checkpoint-candidate-3.json')))
+
+    def test_saved_valid_correction_does_not_repeat_the_executor_call(self):
+        area, units, _saved_spec = self._synthesis_recovery_project({
+            'kind': 'correction', 'base_sha256': 'pending', 'edits': []})
+        digest = sha(area / 'checkpoint-candidate-2.json')
+        reply = {'kind': 'correction', 'base_sha256': digest, 'edits': [{
+            'op': 'replace_text', 'target': 'section', 'id': 'data', 'field': 'specification',
+            'text': 'The data section stays descriptive.'}]}
+        app.write(area / 'reply-301.json', reply)
+        self.project['pipeline']['candidate_sha256'] = digest
+        app.persist(self.work, self.project)
+        seen = []
+
+        def provider(provider_name, run, directory, role, message):
+            seen.append(role)
+            return {'kind': 'review', 'decision': 'PASS', 'report': 'Applied the saved correction', 'findings': []}
+
+        with patch.object(app, 'model_call', provider), patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            code = app.main(['--workspace', str(self.work), 'resume'], reporter=lambda _result: None)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, ['reviewer'])
+        saved = app.read(self.work / 'project.json')
+        self.assertEqual(saved['pipeline']['calls'], 302)
+        self.assertEqual(saved['pipeline']['limit_corrections'], 1)
+        self.assertEqual(saved['checkpoints']['units'], units)
+        self.assertIn('The data section stays descriptive.', json.dumps(app.read(area / 'checkpoint-candidate-3.json')))
+
     def test_sanitized_carddemo_recovery_builds_exact_requests(self):
         live = Path('/Users/satish_byndr/Documents/workspace-intraedge/aws-mainframe-modernization-carddemo_assessment')
         if not (live / 'project.json').is_file():

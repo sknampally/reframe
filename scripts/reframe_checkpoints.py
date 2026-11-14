@@ -553,9 +553,17 @@ def apply_synthesis_edits(spec, edits):
     seen = set()
     for edit in edits:
         require(isinstance(edit, dict), 'Correction edit must be an object')
-        op, target, ident = edit.get('op'), edit.get('target'), edit.get('id')
-        require(op in {'set_rule_ids', 'replace_text'}, 'Unsupported correction edit')
+        op = edit.get('op')
+        require(isinstance(op, str) and op in {'set_rule_ids', 'replace_text'}, 'Unsupported correction edit')
+        if 'target' not in edit:
+            raise Blocked('Correction target is missing')
+        target = edit.get('target')
+        if target is None:
+            raise Blocked('Correction target is null')
+        if not isinstance(target, str):
+            raise Blocked('Correction target must be the string section or work_item; received ' + type(target).__name__)
         require(target in {'section', 'work_item'}, 'Unsupported correction target')
+        ident = edit.get('id')
         require(isinstance(ident, str) and ident.strip(), 'Correction edit needs an id')
         if op == 'set_rule_ids':
             require(set(edit) == {'op', 'target', 'id', 'rule_ids'}, 'Correction edit changes an unauthorized field')
