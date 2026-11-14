@@ -237,7 +237,7 @@ class Terminal:
              ('package','Create the approved implementation package'),('context','Import, decide, or approve one future-state delta'),
              ('design-export','Write the canonical versioned design'),('package-export','Write the draft mode ZIP'),
              ('register-project','Record a project locally without an AWS job'),
-             ('upgrade-framework --note TEXT','Record a Reframe update on this saved run'),('guide [setup|workflow|comparison]','Read built-in documentation'),
+             ('upgrade-framework --note TEXT [--adopt-prompts]','Record a Reframe update. --adopt-prompts is required when preparation prompts changed.'),('guide [setup|workflow|comparison]','Read built-in documentation'),
              ('privacy','Toggle project/result detail visibility'),('demo / live','Switch simulated preview / saved live project'),
              ('menu / exit','Refresh dashboard / leave the console')]:table.add_row('/'+command,purpose)
         self.console.print(table)

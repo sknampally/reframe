@@ -622,6 +622,9 @@ def refresh_unstarted_baseline(work, project):
 
 def next_step(project):
     """Return the command a person should run for the current stage."""
+    import reframe as app
+    if app.prompts_differ(project):
+        return app.prompt_migration_command()
     if project['stage'] == 'PROVIDER_REVIEW_REQUIRED':
         return 'Review the private provider refusal and request content; automatic model retries are stopped.'
     stage = project['stage']

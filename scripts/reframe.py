@@ -464,6 +464,31 @@ def bind_run_pins(project):
     }
 
 
+def prompts_differ(project):
+    """True when the saved preparation prompts are not the prompts in this checkout."""
+    recorded = (project.get('pins') or {}).get('prompt_hash')
+    return isinstance(recorded, str) and recorded != preparation_protocol_hash()
+
+
+def prompt_phase(project):
+    """The phase whose future calls would adopt a new prompt hash."""
+    checkpoints = project.get('checkpoints') or {}
+    if checkpoints.get('status') == 'READY_FOR_SYNTHESIS':
+        return 'synthesis'
+    if checkpoints.get('units'):
+        return 'checkpoints'
+    if project.get('pipeline'):
+        return 'preparation'
+    return 'assessment'
+
+
+def prompt_migration_command():
+    """The only command that may replace a saved preparation prompt hash."""
+    return ('reframe upgrade-framework --note "WHY" --adopt-prompts, then reframe resume. '
+            'Completed calls and passed units keep the earlier prompt hash. '
+            'Other pins stay in place, and no assessment is started.')
+
+
 def require_run_pins(project, job_id=None):
     """Stop when a saved pin no longer matches the checkout, the models, or the job."""
     recorded = project.get('pins')
@@ -471,7 +496,10 @@ def require_run_pins(project, job_id=None):
     require(recorded.get('framework_commit') == git(FRAMEWORK, 'rev-parse', 'HEAD'), 'Run pin changed: framework_commit')
     require(recorded.get('executor_model') == project['settings'].get('executor_model'), 'Run pin changed: executor_model')
     require(recorded.get('reviewer_model') == project['settings'].get('reviewer_model'), 'Run pin changed: reviewer_model')
-    require(recorded.get('prompt_hash') == preparation_protocol_hash(), 'Run pin changed: prompt_hash')
+    if recorded.get('prompt_hash') != preparation_protocol_hash():
+        error = Blocked('Run pin changed: prompt_hash')
+        error.hint = prompt_migration_command()
+        raise error
     pinned_job = recorded.get('aws_job_id')
     label = project.get('active_assessment')
     if job_id and pinned_job and pinned_job != job_id:
@@ -544,6 +572,19 @@ def require_clear_for_final(work, action):
     require(not conflicts, 'Open context conflicts block ' + action)
 
 
+def prompt_framework_origin(project, recorded_commit, current):
+    """Revision that produced the saved prompts when a commit was recorded without them."""
+    if recorded_commit != current:
+        return recorded_commit
+    for event in reversed(project.get('events') or []):
+        if not isinstance(event, dict) or event.get('event') != 'framework_upgraded':
+            continue
+        if event.get('to') == current and isinstance(event.get('from'), str):
+            return event['from']
+        break
+    return recorded_commit
+
+
 def upgrade_framework(work, project, args):
     """Record a reviewed controller fix without replacing source, jobs or evidence."""
     require(not (set(project.get('approvals', {})) - {'assessment'}) and not project.get('specification'),
@@ -553,6 +594,18 @@ def upgrade_framework(work, project, args):
         verified_assessment(project, project['selected'])
         approved(project, 'assessment', project['assessments'][project['selected']]['sha256'])
     current = git(FRAMEWORK, 'rev-parse', 'HEAD')
+    current_hash = preparation_protocol_hash()
+    pins = project.get('pins')
+    saved_hash = pins.get('prompt_hash') if isinstance(pins, dict) else None
+    prompts_changed = isinstance(saved_hash, str) and saved_hash != current_hash
+    adopt = bool(getattr(args, 'adopt_prompts', False))
+    if prompts_changed and not adopt:
+        error = Blocked('Preparation prompts changed. The upgrade was not recorded.')
+        error.hint = prompt_migration_command()
+        raise error
+    if prompts_changed:
+        require(isinstance(getattr(args, 'note', None), str) and args.note.strip(),
+                'Prompt migration needs a rationale in --note')
     # Validate the pinned source and clean current code before recording a new baseline.
     verify_source({**project, 'framework_commit': current})
     records = []
@@ -562,6 +615,9 @@ def upgrade_framework(work, project, args):
         require(not run.get('create_pending'), 'Reconcile uncertain job creation before upgrading')
         verify_source({**run, 'framework_commit': current})
         records.append((path, run))
+    recorded_commit = project.get('framework_commit')
+    prompt_origin = prompt_framework_origin(project, recorded_commit, current) if prompts_changed else None
+    phase = prompt_phase(project) if prompts_changed else None
     def update(record):
         """Record the framework commit change on one saved run."""
         previous = record['framework_commit']
@@ -570,14 +626,34 @@ def upgrade_framework(work, project, args):
                 'from':previous, 'to':current, 'reason':args.note})
             record['framework_commit'] = current
     for path, run in records:
+        before = copy.deepcopy(run)
         update(run)
-        write(path, run)
+        if run != before:
+            write(path, run)
     update(project)
-    pins = project.get('pins')
-    if pins is not None:
+    if isinstance(pins, dict):
         pins['framework_commit'] = current
+        if prompts_changed:
+            calls = (project.get('pipeline') or {}).get('calls') or 0
+            passed = [unit_id for unit_id, unit in ((project.get('checkpoints') or {}).get('units') or {}).items()
+                      if isinstance(unit, dict) and unit.get('status') == 'PASS']
+            project.setdefault('events', []).append({
+                'event': 'prompt_migrated', 'at': time.time(), 'phase': phase, 'rationale': args.note,
+                'from_prompt_hash': saved_hash, 'to_prompt_hash': current_hash,
+                'from_framework_commit': prompt_origin, 'to_framework_commit': current,
+                'calls_completed': calls, 'passed_units': len(passed),
+            })
+            project.setdefault('prompt_history', []).append({
+                'prompt_hash': saved_hash, 'framework_commit': prompt_origin, 'through_call': calls,
+                'passed_units': passed, 'phase': phase,
+            })
+            pins['prompt_hash'] = current_hash
     persist(work, project)
-    return {'status':'FRAMEWORK_UPDATED', 'revision':current, 'next_step':'reframe resume'}
+    result = {'status':'FRAMEWORK_UPDATED', 'revision':current, 'next_step':'reframe resume'}
+    if prompts_changed:
+        result['prompt_migration'] = 'adopted'
+        result['phase'] = phase
+    return result
 
 
 def require_sandbox(project):
@@ -1967,6 +2043,8 @@ def parser():
     report.add_argument('--label')
     upgrade = commands.add_parser('upgrade-framework', help='Record a controller update before candidate handoff; preserve approved evidence')
     upgrade.add_argument('--note', required=True)
+    upgrade.add_argument('--adopt-prompts', action='store_true',
+                         help='Authorize the saved run to adopt changed preparation prompts. Completed calls and passed units keep the earlier prompt hash.')
     scope = commands.add_parser('scope', help='Record explicit scope for an existing uploaded assessment')
     scope.add_argument('--label')
     scope.add_argument('--all-uploaded', action='store_true')

@@ -435,6 +435,26 @@ reframe upgrade-framework --note "Describe the controller fix being applied"
 reframe resume --wait
 ```
 
+When that release also changes the preparation prompts, `upgrade-framework` stops
+before it writes anything and `resume` still reports `Run pin changed: prompt_hash`.
+Authorize the prompt change explicitly, then resume:
+
+```bash
+reframe upgrade-framework --note "Adopt the synthesis prompt changes for this saved review" --adopt-prompts
+reframe status
+reframe resume
+```
+
+`--adopt-prompts` records the old and new prompt hashes, the framework revisions,
+the rationale, and the affected phase. Calls already completed and units that
+already passed keep the earlier prompt hash in `prompt_history`. The command
+updates only the framework commit and, when authorized, the preparation prompt
+hash. It does not reset model pins, the AWS job id, source, assessment evidence,
+approvals, or call counts. A refusal leaves the saved project unchanged, including
+a run whose framework commit was already updated and whose prompt hash was not.
+`resume` still checks every pin. It does not accept an arbitrary hash or start a
+new assessment.
+
 This validates source integrity and records the old and new framework revisions in
 both project and run history. It preserves job identity, evidence and mutation
 receipts. It refuses upgrades after a preparation candidate or downstream approval, or while job creation is uncertain. An existing assessment approval is retained only after verifying its exact evidence fingerprint and original files.
