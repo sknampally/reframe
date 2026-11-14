@@ -17,6 +17,9 @@ Return `{"kind":"candidate","specification":{...}}` with this exact structure:
 - `rules`: nonempty array of `{id,statement,source_path,source_anchor,evidence_status}`.
   evidence_status is SOURCE_VERIFIED, INFERRED or UNKNOWN. Do not equate extracted
   claims with verified semantics. Anchors must identify actual lines/paragraphs read.
+  Assessment-derived findings stay out of `rules`. The controller records them as
+  `assessment_evidence` with the cited assessment or source path. Do not invent a
+  source path, and do not mark an assessment-only finding SOURCE_VERIFIED.
 - `sections`: exactly architecture, ui, services, data, infrastructure, security,
   migration, testing, operations, delivery. Each is an object with `specification`,
   `implementation_prompt`, `rule_ids` (array of known rule IDs).

@@ -853,8 +853,37 @@ def preparation_report(work, project):
                     + '</td><td>' + html.escape(str(rule.get('evidence_status', ''))) + '</td><td>'
                     + html.escape(str(rule.get('source_path', '')) + ' ' + str(rule.get('source_anchor', ''))) + '</td></tr>'
                     for rule in spec.get('rules') or [] if isinstance(rule, dict))
+    evidence_rows = []
+    for record in spec.get('assessment_evidence') or []:
+        if not isinstance(record, dict):
+            continue
+        if record.get('assessment_path'):
+            basis, location = 'assessment', str(record.get('assessment_path', '')) + ' ' + str(record.get('assessment_anchor', ''))
+        else:
+            basis, location = 'source citation', str(record.get('source_path', '')) + ' ' + str(record.get('source_anchor', ''))
+        evidence_rows.append('<tr><td>' + html.escape(str(record.get('id', ''))) + '</td><td>'
+                             + html.escape(str(record.get('statement', ''))) + '</td><td>'
+                             + html.escape(str(record.get('evidence_status', ''))) + '</td><td>'
+                             + html.escape(basis) + '</td><td>' + html.escape(location) + '</td></tr>')
+    evidence = ('<h2>Assessment evidence</h2><p>These findings are not source-backed rules and are not implementation requirements. '
+                'A path is shown only when the reviewed citation named it. SOURCE_VERIFIED appears only when a source citation supports it.</p><table><thead><tr>'
+                '<th>Finding</th><th>Statement</th><th>Status</th><th>Basis</th><th>Citation</th></tr></thead><tbody>'
+                + ''.join(evidence_rows) + '</tbody></table>')
+    coverage_rows = []
+    for row in spec.get('coverage') or []:
+        if not isinstance(row, dict):
+            continue
+        coverage_rows.append('<tr><td>' + html.escape(str(row.get('id', ''))) + '</td><td>'
+                             + html.escape(str(row.get('kind', ''))) + '</td><td>'
+                             + html.escape(str(row.get('disposition', ''))) + '</td><td>'
+                             + html.escape(', '.join(row.get('gaps') or []) or 'none') + '</td><td>'
+                             + html.escape(str(row.get('assessment_path') or row.get('source_path') or '')) + '</td></tr>')
+    evidence += ('<h2>Coverage dispositions</h2><p>A gap names a missing section, test, or backlog link. '
+                 'evidence_only means the finding stays assessment evidence and does not create implementation work.</p>'
+                 '<table><thead><tr><th>ID</th><th>Kind</th><th>Disposition</th><th>Gaps</th><th>Citation</th></tr></thead><tbody>'
+                 + ''.join(coverage_rows) + '</tbody></table>')
     rendered = rendered.replace('</main>', '<h2>Business rules</h2><table><thead><tr><th>Rule</th><th>Statement</th><th>Status</th><th>Source</th></tr></thead><tbody>'
-                                + rules + '</tbody></table><h2>Independent reviewer report</h2><pre>'
+                                + rules + '</tbody></table>' + evidence + '<h2>Independent reviewer report</h2><pre>'
                                 + html.escape(json.dumps(review, indent=2)) + '</pre></main>')
     report.write_text(rendered)
     report.chmod(0o600)
@@ -1261,6 +1290,14 @@ def legacy_pipeline(work, project, args, runtime=model_call):
     previous_signature, repeated_results = None, 0
     while kw.within_call_limit(project['settings'], state['calls']):
         role, number = state['role'], state['round']
+        if capsules and role == 'executor':
+            gaps = cp.assembly_gaps(capsules, plan)
+            if gaps:
+                reason = cp.assembly_gap_reason(gaps)
+                state.update(status='BLOCKED', reason=reason)
+                project['stage'] = 'BLOCKED'
+                persist(work, project)
+                return {'status': 'BLOCKED', 'reason': reason, 'calls': state['calls'], 'gaps': gaps}
         key = f'{number}:{role}'
         history = state['contexts'].setdefault(key, [])
         run = dict(assessment_run, settings=project['settings'], model_calls=state['calls'], round=number,
@@ -1279,9 +1316,10 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                 context['reviewed_evidence_units'] = [cp.synthesis_view(capsule) for capsule in capsules]
                 context['checkpoint_instruction'] = (
                     'Return the cross-unit sections, scope, exclusions, tests, work items, and layout. '
-                    'Do not restate every business rule or SME question. The controller keeps every reviewed '
-                    'business rule and the exact SME question objects. A short candidate is valid. '
-                    'This is full selected-scope integration, not permission to narrow scope. '
+                    'Do not restate every business rule or SME question. The controller keeps every source-backed '
+                    'business rule, keeps assessment-derived findings as assessment evidence with their own paths, '
+                    'and keeps the exact SME question objects. Do not invent a source path for an assessment finding. '
+                    'A short candidate is valid. This is full selected-scope integration, not permission to narrow scope. '
                     'Do not claim runtime equivalence.')
             else:
                 context['checkpoint_instruction'] = (
@@ -1293,15 +1331,33 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                             if (area / f'reply-{n}.json').exists()), None)
         if role == 'executor' and prior_reply is not None:
             prior = read(prior_reply)
-            if prior.get('kind') == 'candidate':
+            if prior.get('kind') == 'candidate' and isinstance(prior.get('specification'), dict):
+                assembled = copy.deepcopy(prior)
+                if capsules:
+                    cp.complete_synthesis(assembled['specification'], capsules, plan)
                 try:
-                    validate_spec(prior.get('specification'), Path(project['source']['root']))
+                    validate_spec(assembled.get('specification'), Path(project['source']['root']))
                     if capsules:
-                        cp.validate_synthesis(prior['specification'], capsules)
+                        cp.validate_synthesis(assembled['specification'], capsules, plan)
+                        cited = cp.inspected_source_paths(assembled['specification'])
+                        require(cited <= checkpoint_paths, 'Executor must inspect every rule source file')
                 except Blocked as error:
                     context['candidate_correction'] = {'error': str(error),
-                        'instruction': 'Return a complete corrected candidate. All evidence and review requirements still apply.',
-                        'rejected_specification': prior.get('specification')}
+                        'instruction': 'Return a complete corrected candidate. rejected_specification is the assembled '
+                                       'candidate that failed validation, including source rules and assessment evidence. '
+                                       'Do not invent a source path for assessment evidence. '
+                                       'All evidence and review requirements still apply.',
+                        'rejected_specification': assembled.get('specification')}
+                else:
+                    if capsules:
+                        candidate_path = area / f'{artifact_prefix}candidate-{number}.json'
+                        write(candidate_path, assembled['specification'])
+                        state['candidate_sha256'] = sha(candidate_path)
+                        state.update(role='reviewer', status='RUNNING', invalid_candidates=0)
+                        state.pop('reason', None)
+                        project['stage'] = 'RUNNING_REVIEWER'
+                        persist(work, project)
+                        continue
         if role == 'reviewer':
             candidate_path = area / f'{artifact_prefix}candidate-{number}.json'
             require(sha(candidate_path) == state['candidate_sha256'], 'Candidate changed after handoff')
@@ -1360,10 +1416,13 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             try:
                 if capsules:
                     cp.complete_synthesis(reply['specification'], capsules, plan)
+                    write(area / f'reply-{state["calls"]}.json', reply)
                 validate_spec(reply.get('specification'), Path(project['source']['root']))
                 if capsules:
-                    cp.validate_synthesis(reply['specification'], capsules)
+                    cp.validate_synthesis(reply['specification'], capsules, plan)
             except Blocked as error:
+                if capsules and isinstance(reply.get('specification'), dict):
+                    write(area / f'reply-{state["calls"]}.json', reply)
                 project.setdefault('events', []).append({'event': 'candidate_validation_failed',
                     'at': time.time(), 'call': state['calls'], 'reason': str(error)})
                 state['invalid_candidates'] = state.get('invalid_candidates', 0) + 1
@@ -1375,8 +1434,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                 continue
             state['invalid_candidates'] = 0
             read_paths = {chunk['path'] for entry in history for chunk in entry['response'] if chunk['area'] == 'source'} | checkpoint_paths
-            require({rule['source_path'] for rule in reply['specification']['rules']} <= read_paths,
-                    'Executor must inspect every rule source file')
+            cited = cp.inspected_source_paths(reply['specification']) if capsules else {rule['source_path'] for rule in reply['specification']['rules']}
+            require(cited <= read_paths, 'Executor must inspect every rule source file')
             write(area / f'{artifact_prefix}candidate-{number}.json', reply['specification'])
             state['candidate_sha256'] = sha(area / f'{artifact_prefix}candidate-{number}.json')
             state['role'] = 'reviewer'
@@ -1388,8 +1447,8 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             write(area / f'{artifact_prefix}review-{number}.json', reply)
             if reply['decision'] == 'PASS':
                 read_paths = {chunk['path'] for entry in history for chunk in entry['response'] if chunk['area'] == 'source'} | checkpoint_paths
-                require({rule['source_path'] for rule in context['candidate']['rules']} <= read_paths,
-                        'Reviewer must inspect every rule source file')
+                cited = cp.inspected_source_paths(context['candidate']) if capsules else {rule['source_path'] for rule in context['candidate']['rules']}
+                require(cited <= read_paths, 'Reviewer must inspect every rule source file')
                 require(not reply['findings'], 'PASS cannot have unresolved reviewer findings; SME questions remain separate')
                 require_anchored_export(work, project)
                 project['specification'] = {'path': f'preparation/{artifact_prefix}candidate-{number}.json', 'sha256': state['candidate_sha256'],
@@ -1575,7 +1634,10 @@ def package(work, project):
     write(destination / 'specification.json', spec)
     write(destination / 'decisions.json', project['decisions'])
     write(destination / 'approvals.json', project['approvals'])
-    write(destination / 'traceability.json', {'rules': spec['rules'], 'tests': spec['tests']})
+    write(destination / 'traceability.json', {'rules': spec['rules'], 'tests': spec['tests'],
+                                             'assessment_evidence': spec.get('assessment_evidence') or [],
+                                             'coverage': spec.get('coverage') or []})
+    write(destination / 'assessment-evidence.json', spec.get('assessment_evidence') or [])
     write(destination / 'implementation-backlog.json', spec['work_items'])
     (destination / 'monorepo-layout.txt').write_text('\n'.join(spec['monorepo_layout']) + '\n')
     write(destination / 'ai-dlc.json', {

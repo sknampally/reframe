@@ -13,7 +13,7 @@ Return one JSON action:
 
 Independently read both source and findings before any review decision. Check
 source anchors, rule completeness for the stated slice, error paths, dependencies,
-false source-verified claims, missing business oracles, scope/exclusion boundaries,
+false source-verified claims, assessment evidence presented as a source rule or as new implementation work, missing business oracles, scope/exclusion boundaries,
 API/data/UI consistency, all ten preparation sections, testability, and whether
 implementation prompts respect unresolved decisions. Challenge invented service
 boundaries and inferred runtime behavior. Require uncertainty to be explicit and
