@@ -88,6 +88,7 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(manifest['phase'],'DRAFT_ENGINEERING_PREPARATION')
             self.assertIn('SKIPPED',z.read('assumptions.json').decode())
             self.assertIn('SKILL.md',z.namelist())
+            self.assertIn('reframe-notice.md',z.namelist())
             self.assertIn('infrastructure-prompt.md',z.namelist())
             self.assertFalse(any('provider' in n or 'project.json'==n for n in z.namelist()))
             self.assertEqual(json.loads(z.read('acceptance-catalog.json'))[0]['status'],'NOT RUN')

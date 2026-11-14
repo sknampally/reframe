@@ -60,16 +60,28 @@ jobs:
           with zipfile.ZipFile(wheel) as archive:
               names = set(archive.namelist())
               entry = archive.read(next(name for name in names if name.endswith('entry_points.txt'))).decode()
+              metadata = archive.read(next(name for name in names if name.endswith('METADATA'))).decode()
           missing = [module for module in modules if f'{module}.py' not in names]
           if missing:
               raise SystemExit(f'wheel missing modules: {missing}')
           if 'reframe = reframe:main' not in entry:
               raise SystemExit('wheel is missing the reframe console script')
+          if 'License: MIT' not in metadata and 'License-Expression: MIT' not in metadata:
+              raise SystemExit('wheel metadata does not declare MIT')
+          if not any(name.endswith('LICENSE') for name in names):
+              raise SystemExit('wheel is missing LICENSE')
           with tarfile.open(sdist) as archive:
-              packaged = {member.name.split('/')[-1] for member in archive.getmembers()}
+              members = archive.getmembers()
+              packaged = {member.name.split('/')[-1] for member in members}
+              pkg_info = next(member for member in members if member.name.endswith('PKG-INFO'))
+              info = archive.extractfile(pkg_info).read().decode()
           missing = [f'{module}.py' for module in modules if f'{module}.py' not in packaged]
           if missing:
               raise SystemExit(f'sdist missing modules: {missing}')
+          if 'LICENSE' not in packaged:
+              raise SystemExit('sdist is missing LICENSE')
+          if 'License: MIT' not in info and 'License-Expression: MIT' not in info:
+              raise SystemExit('sdist metadata does not declare MIT')
           print(f'validated {wheel.name} and {sdist.name} ({len(modules)} modules)')
           PY
       - name: Install the wheel and check the CLI
