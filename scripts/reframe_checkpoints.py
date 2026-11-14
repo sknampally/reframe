@@ -411,6 +411,10 @@ def verified_capsules(work, project, app):
     return plan, capsules
 
 
+_LOCATION = re.compile(
+    r'^candidate\.(findings|questions)\[([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)\]\.(statement|impact|question)$')
+
+
 def review_defects(review):
     """Actionable reviewer findings, with a stable id when the model omitted one."""
     findings = review.get('findings') if isinstance(review, dict) else None
@@ -419,19 +423,47 @@ def review_defects(review):
     defects = []
     for index, finding in enumerate(findings, 1):
         if isinstance(finding, str) and finding.strip():
-            defects.append({'id': 'R' + str(index), 'target': '', 'problem': finding.strip(), 'required_action': ''})
+            defects.append({'id': 'R' + str(index), 'target': '', 'problem': finding.strip(),
+                            'required_action': '', 'location': '', 'required_change': '', 'severity': ''})
             continue
         if not isinstance(finding, dict):
             continue
         ident = finding.get('id') or finding.get('finding_id') or ('R' + str(index))
         problem = finding.get('problem') or finding.get('issue') or finding.get('statement') or ''
+        required_change = finding.get('required_change') if isinstance(finding.get('required_change'), str) else ''
+        required_action = finding.get('required_action') if isinstance(finding.get('required_action'), str) else ''
         defects.append({
             'id': str(ident),
             'target': finding.get('target') if isinstance(finding.get('target'), str) else '',
             'problem': problem if isinstance(problem, str) else '',
-            'required_action': finding.get('required_action') if isinstance(finding.get('required_action'), str) else '',
+            'required_action': required_action or required_change,
+            'location': finding.get('location') if isinstance(finding.get('location'), str) else '',
+            'required_change': required_change,
+            'severity': finding.get('severity') if isinstance(finding.get('severity'), str) else '',
         })
     return defects
+
+
+def correction_location(location):
+    """Parse one allowlisted candidate path. Other text is rejected and never evaluated."""
+    if not isinstance(location, str) or not location.strip():
+        return None
+    match = _LOCATION.fullmatch(location.strip())
+    require(match, 'Unsupported correction location')
+    collection, ident, prop = match.group(1), match.group(2), match.group(3)
+    allowed = {'findings': {'statement'}, 'questions': {'impact', 'question'}}
+    require(prop in allowed[collection], 'Unsupported correction location')
+    return collection, ident, prop
+
+
+def record_by_id(candidate, collection, ident):
+    """The finding or question named by an allowlisted location."""
+    if not isinstance(candidate, dict) or not isinstance(candidate.get(collection), list):
+        return None
+    for row in candidate[collection]:
+        if isinstance(row, dict) and row.get('id') == ident:
+            return row
+    return None
 
 
 def claim_text(candidate, target):
@@ -509,13 +541,27 @@ def validate_dispositions(reply, defects, previous_candidate, supplied):
     unchanged = []
     for defect in defects:
         row = found[defect['id']]
-        if row['disposition'] != 'corrected' or not defect.get('target'):
+        if row['disposition'] != 'corrected':
             continue
-        before = claim_text(previous_candidate, defect['target'])
-        after = claim_text(reply, defect['target'])
-        if before is None:
+        if defect.get('target'):
+            before = claim_text(previous_candidate, defect['target'])
+            after = claim_text(reply, defect['target'])
+            if before is not None and after is not None and normalized_claim(before) == normalized_claim(after):
+                unchanged.append(defect['id'])
+        located = correction_location(defect.get('location'))
+        if not located:
             continue
-        if after is not None and normalized_claim(before) == normalized_claim(after):
+        collection, ident, prop = located
+        before_row = record_by_id(previous_candidate, collection, ident)
+        after_row = record_by_id(reply, collection, ident)
+        require(before_row is not None, 'Correction location is not in the saved candidate')
+        require(after_row is not None, 'Corrected checkpoint dropped ' + ident)
+        if collection == 'questions':
+            require(after_row.get('owner') == before_row.get('owner') and after_row.get('blocks') == before_row.get('blocks'),
+                    'Question owner and blocked work must stay unchanged')
+        before_text = before_row.get(prop) if isinstance(before_row.get(prop), str) else ''
+        after_text = after_row.get(prop) if isinstance(after_row.get(prop), str) else ''
+        if normalized_claim(before_text) == normalized_claim(after_text) and defect['id'] not in unchanged:
             unchanged.append(defect['id'])
     require(not unchanged, 'Unchanged defective content: ' + ', '.join(unchanged))
     return {'needs_human': [defect['id'] for defect in defects if found[defect['id']]['disposition'] == 'needs_human']}
@@ -546,7 +592,8 @@ def unresolved_rows(project, plan):
             'attempts': record.get('attempt'),
             'corrections_used': int(record.get('corrections_used') or 0),
             'correction_authorizations': int(record.get('correction_authorizations') or 0),
-            'defects': [{'id': defect['id'], 'target': defect.get('target') or ''} for defect in defects],
+            'defects': [{'id': defect['id'], 'target': defect.get('target') or '',
+                         **({'location': defect['location']} if defect.get('location') else {})} for defect in defects],
             'reason': reason,
         })
     return rows
@@ -649,9 +696,13 @@ def run(work, project, args, runtime, app):
                 require(sha(work / record['candidate_path']) == record['candidate_sha256'], 'Unit candidate changed before correction')
                 previous_candidate = app.read(work / record['candidate_path'])
                 context['candidate'] = previous_candidate
+                for defect in defects:
+                    correction_location(defect.get('location'))
                 context['correction_request'] = {
                     'instruction': 'Return the full checkpoint and one disposition for every finding id. '
-                                   'corrected must change that finding\'s words. Whitespace and punctuation alone do not count. '
+                                   'corrected must change the words at target or location. '
+                                   'Whitespace and punctuation alone do not count. '
+                                   'A question location keeps that question id, owner, and blocks. '
                                    'disputed must quote supplied evidence. needs_human leaves the defect for a person.',
                     'findings': defects,
                 }
