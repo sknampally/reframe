@@ -14,6 +14,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from pilot import Blocked, require
+import reframe_handoff as handoff
 
 MODES = ('functional-parity', 'reimagine')
 CATEGORIES = ('current-state', 'future-state', 'clarification')
@@ -862,6 +863,7 @@ def _mode_package_files(work, project, version, mode, current_html, conflicts):
         files['deltas.json'] = (future / 'deltas.json').read_bytes()
         files['future-screens.json'] = (future / 'screens.json').read_bytes()
     files['README.md'] = _readme(mode).encode()
+    files['reframe-notice.md'] = handoff.framework_notice().encode()
     files['AGENTS.md'] = (b'# Engineering instructions\n\nRead specification.json, decisions are not implied, and leave tests NOT RUN.\n')
     files['SKILL.md'] = (b'---\nname: draft-mode-implementation\ndescription: Implement one approved backlog item from this draft package.\n---\n\n'
                          b'Read AGENTS.md. Do not implement a proposed_unapproved item. Do not claim a test passed.\n')
@@ -890,7 +892,8 @@ def _mode_package_files(work, project, version, mode, current_html, conflicts):
 def _readme(mode):
     return ('# Draft ' + mode + ' package\n\nThis is not the approved single AI-DLC package. '
             'Do not implement a proposed_unapproved item as a requirement. '
-            'Tests and implementation are NOT RUN. No application has been built.\n')
+            'Tests and implementation are NOT RUN. No application has been built.\n'
+            'reframe-notice.md applies only to copied Reframe framework instructions.\n')
 
 
 def run_prefix(project_id, stamp, suffix):

@@ -233,6 +233,14 @@ reframe --help
 
 The [CI workflow](.github/workflows/ci.yml) is configured for pull requests to `main` and pushes to `main`. It runs three jobs in parallel: offline tests, a package build check, and a pinned gitleaks secret scan. **The badge reflects GitHub's actual workflow result; it is not a claim of live AWS acceptance.** No AWS credentials or paid model calls are required by CI.
 
+## Author and attribution
+
+Satish Kumar Nampally created Reframe. The project repository is [https://github.com/sknampally/reframe](https://github.com/sknampally/reframe).
+
+The [MIT license](LICENSE) permits commercial use, modification, and redistribution, subject to its terms. A copy or a substantial portion of Reframe must keep the copyright notice and the permission notice.
+
+Public acknowledgment and a link to the repository are appreciated. The MIT license does not require them.
+
 ## Security, licensing and scope
 
 Keep source assessments, account identifiers, credentials and client documents in private workspaces—**never in this public repository or public issues**. Do not upload third-party source without authorization. Reframe itself is [MIT licensed](LICENSE); [AWS CardDemo](https://github.com/aws-samples/aws-mainframe-modernization-carddemo) remains an independent sample under its own license. See [SECURITY.md](SECURITY.md) and [THIRD_PARTY.md](THIRD_PARTY.md).

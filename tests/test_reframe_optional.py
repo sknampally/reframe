@@ -227,7 +227,7 @@ class OptionalModeTests(unittest.TestCase):
         packaged = optional.package_export(self.root, self.project, 'v8', 'reimagine')
         with zipfile.ZipFile(self.root / packaged['archive']) as archive:
             names = set(archive.namelist())
-            for required in ('AGENTS.md', 'SKILL.md', 'specification.json', 'implementation-backlog.json',
+            for required in ('AGENTS.md', 'SKILL.md', 'reframe-notice.md', 'specification.json', 'implementation-backlog.json',
                              'openapi.json', 'modernization-sequence.json', 'checksums.json', 'manifest.json',
                              'future-state.html', 'current-state.html'):
                 self.assertIn(required, names)

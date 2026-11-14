@@ -1976,7 +1976,9 @@ def package(work, project):
         'Every capability starts unassigned, and every comparison stays NOT RUN. Work in backlog dependency order.\n'
         'Deferred decisions block the work identified in specification.json. This package is not a release approval.\n'
         'No application code or infrastructure has been deployed. All acceptance scenarios remain NOT RUN.\n'
-        'Keep private; inspect all contents before sharing.\n')
+        'Keep private; inspect all contents before sharing.\n'
+        'reframe-notice.md applies only to copied Reframe framework instructions.\n')
+    (destination / 'reframe-notice.md').write_text(handoff.framework_notice())
     manifest = {p.name: sha(p) for p in destination.iterdir() if p.is_file()}
     write(destination / 'checksums.json', manifest)
     refuse_packaged_secrets(destination)

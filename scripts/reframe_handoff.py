@@ -71,6 +71,22 @@ SKILLS = {
         'Leave the member unchanged.\n'),
 }
 
+def framework_notice():
+    """MIT notice for copied framework instructions. It does not cover the export."""
+    local = Path(__file__).resolve().parents[1] / 'LICENSE'
+    if local.is_file():
+        license_text = local.read_text()
+    else:
+        from importlib.metadata import distribution
+        packaged = next(path for path in distribution('reframe').files if path.name == 'LICENSE')
+        license_text = packaged.locate().read_text()
+    return (
+        'This notice applies only to Reframe framework instructions copied into this export, '
+        'including AGENTS.md, SKILL.md, and skill files. '
+        'It does not claim ownership of the source code, AWS findings, decisions, specifications, '
+        'or the rest of this export.\n\n' + license_text)
+
+
 NAMES = frozenset({
     'modernization-sequence.json', 'capability-map.json', 'parallel-validation.json',
     'field-inventory.json', 'batch-inventory.json', 'api-boundary.json', 'governance.json',
