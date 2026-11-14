@@ -145,10 +145,22 @@ After the package exists you can optionally export a **Functional Parity** (curr
 reframe status
 ```
 
-`status` shows the current stage, the approvals recorded and the next command to run. `reframe resume` continues interrupted work. If a framework update changed the preparation prompts, `resume` keeps the saved prompt pin and tells you to authorize the change. From a clean checkout:
+`status` shows the current stage, the approvals recorded and the next command to run. `reframe resume` continues interrupted work. After a controller fix is reviewed and merged, use a clean committed checkout of that revision, reinstall, then record the new revision on the saved run:
 
 ```bash
-reframe upgrade-framework --note "Adopt the synthesis prompt changes for this saved review" --adopt-prompts
+git checkout main
+git pull origin main
+uv tool install --force --reinstall --managed-python --python 3.12 --editable .
+reframe upgrade-framework --note "Record the reviewed controller fix"
+reframe status
+reframe resume
+```
+
+`upgrade-framework` records this checkout. A prompt migration recorded for an earlier revision does not authorize this one. When the preparation prompts also changed, the upgrade writes nothing and `resume` reports `Run pin changed: prompt_hash`. Adopt the prompts explicitly, then resume:
+
+```bash
+reframe upgrade-framework --note "Adopt the preparation prompt changes for this saved review" --adopt-prompts
+reframe status
 reframe resume
 ```
 

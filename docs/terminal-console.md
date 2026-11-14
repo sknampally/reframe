@@ -38,7 +38,7 @@ Existing controller budgets, source checks and approval gates still apply.
 | `/menu` or `/status` | Refresh the project dashboard and saved assessment states |
 | `/init` | Start or continue guided setup |
 | `/preview` | After assessment approval, write the wireframe site and AI-DLC ZIP |
-| `/upgrade-framework` | Record a Reframe update on this saved run. Add `--adopt-prompts` when the preparation prompts changed. |
+| `/upgrade-framework` | Record the installed revision on this saved run. Reinstall from a clean committed checkout first. A previous prompt migration does not authorize a new revision. Add `--adopt-prompts` when this revision changes the preparation prompts. |
 | `/workspace` | Select an existing private project |
 | `/assess` | Confirm a source upload and start a new assessment |
 | `/resume` | Continue saved AWS, validation or HTML work |
