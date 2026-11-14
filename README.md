@@ -164,7 +164,11 @@ reframe status
 reframe resume
 ```
 
-That records the old and new prompt hashes for the calls and passed units already saved, then lets the saved review continue. It does not restart the assessment or the passed units. Inside the workspace folder:
+That records the old and new prompt hashes for the calls and passed units already saved, then lets the saved review continue. It does not restart the assessment or the passed units.
+
+A saved correction whose edit target is not the string `section` or `work_item` is checked by the next `reframe resume` without a model call. The saved reply, candidate, call count, and correction allowance stay in place, and the command prints the validation result. Run `reframe resume` once more to send that result under the existing invalid-candidate limit. This controller change does not change the preparation prompts. Use `--adopt-prompts` only when `resume` reports `Run pin changed: prompt_hash`.
+
+Inside the workspace folder:
 
 | Folder | Contents |
 | --- | --- |

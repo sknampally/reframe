@@ -628,6 +628,12 @@ def next_step(project):
     if project['stage'] == 'PROVIDER_REVIEW_REQUIRED':
         return 'Review the private provider refusal and request content; automatic model retries are stopped.'
     stage = project['stage']
+    if stage == 'RUNNING_EXECUTOR':
+        error = (project.get('pipeline') or {}).get('correction_error')
+        if isinstance(error, dict) and error.get('reason'):
+            return ('reframe resume. The saved correction was rejected before any edit was applied. '
+                    'The next resume sends that validation result to one correction. '
+                    'Passed units stay sealed. No assessment job is created.')
     if stage == 'PREPARATION_PLANNED':
         state = project.get('pipeline') or {}
         if state.get('reason') == 'Insufficient call budget for remaining checkpoint plan':

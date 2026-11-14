@@ -534,6 +534,12 @@ def run(ui):
                     updated = ui.project() or {}
                     continue
                 # A short allowance returns a blocked status. Calls already spent still reach the question below.
+                if code != 0 and state.get('correction_error'):
+                    report = getattr(ui, 'last_report', None) or {}
+                    ui.say(str(report.get('reason') or 'The saved correction was rejected before any edit was applied.'))
+                    ui.say(str(report.get('next_step') or 'reframe resume'))
+                    ui.say('Passed units stay sealed. No new assessment job is created.')
+                    return
                 if code != 0 and state.get('reason') != 'Insufficient call budget for remaining checkpoint plan':
                     return
                 if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL':

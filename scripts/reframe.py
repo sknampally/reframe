@@ -1341,6 +1341,9 @@ def latest_synthesis_review(work, project):
 def displayed_synthesis_reason(work, project):
     """Saved synthesis reason, or the latest review when that pause left the reason empty."""
     state = project.get('pipeline') or {}
+    error = state.get('correction_error')
+    if project.get('stage') == 'RUNNING_EXECUTOR' and isinstance(error, dict) and error.get('reason'):
+        return error['reason']
     if state.get('reason'):
         return state['reason']
     if project.get('stage') != 'REWORK_LIMIT':
@@ -1368,6 +1371,47 @@ def unused_synthesis_correction(state, area):
 def pause_unsent_correction(state, error):
     """Record a request that was not sent. The reserved correction, calls, and history stay."""
     state['reason'] = str(error)
+
+
+CORRECTION_RESUME = (
+    'reframe resume. The saved correction was rejected before any edit was applied. '
+    'The next resume sends that validation result to one correction. '
+    'Passed units stay sealed. No assessment job is created.')
+
+
+def saved_correction_reply(area, state):
+    """The correction reply for the current call, when one was already stored."""
+    path = Path(area) / f'reply-{state.get("calls") or 0}.json'
+    if not path.is_file():
+        return None
+    reply = read(path)
+    if isinstance(reply, dict) and reply.get('kind') == 'correction':
+        return reply
+    return None
+
+
+def correction_failure_recorded(project, state):
+    """True after this call's correction was rejected and the failure was saved."""
+    calls = state.get('calls') or 0
+    return any(isinstance(event, dict) and event.get('event') == 'candidate_validation_failed' and event.get('call') == calls
+               for event in project.get('events') or [])
+
+
+def note_invalid_correction(project, state, error):
+    """Remember a rejected correction without rewriting the saved reply."""
+    project.setdefault('events', []).append({'event': 'candidate_validation_failed',
+        'at': time.time(), 'call': state['calls'], 'reason': str(error)})
+    state['correction_error'] = {'call': state['calls'], 'reason': str(error)}
+    state['invalid_candidates'] = state.get('invalid_candidates', 0) + 1
+
+
+def correction_feedback(state):
+    """Validation text for the reply already stored at this call count."""
+    error = state.get('correction_error')
+    if not isinstance(error, dict) or error.get('call') != state.get('calls'):
+        return None
+    reason = error.get('reason')
+    return reason if isinstance(reason, str) and reason.strip() else None
 
 
 def attach_synthesis_correction(context, work, state, capsules, plan):
@@ -1495,6 +1539,52 @@ def legacy_pipeline(work, project, args, runtime=model_call):
         if isinstance(review, dict) and review.get('decision') == 'REWORK':
             state['previous_review'] = review
     artifact_prefix = 'checkpoint-' if capsules else ''
+
+    def finish_correction(reply):
+        """Validate one stored correction and apply it, or raise Blocked before any edit."""
+        require(capsules, 'Correction edits require reviewed evidence units')
+        round_key = f'{state["round"]}:{state["role"]}'
+        require(state['reads'].get(round_key) or checkpoint_paths, 'Executor must inspect source')
+        canonical = None
+        for earlier in range(state['calls'] - 1, 0, -1):
+            saved_reply = area / f'reply-{earlier}.json'
+            if not saved_reply.is_file():
+                continue
+            prior = read(saved_reply)
+            if prior.get('kind') == 'candidate' and isinstance(prior.get('specification'), dict):
+                canonical = copy.deepcopy(prior['specification'])
+                break
+        require(canonical is not None, 'Correction needs the saved specification')
+        edits = reply.get('edits')
+        cp.complete_synthesis(canonical, capsules, plan)
+        expected = state.get('candidate_sha256')
+        require(isinstance(reply.get('base_sha256'), str) and reply.get('base_sha256') == expected,
+                'Correction base candidate is stale')
+        require(any(sha(path) == expected for path in area.glob(f'{artifact_prefix}candidate-*.json')),
+                'Correction base candidate is stale')
+        before = copy.deepcopy(canonical)
+        try:
+            cp.apply_synthesis_edits(canonical, edits)
+            cp.complete_synthesis(canonical, capsules, plan)
+            validate_spec(canonical, Path(project['source']['root']))
+            cp.validate_synthesis(canonical, capsules, plan)
+            cited = cp.inspected_source_paths(canonical)
+            require(cited <= checkpoint_paths, 'Executor must inspect every rule source file')
+        except Blocked:
+            canonical.clear()
+            canonical.update(before)
+            raise
+        write(area / f'reply-{state["calls"]}.json',
+              {'kind': 'candidate', 'specification': canonical, 'edits': edits, 'base_sha256': expected})
+        state['invalid_candidates'] = 0
+        state.pop('correction_error', None)
+        candidate_path = area / f'{artifact_prefix}candidate-{state["round"]}.json'
+        write(candidate_path, canonical)
+        state['candidate_sha256'] = sha(candidate_path)
+        state['role'] = 'reviewer'
+        state.pop('reason', None)
+        persist(work, project)
+
     previous_signature, repeated_results = None, 0
     while kw.within_call_limit(project['settings'], state['calls']):
         role, number = state['role'], state['round']
@@ -1506,6 +1596,27 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                 project['stage'] = 'BLOCKED'
                 persist(work, project)
                 return {'status': 'BLOCKED', 'reason': reason, 'calls': state['calls'], 'gaps': gaps}
+            pending = saved_correction_reply(area, state)
+            if pending is not None and not correction_failure_recorded(project, state):
+                try:
+                    finish_correction(pending)
+                except Blocked as error:
+                    note_invalid_correction(project, state, error)
+                    if state['invalid_candidates'] >= 3:
+                        state.update(status='BLOCKED', reason='Three invalid synthesis candidates; inspect validation feedback')
+                        project['stage'] = 'BLOCKED'
+                        persist(work, project)
+                        return {'status': 'BLOCKED', 'reason': state['reason'], 'calls': state['calls'],
+                                'invalid_candidates': state['invalid_candidates'],
+                                'limit_corrections': state.get('limit_corrections'),
+                                'next_step': 'Inspect validation feedback before another correction. Passed units stay sealed. No assessment job is created.'}
+                    persist(work, project)
+                    return {'status': 'CORRECTION_INVALID', 'reason': str(error), 'calls': state['calls'],
+                            'invalid_candidates': state['invalid_candidates'],
+                            'limit_corrections': state.get('limit_corrections'),
+                            'round': state.get('round'), 'role': state.get('role'),
+                            'next_step': CORRECTION_RESUME}
+                continue
         key = f'{number}:{role}'
         history = state['contexts'].setdefault(key, [])
         run = dict(assessment_run, settings=project['settings'], model_calls=state['calls'], round=number,
@@ -1571,6 +1682,18 @@ def legacy_pipeline(work, project, args, runtime=model_call):
                         continue
             if capsules:
                 attach_synthesis_correction(context, work, state, capsules, plan)
+                rejected = correction_feedback(state)
+                if rejected:
+                    details = context.get('candidate_correction')
+                    if not isinstance(details, dict):
+                        details = {}
+                        context['candidate_correction'] = details
+                    details['error'] = rejected
+                    details['instruction'] = (
+                        'The previous correction was rejected before any edit was applied. '
+                        'Return {"kind":"correction","edits":[...]} and echo base_sha256. '
+                        'Each edit target must be the string section or work_item, and each id must be a string. '
+                        + cp.SYNTHESIS_CORRECTION)
         if role == 'reviewer':
             candidate_path = area / f'{artifact_prefix}candidate-{number}.json'
             require(sha(candidate_path) == state['candidate_sha256'], 'Candidate changed after handoff')
@@ -1645,49 +1768,16 @@ def legacy_pipeline(work, project, args, runtime=model_call):
             state['reason'] = reply.get('reason', 'Evidence missing')
             break
         elif role == 'executor' and reply.get('kind') == 'correction':
-            require(capsules, 'Correction edits require reviewed evidence units')
-            require(state['reads'].get(key) or checkpoint_paths, 'Executor must inspect source')
-            canonical = None
-            for number_in_reply in range(state['calls'] - 1, 0, -1):
-                saved_reply = area / f'reply-{number_in_reply}.json'
-                if not saved_reply.is_file():
-                    continue
-                prior = read(saved_reply)
-                if prior.get('kind') == 'candidate' and isinstance(prior.get('specification'), dict):
-                    canonical = copy.deepcopy(prior['specification'])
-                    break
-            require(canonical is not None, 'Correction needs the saved specification')
-            edits = reply.get('edits')
-            cp.complete_synthesis(canonical, capsules, plan)
             try:
-                expected = state.get('candidate_sha256')
-                require(isinstance(reply.get('base_sha256'), str) and reply.get('base_sha256') == expected,
-                        'Correction base candidate is stale')
-                require(any(sha(path) == expected for path in area.glob(f'{artifact_prefix}candidate-*.json')),
-                        'Correction base candidate is stale')
-                cp.apply_synthesis_edits(canonical, edits)
-                cp.complete_synthesis(canonical, capsules, plan)
-                validate_spec(canonical, Path(project['source']['root']))
-                cp.validate_synthesis(canonical, capsules, plan)
-                cited = cp.inspected_source_paths(canonical)
-                require(cited <= checkpoint_paths, 'Executor must inspect every rule source file')
-                reply = {'kind': 'candidate', 'specification': canonical, 'edits': edits, 'base_sha256': expected}
-                write(area / f'reply-{state["calls"]}.json', reply)
+                finish_correction(reply)
             except Blocked as error:
-                write(area / f'reply-{state["calls"]}.json', {'kind': 'correction', 'edits': edits if isinstance(edits, list) else []})
-                project.setdefault('events', []).append({'event': 'candidate_validation_failed',
-                    'at': time.time(), 'call': state['calls'], 'reason': str(error)})
-                state['invalid_candidates'] = state.get('invalid_candidates', 0) + 1
+                note_invalid_correction(project, state, error)
                 if state['invalid_candidates'] >= 3:
                     state.update(status='BLOCKED', reason='Three invalid synthesis candidates; inspect validation feedback')
                     project['stage'] = 'BLOCKED'
                     break
                 persist(work, project)
                 continue
-            state['invalid_candidates'] = 0
-            write(area / f'{artifact_prefix}candidate-{number}.json', canonical)
-            state['candidate_sha256'] = sha(area / f'{artifact_prefix}candidate-{number}.json')
-            state['role'] = 'reviewer'
         elif role == 'executor' and reply.get('kind') == 'candidate':
             require(state['reads'].get(key) or checkpoint_paths, 'Executor must inspect source')
             require(any(x['request'].get('area') == 'assessment' and x.get('response') for x in history) or capsules, 'Executor must inspect assessment findings')
@@ -2399,7 +2489,7 @@ def main(argv=None, reporter=None):
         if project is not None and 'next_step' not in result:
             result['next_step'] = next_step(project)
         emit(result)
-        return 2 if result.get('status') in {'BLOCKED', 'REWORK_LIMIT', 'CONTEXT_LIMIT', 'ASSESSMENT_FAILED', 'NEEDS_RECONCILIATION'} else 0
+        return 2 if result.get('status') in {'BLOCKED', 'REWORK_LIMIT', 'CONTEXT_LIMIT', 'CORRECTION_INVALID', 'ASSESSMENT_FAILED', 'NEEDS_RECONCILIATION'} else 0
     except KeyboardInterrupt:
         result = {'status': 'CANCELLED', 'reason': 'Cancelled by user. Saved work is retained.',
                   'next_step': 'reframe init' if args.command == 'init' else 'reframe status'}
