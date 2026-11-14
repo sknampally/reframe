@@ -459,10 +459,10 @@ def run(ui):
         if not record_framework_update(ui, project):
             return
         if approved and not project.get('approvals', {}).get('validation') and stage != 'AWAITING_VALIDATION_APPROVAL':
-            interrupted = stage in {'WAITING_FOR_RUNTIME', 'RUNNING_EXECUTOR', 'RUNNING_REVIEWER', 'PREPARATION_PLANNED'} and project.get('pipeline')
+            interrupted = stage in {'WAITING_FOR_RUNTIME', 'RUNNING_EXECUTOR', 'RUNNING_REVIEWER', 'PREPARATION_PLANNED', 'REWORK_LIMIT'} and project.get('pipeline')
             if interrupted:
                 ui.say('Resuming the saved review. Completed calls stay recorded. No new assessment job is created.')
-                code = ui.invoke(['validate'])
+                code = ui.invoke(['resume'])
                 updated = ui.project() or {}
             else:
                 ui.say('Assessment is approved. skip generates wireframes and the AI-DLC package without a second review. review runs the executor and an independent reviewer.')
@@ -493,9 +493,22 @@ def run(ui):
                     return
                 code = ui.invoke(['validate'])
                 updated = ui.project() or {}
+            recovery_used = interrupted and (updated.get('stage') == 'REWORK_LIMIT')
             for _budget in range(6):
                 if updated.get('stage') == 'AWAITING_VALIDATION_APPROVAL':
                     break
+                if updated.get('stage') == 'REWORK_LIMIT':
+                    if recovery_used:
+                        report = getattr(ui, 'last_report', None) or {}
+                        ui.say('Review paused on unit ' + str(report.get('unit') or 'unknown') + '.')
+                        ui.say(str(report.get('next_step') or 'Authorize one targeted correction with reframe feedback --authorize-correction.'))
+                        ui.say('No new assessment job is created.')
+                        return
+                    recovery_used = True
+                    ui.say('Resuming the saved review. Completed calls stay recorded. No new assessment job is created.')
+                    code = ui.invoke(['resume'])
+                    updated = ui.project() or {}
+                    continue
                 state = updated.get('pipeline') or {}
                 settings = updated.get('settings') or {}
                 spent = state.get('calls') or 0

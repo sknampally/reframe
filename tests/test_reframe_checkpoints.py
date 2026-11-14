@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import test_reframe as fixtures
@@ -47,7 +48,13 @@ class CheckpointTests(unittest.TestCase):
             if kind == 'assessment_claim':
                 questions.append({'id':unit+'-Q'+str(index),'question':'Reconcile report','owner':'SME',
                                   'impact':'Unproven report claim','blocks':'Implementation'})
-        return {'kind':'checkpoint','summary':'Fixture evidence checkpoint','coverage':coverage,'findings':findings,'questions':questions}
+        reply = {'kind':'checkpoint','summary':'Fixture evidence checkpoint','coverage':coverage,'findings':findings,'questions':questions}
+        defects = cp.review_defects(context.get('previous_review'))
+        if defects:
+            quote = next((item['quote'] for finding in findings for item in finding.get('citations', []) if item.get('quote')), '')
+            reply['dispositions'] = [{'finding_id': defect['id'], 'disposition': 'disputed', 'evidence': quote}
+                                     for defect in defects]
+        return reply
 
     def runtime(self, provider, run, directory, role, message):
         context = json.loads(message)
@@ -330,17 +337,32 @@ class CheckpointTests(unittest.TestCase):
                             'findings':[{'issue':'The cited branch is contradicted'}]}
             return self.runtime(provider, run, directory, role, message)
         self.assertEqual(app.pipeline(self.work, self.project, self.args('validate'), runtime)['status'], 'REWORK_LIMIT')
-        self.assertEqual(app.pipeline(self.work, self.project, self.args('resume'), runtime)['status'], 'REWORK_LIMIT')
-        self.assertEqual(seen['U0001'], 3)
+        self.assertEqual(seen['U0001'], 2)
         self.project['settings']['max_model_calls'] = self.project['pipeline']['calls']
         blocked = app.pipeline(self.work, self.project, self.args('resume'), runtime)
         self.assertEqual(blocked['reason'], 'Insufficient call budget for remaining checkpoint plan')
         self.assertEqual(blocked['minimum_additional_calls'], 4)
+        self.assertEqual(seen['U0001'], 2)
         self.project['settings']['max_model_calls'] = self.project['pipeline']['calls'] + 8
         third = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(third['status'], 'REWORK_LIMIT')
+        self.assertEqual(seen['U0001'], 3)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['corrections_used'], 1)
+        stalled = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(stalled['status'], 'REWORK_LIMIT')
+        self.assertEqual(seen['U0001'], 3)
+        self.assertIn('authorize-correction', stalled['next_step'])
+        attempt = self.project['checkpoints']['units']['U0001']['attempt']
+        consumed = self.project['pipeline']['calls']
+        authorized = app.feedback(self.work, self.project, self.args(
+            'feedback', '--unit', 'U0001', '--authorize-correction', '--by', 'Fixture owner', '--note', 'One more correction'))
+        self.assertEqual(authorized['calls_consumed'], consumed)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['attempt'], attempt)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['correction_authorizations'], 1)
+        done = app.pipeline(self.work, self.project, self.args('resume'), runtime)
         self.assertEqual(self.project['checkpoints']['units']['U0001']['status'], 'PASS')
         self.assertEqual(seen['U0001'], 4)
-        self.assertEqual(third['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.assertEqual(done['status'], 'AWAITING_VALIDATION_APPROVAL')
 
     def test_synthesis_restores_rules_and_questions_the_model_omitted(self):
         question = {'id':'Q1', 'question':'What limit applies', 'impact':'Stops the case',
@@ -407,8 +429,12 @@ class CheckpointTests(unittest.TestCase):
         result=app.pipeline(self.work,self.project,self.args('validate'),lambda *a:{'kind':'checkpoint','summary':'Missing coverage'})
         self.assertEqual(result['status'],'BLOCKED')
         self.assertEqual(self.project['pipeline']['calls'],3)
-        with self.assertRaisesRegex(Blocked,'blocked evidence unit'):
-            app.pipeline(self.work,self.project,self.args('resume'),lambda *a:self.fail('No automatic retry'))
+        calls = self.project['pipeline']['calls']
+        paused = app.pipeline(self.work, self.project, self.args('resume'), lambda *a: self.fail('No automatic retry'))
+        self.assertEqual(paused['status'], 'BLOCKED')
+        self.assertEqual(paused['unit'], 'U0001')
+        self.assertTrue(str(paused['reason']).startswith('U0001'))
+        self.assertEqual(self.project['pipeline']['calls'], calls)
 
     def test_synthesis_cannot_drop_checkpoint_rules_or_questions(self):
         self.plan()
@@ -548,3 +574,293 @@ class CheckpointTests(unittest.TestCase):
             return {'kind': 'review', 'decision': 'PASS', 'report': 'Tried to rewrite the candidate', 'findings': []}
         with self.assertRaisesRegex(Blocked, 'Reviewer cannot write the candidate'):
             app.pipeline(self.work, self.project, self.args('validate'), runtime)
+
+    def test_stale_targeted_claim_is_corrected_or_stopped_without_a_new_assessment(self):
+        self.plan()
+        original = 'A non-normal response sets the failure flag.'
+        only = 'The card name field is chosen only for two named cases.'
+        cosmetic = 'The   card name field is chosen only for two named cases.'
+        fixed = 'The card name field is chosen for two named cases and the blank branch.'
+        mode = {'statement': cosmetic}
+        reviewers = {'n': 0}
+        sent = []
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if 'unit_id' not in context:
+                return self.runtime(provider, run, directory, role, message)
+            if context['unit_id'] != 'U0001':
+                if role == 'executor':
+                    return self.checkpoint(context)
+                return {'kind': 'review', 'decision': 'PASS', 'report': 'U0002 passed', 'findings': []}
+            if role == 'reviewer':
+                reviewers['n'] += 1
+                statement = next(item['statement'] for item in context['candidate']['findings'] if item['id'] == 'U0001-F7')
+                if 'blank branch' in statement:
+                    return {'kind': 'review', 'decision': 'PASS', 'report': 'U0001 corrected claim matches the cited branch', 'findings': []}
+                finding = 'R-U0001-1' if 'failure flag' in statement else 'R-U0001-2'
+                report = 'U0001 rewrite the failure claim' if finding.endswith('1') else 'U0001 cursor field is still limited to two cases'
+                return {'kind': 'review', 'decision': 'REWORK', 'report': report, 'findings': [
+                    {'id': finding, 'target': 'U0001-F7', 'problem': report, 'required_action': 'Restate the claim'}]}
+            reply = self.checkpoint(context)
+            reply.pop('dispositions', None)
+            reply['findings'][0]['id'] = 'U0001-F7'
+            defects = (context.get('correction_request') or {}).get('findings') or []
+            ident = {item['id'] for item in defects}
+            if 'R-U0001-2' in ident:
+                sent.append(context)
+                reply['findings'][0]['statement'] = mode['statement']
+            elif ident:
+                reply['findings'][0]['statement'] = only
+            else:
+                self.assertNotIn('candidate', context)
+                reply['findings'][0]['statement'] = original
+            if ident:
+                quote = reply['findings'][0]['citations'][0]['quote']
+                reply['dispositions'] = [{'finding_id': item, 'disposition': 'corrected', 'evidence': quote} for item in ident]
+            return reply
+
+        with patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            first = app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(first['status'], 'REWORK_LIMIT')
+        self.assertEqual(first['unit'], 'U0001')
+        self.assertTrue(first['reason'].startswith('U0001'))
+        self.assertIn('two cases', first['reason'])
+        self.assertNotIn('U0002', first['unit'])
+        passed = copy.deepcopy(self.project['checkpoints']['units']['U0002'])
+        calls = self.project['pipeline']['calls']
+        unchanged = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(unchanged['unit'], 'U0001')
+        self.assertTrue(unchanged['reason'].startswith('U0001'))
+        self.assertIn('Unchanged defective content', unchanged['reason'])
+        self.assertIn('R-U0001-2', unchanged['reason'])
+        self.assertEqual(reviewers['n'], 2)
+        self.assertEqual(sent[-1]['unit_id'], 'U0001')
+        self.assertEqual(sent[-1]['candidate']['findings'][0]['statement'], only)
+        self.assertEqual(sent[-1]['correction_request']['findings'][0]['id'], 'R-U0001-2')
+        self.assertEqual(self.project['checkpoints']['units']['U0002'], passed)
+        self.assertEqual(self.project['pipeline']['calls'], calls + 1)
+        paused = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(paused['status'], 'REWORK_LIMIT')
+        self.assertEqual(self.project['pipeline']['calls'], calls + 1)
+        self.assertIn('authorize-correction', paused['next_step'])
+        self.assertNotIn('reframe assess', paused['next_step'])
+        self.assertIn('No assessment job is created', paused['next_step'])
+        attempt = self.project['checkpoints']['units']['U0001']['attempt']
+        history = list(self.project['checkpoints']['units']['U0001']['correction_history'])
+        app.feedback(self.work, self.project, self.args(
+            'feedback', '--unit', 'U0001', '--authorize-correction', '--by', 'Fixture owner', '--note', 'Correct the named cases'))
+        self.assertEqual(self.project['pipeline']['calls'], calls + 1)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['attempt'], attempt)
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['correction_history'], history)
+        self.assertEqual(self.project['checkpoints']['units']['U0002'], passed)
+        mode['statement'] = fixed
+        done = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(done['status'], 'AWAITING_VALIDATION_APPROVAL')
+        self.assertEqual(reviewers['n'], 3)
+        saved = app.read(self.work / self.project['checkpoints']['units']['U0001']['candidate_path'])
+        self.assertIn('blank branch', next(item['statement'] for item in saved['findings'] if item['id'] == 'U0001-F7'))
+        self.assertEqual(self.project['checkpoints']['units']['U0002']['candidate_sha256'], passed['candidate_sha256'])
+
+    def test_interrupted_correction_reviews_the_new_candidate_without_replaying_it(self):
+        self.plan()
+        state = {'raise': True}
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if context.get('unit_id') != 'U0001':
+                if 'unit_id' not in context:
+                    return {'kind': 'blocked', 'reason': 'Stop before synthesis'}
+                if role == 'executor':
+                    return self.checkpoint(context)
+                return {'kind': 'review', 'decision': 'PASS', 'report': 'Independent fixture review', 'findings': []}
+            if role == 'reviewer':
+                statement = next(item['statement'] for item in context['candidate']['findings'] if item['id'] == 'U0001-F7')
+                if 'blank branch' in statement and state['raise']:
+                    state['raise'] = False
+                    raise RuntimeError('review interrupted')
+                if 'blank branch' in statement:
+                    state['seen'] = statement
+                    return {'kind': 'review', 'decision': 'PASS', 'report': 'U0001 corrected', 'findings': []}
+                finding = 'R-U0001-1' if 'failure flag' in statement else 'R-U0001-2'
+                return {'kind': 'review', 'decision': 'REWORK', 'report': 'U0001 still wrong', 'findings': [
+                    {'id': finding, 'target': 'U0001-F7', 'problem': 'U0001 still wrong', 'required_action': 'Restate'}]}
+            reply = self.checkpoint(context)
+            reply.pop('dispositions', None)
+            reply['findings'][0]['id'] = 'U0001-F7'
+            ident = {item['id'] for item in (context.get('correction_request') or {}).get('findings') or []}
+            if 'R-U0001-2' in ident:
+                reply['findings'][0]['statement'] = 'The card name field is chosen for two named cases and the blank branch.'
+            elif ident:
+                reply['findings'][0]['statement'] = 'The card name field is chosen only for two named cases.'
+            else:
+                reply['findings'][0]['statement'] = 'A non-normal response sets the failure flag.'
+            if ident:
+                quote = reply['findings'][0]['citations'][0]['quote']
+                reply['dispositions'] = [{'finding_id': item, 'disposition': 'corrected', 'evidence': quote} for item in ident]
+            return reply
+
+        app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        passed = copy.deepcopy(self.project['checkpoints']['units']['U0002'])
+        with self.assertRaisesRegex(RuntimeError, 'review interrupted'):
+            app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        saved = copy.deepcopy(self.project['checkpoints']['units']['U0001'])
+        self.assertEqual(saved['role'], 'reviewer')
+        self.project = app.read(self.work / 'project.json')
+        calls = self.project['pipeline']['calls']
+        with patch.object(app, 'legacy_pipeline', return_value={'status': 'READY_FOR_SYNTHESIS'}), \
+             patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(state['seen'], 'The card name field is chosen for two named cases and the blank branch.')
+        self.assertEqual(self.project['checkpoints']['units']['U0001']['candidate_sha256'], saved['candidate_sha256'])
+        self.assertEqual(self.project['pipeline']['calls'], calls + 1)
+        self.assertEqual(self.project['checkpoints']['units']['U0002'], passed)
+
+    def test_each_paused_unit_keeps_its_own_report(self):
+        self.plan()
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if 'unit_id' not in context:
+                return {'kind': 'blocked', 'reason': 'Stop before synthesis'}
+            if role == 'executor':
+                return self.checkpoint(context)
+            phrase = 'cursor only cases' if context['unit_id'] == 'U0001' else 'screen inventory'
+            return {'kind': 'review', 'decision': 'REWORK', 'report': phrase, 'findings': [
+                {'id': 'R-' + context['unit_id'], 'problem': phrase, 'required_action': 'Fix the claim'}]}
+
+        result = app.pipeline(self.work, self.project, self.args('validate'), runtime)
+        self.assertEqual(result['unit'], 'U0001, U0002')
+        rows = {row['unit']: row['reason'] for row in result['unresolved']}
+        self.assertIn('cursor only cases', rows['U0001'])
+        self.assertNotIn('screen inventory', rows['U0001'])
+        self.assertIn('screen inventory', rows['U0002'])
+        self.assertNotIn('cursor only cases', rows['U0002'])
+
+    def test_resume_command_recovers_a_paused_review_without_assessment(self):
+        self.plan()
+        self.project['stage'] = 'REWORK_LIMIT'
+        self.project['pipeline']['status'] = 'REWORK_LIMIT'
+        self.project['active_assessment'] = self.project['selected']
+        app.persist(self.work, self.project)
+        seen = {}
+
+        def fake(work, project, args, runtime=app.model_call):
+            seen['command'] = args.command
+            return {'status': 'REWORK_LIMIT', 'unit': 'U0001', 'reason': 'U0001: paused',
+                    'next_step': 'reframe feedback --authorize-correction'}
+
+        with patch.object(app, 'pipeline', fake), patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            code = app.main(['--workspace', str(self.work), 'resume'])
+        self.assertEqual(seen['command'], 'resume')
+        self.assertEqual(code, 2)
+
+    def test_sanitized_saved_rework_keeps_passed_units_and_corrects_each_paused_unit(self):
+        self.plan()
+        plan_path = self.work / self.project['checkpoints']['plan_path']
+        plan = app.read(plan_path)
+        segment = plan['units'][0]['segments'][0]
+        paused = {'U0001', 'U0041', 'U0053'}
+        claims = {
+            'U0001': 'The account field is chosen only for two named cases.',
+            'U0041': 'The balance field is chosen only for two named cases.',
+            'U0053': 'The card name field is chosen only for two named cases.',
+        }
+        plan['units'] = [{'id': f'U{number:04d}', 'focus': 'rule.cbl', 'segments': [segment]} for number in range(1, 113)]
+        app.write(plan_path, plan)
+        self.project['checkpoints']['plan_sha256'] = sha(plan_path)
+        units = {}
+        area = self.work / 'preparation'
+        for unit in plan['units']:
+            ident = unit['id']
+            if ident in paused:
+                candidate = {'kind': 'checkpoint', 'summary': 'sanitized candidate',
+                             'findings': [{'id': ident + '-F7', 'statement': claims[ident]}]}
+                review = {'kind': 'review', 'decision': 'REWORK',
+                          'report': ident + ' claim is still limited to two cases',
+                          'findings': [{'id': 'R-' + ident + '-2', 'target': ident + '-F7',
+                                        'problem': ident + ' claim is still limited to two cases',
+                                        'required_action': 'Restate the claim'}]}
+                candidate_path = area / ('saved-' + ident + '-candidate.json')
+                review_path = area / ('saved-' + ident + '-review.json')
+                app.write(candidate_path, candidate)
+                app.write(review_path, review)
+                units[ident] = {'status': 'REWORK_LIMIT', 'attempt': 2, 'role': 'reviewer', 'limit_rereviewed': True,
+                                'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                                'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path),
+                                'previous_review': review, 'reason': review['report']}
+            else:
+                candidate = {'kind': 'checkpoint', 'summary': 'passed', 'findings': [], 'questions': [], 'coverage': []}
+                review = {'kind': 'review', 'decision': 'PASS', 'report': 'passed', 'findings': []}
+                candidate_path = area / ('saved-' + ident + '-candidate.json')
+                review_path = area / ('saved-' + ident + '-review.json')
+                app.write(candidate_path, candidate)
+                app.write(review_path, review)
+                units[ident] = {'status': 'PASS', 'attempt': 1, 'role': 'reviewer',
+                                'candidate_path': str(candidate_path.relative_to(self.work)), 'candidate_sha256': sha(candidate_path),
+                                'review_path': str(review_path.relative_to(self.work)), 'review_sha256': sha(review_path)}
+        self.project['checkpoints']['units'] = units
+        self.project['checkpoints']['status'] = 'PLANNED'
+        self.project['pipeline'].update(calls=287, status='REWORK_LIMIT', role='reviewer', round=1)
+        self.project['stage'] = 'REWORK_LIMIT'
+        self.project['settings']['max_model_calls'] = None
+        label = self.project['selected']
+        assessment_sha = self.project['assessments'][label]['sha256']
+        approvals = copy.deepcopy(self.project['approvals'])
+        source_commit = self.project['source']['commit']
+        prompt_hash = self.project['pins']['prompt_hash']
+        self.project['framework_commit'] = 'b' * 40
+        self.project['pins']['framework_commit'] = 'b' * 40
+        directory = Path(self.project['assessments'][label]['directory'])
+        run = app.read(directory / 'run.json')
+        run['framework_commit'] = 'b' * 40
+        app.write(directory / 'run.json', run)
+        app.persist(self.work, self.project)
+        passed = {ident: copy.deepcopy(record) for ident, record in units.items() if record['status'] == 'PASS'}
+        upgraded = app.upgrade_framework(self.work, self.project, argparse.Namespace(note='Record checkpoint correction recovery'))
+        self.assertEqual(upgraded['status'], 'FRAMEWORK_UPDATED')
+        self.assertEqual(self.project['pipeline']['calls'], 287)
+        self.assertEqual(self.project['assessments'][label]['sha256'], assessment_sha)
+        self.assertEqual(self.project['approvals'], approvals)
+        self.assertEqual(self.project['source']['commit'], source_commit)
+        self.assertEqual(self.project['pins']['prompt_hash'], prompt_hash)
+        self.assertEqual(self.project['pins']['framework_commit'], 'a' * 40)
+        self.assertEqual({ident: self.project['checkpoints']['units'][ident] for ident in passed}, passed)
+        seen = []
+
+        def runtime(provider, run, directory, role, message):
+            context = json.loads(message)
+            if 'unit_id' not in context:
+                raise AssertionError('synthesis is outside this recovery')
+            ident = context['unit_id']
+            if role == 'reviewer':
+                statement = next(item['statement'] for item in context['candidate']['findings'] if item['id'] == ident + '-F7')
+                seen.append((ident, 'reviewer', statement))
+                return {'kind': 'review', 'decision': 'PASS', 'report': ident + ' corrected claim matches', 'findings': []}
+            request = context['correction_request']['findings']
+            self.assertEqual([item['id'] for item in request], ['R-' + ident + '-2'])
+            self.assertEqual(context['candidate']['findings'][0]['statement'], claims[ident])
+            reply = self.checkpoint(context)
+            reply.pop('dispositions', None)
+            reply['findings'][0]['id'] = ident + '-F7'
+            reply['findings'][0]['statement'] = claims[ident].replace('only for two named cases', 'for two named cases and the blank branch')
+            quote = reply['findings'][0]['citations'][0]['quote']
+            reply['dispositions'] = [{'finding_id': 'R-' + ident + '-2', 'disposition': 'corrected', 'evidence': quote}]
+            seen.append((ident, 'executor', reply['findings'][0]['statement']))
+            return reply
+
+        with patch.object(app, 'legacy_pipeline', return_value={'status': 'READY_FOR_SYNTHESIS'}), \
+                patch.object(app, 'assessment', side_effect=AssertionError('assessment job')):
+            result = app.pipeline(self.work, self.project, self.args('resume'), runtime)
+        self.assertEqual(result['status'], 'READY_FOR_SYNTHESIS')
+        self.assertEqual(self.project['pipeline']['calls'], 293)
+        self.assertEqual(self.project['assessments'][label]['sha256'], assessment_sha)
+        self.assertEqual(self.project['approvals'], approvals)
+        self.assertEqual({ident: self.project['checkpoints']['units'][ident] for ident in passed}, passed)
+        for ident in sorted(paused):
+            record = self.project['checkpoints']['units'][ident]
+            self.assertEqual(record['status'], 'PASS')
+            self.assertEqual(record['attempt'], 2)
+            self.assertEqual([row for row in seen if row[0] == ident], [
+                (ident, 'executor', claims[ident].replace('only for two named cases', 'for two named cases and the blank branch')),
+                (ident, 'reviewer', claims[ident].replace('only for two named cases', 'for two named cases and the blank branch'))])
