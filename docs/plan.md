@@ -228,6 +228,20 @@ The owner's direction (27 November 2026): Reframe takes any legacy codebase Clau
 | L1-08 | Words, README and docs | [§5.5, 6](any-legacy.md) | #480 · The tagline, the README's table by family, the guide and every stage's words follow section 6 |
 | L1-09 | Live acceptance on two codebases | [§7](any-legacy.md) | #481 · Section 7's *done when* on eShopModernizing and JPetStore 6, run locally, nothing committed, the results recorded here |
 
+## Mainframe source packages and a second public codebase
+
+The owner's direction (28 November 2026): a mainframe's source usually comes as AWS Transform documents its source package (the user guide's page on mainframe source artifacts). It is laid out in folders by type, with AWS Transform's table of extensions. Members may have no extension. CICS definitions come as a CSD extract and IMS definitions as Stage 1 macros, and there may be a catalog listing and CA-7 reports. SMF data goes in a folder of its own. Today Reframe's readers know a short list of extensions, and only the `.csd` form of CICS definitions.
+
+IBM's Bank-of-Z (Apache-2.0) is the second public codebase, run end to end after the rest of the backlog. It has 45 COBOL programs, 96 copybooks, 10 BMS maps, 3 JCL members, 2 PL/I programs and IMS. Its CICS definitions are resource-builder YAML, its IMS DBDs and PSBs are kept as `.asm`, and its DB2 tables are defined only inside JCL templates. Epic #485.
+
+| Story | Title | Specification | Done when |
+|---|---|---|---|
+| MP-01 | One table of source kinds | – | #486 · Reframe has one table of source kinds, taken from AWS Transform's list of source file types, and the reconciliation's source files and the design's readers use it. Upper-case extensions, `.cobol`, `.pl1` and members with no extension or `.txt` are classed by their content (COBOL divisions, JCL statements, BMS and IMS macros). On a test package laid out as AWS Transform documents it, the design and the reconciliation find the same programs, copybooks, maps and transactions as with the usual extensions |
+| MP-02 | CICS definitions in either form | – | #487 · Transactions are read from DFHCSDUP's DEFINE statements, names with `$`, `#` and `@` included, and from IBM's CICS resource-builder YAML (`resourceDefinitions` with `transaction` entries naming their `program`), each citing its line. On a fixture of each form every transaction reaches its program |
+| MP-03 | A package check before the upload | – | #488 · After the snapshot and before anything is uploaded, `package-check.json` lists the files AWS Transform's table does not name, the files whose content and extension disagree (with what AWS Transform will take them as, for example IMS DBD and PSB macros kept as `.asm`), files that are not text or not in one encoding, and which system extracts are present (catalog listing, CSD extract, IMS Stage 1, CA-7 reports). `reframe status` and the reports' About section show it. Nothing in the source is changed |
+| MP-04 | Bringing source from a mainframe | [guide](guide.md) | #489 · The guide says how to give Reframe a mainframe's source: AWS Transform's package (folders by type, its extensions, one encoding), the optional system extracts with links to AWS's page, that SMF data goes in its own folder and Reframe does not run AWS's activity analysis, and what the package check reports |
+| MP-05 | Bank-of-Z end to end | results to be written | #490 · After MP-01 to MP-04 and the rest of the backlog: every pipeline runs from the CLI on IBM's Bank-of-Z as far as it goes, with an estimate and the owner's yes before each live run. The time, cost and every failure are written up in the docs with no account or resource identifiers; the run's outputs stay out of the repository; any Reframe defect it shows is fixed with a test |
+
 ## Proving it at scale
 
 After everything above is tested and the owner is satisfied.
