@@ -331,7 +331,7 @@ def inventory(legacy: Path) -> dict[str, Any]:
     for p in _files(legacy, COBOL_SUFFIXES):
         text = p.read_text(errors="replace")
         programs[p.stem.upper()] = {"file": rel(p), "copies": _copies(text), "text": text}
-    screens = []
+    screens: list[dict[str, Any]] = []
     for p in _files(legacy, BMS_SUFFIXES):
         for m in read_bms(p.read_text(errors="replace"), rel(p)):
             copybook = symbolic.get(m.mapset.upper())

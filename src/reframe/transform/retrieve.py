@@ -91,7 +91,7 @@ def retrieve(aws: Aws, folder: RunFolder, bucket: Bucket, job_id: str) -> dict[s
 def summarize(requirements: Path) -> dict[str, Any]:
     """Per function: its domain, requirement counts by type, open questions, and AWS's own rule counts."""
     spec = requirements / "spec" if (requirements / "spec").is_dir() else requirements
-    functions = []
+    functions: list[dict[str, Any]] = []
     for document in sorted(spec.rglob("requirements.md")):
         relative = document.parent.relative_to(spec).parts
         text = document.read_text(errors="replace")
@@ -103,7 +103,7 @@ def summarize(requirements: Path) -> dict[str, Any]:
         functions.append({"domain": relative[0] if len(relative) > 1 else "", "function": relative[-1] if relative else "",
                           "path": "/".join(relative), "requirements": counts,
                           "open_questions": count_questions(text), "rules": rules})
-    totals = {"requirements": sum(sum(f["requirements"].values()) for f in functions),
+    totals: dict[str, Any] = {"requirements": sum(sum(f["requirements"].values()) for f in functions),
               "by_type": {}, "rules": sum(int(f["rules"].get("total_rules", 0) or 0) for f in functions),
               "captured_rules": sum(int(f["rules"].get("captured", 0) or 0) for f in functions),
               "open_questions": sum(f["open_questions"] for f in functions)}

@@ -76,7 +76,7 @@ def summarize(name: str, lines: list[dict[str, Any]], seconds: float, returncode
     results = [line for line in lines if line.get("type") == "result"]
     if not results:
         tail = " ".join(str(line)[:200] for line in lines[-3:])
-        problem = "signin" if any(w in tail.casefold() for w in SIGNIN_WORDS) else "limit" if any(w in tail.casefold() for w in LIMIT_WORDS) else "failed"
+        problem: str | None = "signin" if any(w in tail.casefold() for w in SIGNIN_WORDS) else "limit" if any(w in tail.casefold() for w in LIMIT_WORDS) else "failed"
         return StepResult(name, False, text=f"no result (exit {returncode}) {tail}", session_id=session, seconds=seconds, problem=problem)
     # Claude Code can end with an empty "success" result for a background task's notice, after the step's real result
     # (found on the second test codebase, 26 November 2026: the real one was the usage limit). That notice is not the step's answer.

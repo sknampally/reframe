@@ -210,6 +210,7 @@ The owner's direction (26 November 2026): make Reframe credible to someone readi
 | Q1-03 | Types in CI | [CONTRIBUTING](../CONTRIBUTING.md) | #452 · Done 26 November 2026 (#455): `mypy` passes in CI. The modules with type errors still to fix are listed in `pyproject.toml`, and the list only shrinks: 25 of 85 modules at the start, after 13 were fixed |
 | Q1-04 | Tests of the drivers, and a coverage floor | [CONTRIBUTING](../CONTRIBUTING.md) | #453 · Done 26 November 2026 (#455): The Claude assessment's driver, the AWS Transform assessment's driver and the command handlers are tested stage by stage with fakes, and CI fails below 80% line coverage. At the start: 81% overall; the drivers went from 44%, 38% and 46% to 95%, 93% and 71% |
 | Q1-05 | Split `core/commands.py` | – | #454 · **Next:** unblocked now that v1.0.0 is tagged (27 November 2026). The 900-line module becomes one module per command group, with the Q1-04 tests passing unchanged |
+| Q1-06 | Types in every module | [CONTRIBUTING](../CONTRIBUTING.md) | #483 · Done 27 November 2026 (#484): `mypy` passes in CI with every module checked except `reframe.core.commands`, which comes off the list once Q1-05 has split it. The 24 other modules on the list (108 errors at the start) are fixed without changing what the code does, and the offline tests pass unchanged; any real fault the types turn up is fixed with a test and listed in the PR. Two were: preflight accepted a sign-in that named no account, and the reports store could return no bucket |
 
 ## Release 1.1: any legacy codebase
 

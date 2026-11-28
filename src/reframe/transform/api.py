@@ -48,14 +48,14 @@ class TransformApi:
         reply = json.loads(lines[-1])
         if reply.get("ok"):
             return reply.get("value")
-        error = str(reply.get("error") or "")
-        if signin_expired(error):
-            raise SigninExpired(error[:300])
-        if REFUSED.search(error) or (isinstance(reply.get("status"), int) and 400 <= reply["status"] < 500):
-            raise Rejected(request["op"], error[:500])
+        message = str(reply.get("error") or "")
+        if signin_expired(message):
+            raise SigninExpired(message[:300])
+        if REFUSED.search(message) or (isinstance(reply.get("status"), int) and 400 <= reply["status"] < 500):
+            raise Rejected(request["op"], message[:500])
         if changes:
-            raise Uncertain(f"{request['op']}: {error[:300]}")
-        raise NotSent(f"{request['op']}: {error[:300]}")
+            raise Uncertain(f"{request['op']}: {message[:300]}")
+        raise NotSent(f"{request['op']}: {message[:300]}")
 
     def messages(self, workspace_id: str, job_id: str) -> list[dict[str, Any]]:
         return self._call({"op": "messages", "workspace_id": workspace_id, "job_id": job_id}, changes=False) or []

@@ -83,6 +83,7 @@ def prepare(ctx: Context, prompt: Callable[[str], str] | None, say: Callable[[st
                              transform_ready=lambda: client.call("list_resources", {"resource": "workspaces"}))
     ctx.folder.save("preflight.json", report.as_json())
     preflight.require(report)
+    assert report.account  # preflight.require refuses a sign-in that names no account
     ctx.folder.update(account=report.account, terraform_version=report.terraform)
     if ctx.state.get("graph") is None:
         names = ctx.names()

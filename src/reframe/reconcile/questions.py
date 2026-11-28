@@ -114,7 +114,7 @@ def problems(ids: list[str], merged: list[dict[str, Any]], sources: set[str]) ->
     missing = [k for k in ids if k not in seen]
     if missing:
         found.append(f"ids in no question: {', '.join(missing)}")
-    wrong = sorted({q.get("settled_by") for q in merged if q.get("settled_by") and q["settled_by"] not in sources})
+    wrong = sorted({q["settled_by"] for q in merged if q.get("settled_by") and q["settled_by"] not in sources})
     if wrong:
         found.append(f"settled_by names that are not a document or answer you were given: {', '.join(wrong)}")
     return found
@@ -161,7 +161,7 @@ def merge_batch(folder: RunFolder, claude, places: dict[str, Any], name: str, ba
     ids = [q["id"] for q in data["questions"]]
     back = {f"Q{n}": q["key"] for n, q in enumerate(batch, 1)}
     texts = {q["id"]: q for q in data["questions"]}
-    sources = {d["file"] for d in documents} | {a.get("id") for a in answers if a.get("id")}
+    sources = {d["file"] for d in documents} | {a["id"] for a in answers if a.get("id")}
     context = ""
     if documents or answers:
         data["answered"] = [{"id": a.get("id", ""), "question": a.get("question", ""), "answer": a.get("answer", "")} for a in answers]
@@ -225,7 +225,8 @@ def build(folder: RunFolder, claude, gathered: dict[str, Any], found: list[dict[
     known = set(rules)
     cache = folder.load("reconcile/sme-merges.json", {}) or {}
     log = folder.load("reconcile/sme-steps.json", []) or []
-    lock, stopped = threading.Lock(), []
+    lock = threading.Lock()
+    stopped: list[Any] = []
     planned = []
     for n, batch in enumerate(batches(asked), 1):
         members = {k for q in batch for k in q["rules"]}
@@ -256,17 +257,17 @@ def build(folder: RunFolder, claude, gathered: dict[str, Any], found: list[dict[
     listed = []
     for _, _, _, digest in planned:
         for q in cache[digest]:
-            members = [by_key[k] for k in q["members"]]
-            listed.append({"kind": "question", "question": q["text"], "owner": q.get("owner") or members[0]["owner"],
-                           "rules": sorted({k for m in members for k in m["rules"]}), "originals": [m["key"] for m in members],
-                           "from": [f"{TOOLS[m['tool']]} {m['code']}".strip() for m in members], "evidence": [],
-                           "settled_by": q.get("settled_by") or "", "settled_answer": q.get("settled_answer") or "", "program": members[0]["program"]})
+            group = [by_key[k] for k in q["members"]]
+            listed.append({"kind": "question", "question": q["text"], "owner": q.get("owner") or group[0]["owner"],
+                           "rules": sorted({k for m in group for k in m["rules"]}), "originals": [m["key"] for m in group],
+                           "from": [f"{TOOLS[m['tool']]} {m['code']}".strip() for m in group], "evidence": [],
+                           "settled_by": q.get("settled_by") or "", "settled_answer": q.get("settled_answer") or "", "program": group[0]["program"]})
     for d in defects:
         ask = "Confirm this is deliberate:" if d["call"] == "deliberate" else "Is this intended?"
         listed.append({"kind": "defect", "question": f"{ask} {d['text']}", "owner": "Subject-matter expert", "rules": d["rules"], "call": d["call"],
                        "originals": [d["key"]], "from": [f"Reframe's decision on {d['unit']}"], "evidence": d["evidence"], "settled_by": "",
                        "settled_answer": "", "program": d["program"]})
-    numbers = Counter()
+    numbers: Counter[str] = Counter()
     answers = ctx.get("answers") or []
     for q in listed:
         numbers[q["kind"]] += 1

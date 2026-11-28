@@ -131,7 +131,8 @@ def delete(ctx: Context, consented: list[dict[str, Any]], say: Callable[[str], N
     from reframe.transform import teardown as transform_teardown
     if digest(inventory(ctx)) != digest(consented):
         raise Stop(Outcome.REFUSED, "the list of resources changed after consent; run reframe teardown again to see the new list")
-    state, transform, result = ctx.state, transform_ids(ctx), {"at": iso(), "steps": []}
+    state, transform = ctx.state, transform_ids(ctx)
+    result: dict[str, Any] = {"at": iso(), "steps": []}
 
     def step(name: str, outcome: str) -> None:
         say(f"  {name}: {outcome}\n")
@@ -177,6 +178,7 @@ def delete(ctx: Context, consented: list[dict[str, Any]], say: Callable[[str], N
     if any(i["from"].startswith("Terraform bootstrap") for i in consented):
         deleted = tf.destroy("bootstrap", ctx.changes)["deleted"]
         step("state bucket (Terraform)", f"destroyed {len(deleted)}")
+    left: dict[str, Any]
     try:
         left = network.leftovers(ctx.aws, ctx.folder.root.name, state["project"])
     except NotSent as error:

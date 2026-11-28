@@ -78,7 +78,8 @@ def aws_citations(folder: RunFolder) -> dict[str, list[tuple[str | None, list[in
     found: dict[str, list[tuple[str | None, list[int]]]] = {}
     for path in sorted(folder.path("outputs/requirements").rglob("traceability.yaml")):
         for rule in (yaml.safe_load(path.read_text()) or {}).get("rules") or []:
-            own, other = [], []
+            own: list[int] = []
+            other: list[tuple[str | None, list[int]]] = []
             for entry in rule.get("traceability_lines") or []:
                 if isinstance(entry, dict):
                     other.append((str(entry.get("file")), [int(n) for n in entry.get("lines") or [] if str(n).isdigit()]))
@@ -178,7 +179,7 @@ def review_file(path: Path, name: str) -> dict[str, Any] | None:
             return None
         rows = [{(k or "").strip().lower(): (v or "").strip() for k, v in row.items()} for row in reader]
     first = lambda column: next((r[column] for r in rows if r.get(column)), "")  # noqa: E731
-    found = {"file": name, "format": "csv", "reviewer": first("reviewer"), "tool": first("tool"), "sha256": first("source_sha256"), "marks": [], "signoffs": []}
+    found: dict[str, Any] = {"file": name, "format": "csv", "reviewer": first("reviewer"), "tool": first("tool"), "sha256": first("source_sha256"), "marks": [], "signoffs": []}
     if "key" not in columns:
         return {**found, "unusable": NO_KEY}
     found["marks"] = [{"key": r["key"], "status": MARKS.get(r.get("status", "")), "comment": r.get("comment", ""), "at": r.get("marked_at", "")}

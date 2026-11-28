@@ -74,33 +74,8 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 
-# Modules with type errors still to fix (Q1-03). The list only shrinks: take a module off once it is clean.
+# Modules with type errors still to fix (Q1-03, Q1-06). The list only shrinks: take a module off once it is clean.
+# `reframe.core.commands` comes off once Q1-05 has split it.
 [[tool.mypy.overrides]]
-module = [
-    "reframe.claude.graph",
-    "reframe.claude.load",
-    "reframe.claude.runner",
-    "reframe.claude.steps",
-    "reframe.core.commands",
-    "reframe.core.pipeline",
-    "reframe.core.teardown",
-    "reframe.design.flow",
-    "reframe.design.inventory",
-    "reframe.design.journeys",
-    "reframe.design.package",
-    "reframe.infrastructure.network",
-    "reframe.reconcile.audit",
-    "reframe.reconcile.decide",
-    "reframe.reconcile.inputs",
-    "reframe.reconcile.questions",
-    "reframe.reconcile.requirements",
-    "reframe.report.build",
-    "reframe.report.compare",
-    "reframe.report.store",
-    "reframe.source.s3",
-    "reframe.transform.answers",
-    "reframe.transform.api",
-    "reframe.transform.documents",
-    "reframe.transform.retrieve",
-]
+module = ["reframe.core.commands"]
 ignore_errors = true

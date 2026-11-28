@@ -37,7 +37,7 @@ def _links(data: dict[str, Any], base: str) -> dict[str, Any]:
     """Hash links into a review page for each rule key, requirement key and function id."""
     cap_index = {c["id"]: i for i, c in enumerate(data["capabilities"])}
     fn_index = {f["id"]: i for i, f in enumerate(data["functions"])}
-    rule_cap = {}
+    rule_cap: dict[str, Any] = {}
     for r in data["requirements"]:
         for k in r.get("rules") or []:
             rule_cap.setdefault(k, r["capability"])
@@ -112,9 +112,9 @@ def model(folder: RunFolder) -> dict[str, Any]:
         for p in progs:
             claude_dom_of[p].append(cid)
     fn_name = {f["id"]: f["name"] for f in aws["functions"]}
-    programs = []
+    program_rows = []
     for p in sorted((aws_programs | claude_programs | set(aws_by_program) | set(claude_by_program)) - {""}):
-        programs.append({"program": p, "aws_functions": [{"name": fn_name.get(f, f), "link": aws_links.get(f)} for f in sorted(aws_fn_of.get(p, []))],
+        program_rows.append({"program": p, "aws_functions": [{"name": fn_name.get(f, f), "link": aws_links.get(f)} for f in sorted(aws_fn_of.get(p, []))],
                          "claude_domains": [plugin_domains[c]["name"] for c in sorted(claude_dom_of.get(p, [])) if c in plugin_domains],
                          "aws_rules": len(aws_by_program.get(p, [])), "claude_rules": len(claude_by_program.get(p, [])),
                          "in_aws": p in aws_programs or p in aws_by_program, "in_claude": p in claude_programs or p in claude_by_program})
@@ -155,7 +155,7 @@ def model(folder: RunFolder) -> dict[str, Any]:
                    "sha256": snapshot.get("sha256"), "files": snapshot.get("files")},
         "aws_at": folder.state.get("retrieved_at"), "claude_at": claude_state.get("finished_at") or claude_state.get("updated_at"),
         "plugin": claude_state.get("plugin") or {}, "numbers": numbers, "aws_domains": aws_domains, "claude_domains": claude_domains,
-        "programs": programs, "pairs_by_program": pairs_by_program,
+        "programs": program_rows, "pairs_by_program": pairs_by_program,
         "ai": {"ran": bool(ai), "note": ai.get("note", ""), "pairs": ai_pairs, "at": ai.get("at")},
         "only": {"aws_programs": sorted((aws_programs | set(aws_by_program)) - (claude_programs | set(claude_by_program))),
                  "claude_programs": sorted((claude_programs | set(claude_by_program)) - (aws_programs | set(aws_by_program))),

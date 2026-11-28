@@ -38,7 +38,7 @@ PARALLEL = 4
 VERDICTS = ("correct", "minor", "wrong", "unsure")
 DEFECTS = ("real", "not_a_defect", "unsure")
 
-SCHEMA = {"type": "object", "required": ["judgments"], "properties": {"judgments": {"type": "array", "items": {
+SCHEMA: dict[str, Any] = {"type": "object", "required": ["judgments"], "properties": {"judgments": {"type": "array", "items": {
     "type": "object", "required": ["item", "verdict", "evidence", "lost", "defect", "reason", "read"],
     "properties": {
         "item": {"type": "string"},
@@ -296,13 +296,13 @@ def read_settled(folder: RunFolder) -> dict[str, dict[str, str]]:
     return {row["id"]: row for row in csv.DictReader(io.StringIO(path.read_text()))}
 
 
-def final(item: dict[str, Any], judged: dict[str, dict[str, Any]], settled: dict[str, dict[str, str]], with_note: bool = False) -> dict[str, str]:
+def final(item: dict[str, Any], judged: dict[str, dict[str, Any]], settled: dict[str, dict[str, str]], with_note: bool = False) -> dict[str, Any]:
     """The item's verdict and defect answer: the judges' shared answer, else the owner's, else "unsettled"."""
     answers = [judged[lab]["answers"].get(item["id"]) or {} for lab in sorted(judged)]
     owner = settled.get(item["id"]) or {}
     verdicts = {a.get("verdict") for a in answers}
     verdict = verdicts.pop() if len(verdicts) == 1 else (owner.get("owner_verdict") or "").strip() or "unsettled"
-    defect = ""
+    defect: Any = ""  # a judge may leave the defect answer out
     if with_note:
         defects = {a.get("defect") for a in answers}
         defect = defects.pop() if len(defects) == 1 else (owner.get("owner_defect") or "").strip() or "unsettled"
@@ -318,7 +318,7 @@ def figures(items: list[dict[str, Any]], judged: dict[str, dict[str, Any]], sett
         n = len(group)
         counts = Counter(finals[i["id"]]["verdict"] for i in group)
         agreed = sum(len({(judged[lab]["answers"].get(i["id"]) or {}).get("verdict") for lab in labels}) == 1 for i in group)
-        out = {"items": n, **{v: counts.get(v, 0) for v in (*VERDICTS, "unsettled")}, "judges_agreed": agreed}
+        out: dict[str, Any] = {"items": n, **{v: counts.get(v, 0) for v in (*VERDICTS, "unsettled")}, "judges_agreed": agreed}
         if n:
             out["correct_share"] = round(counts.get("correct", 0) / n, 2)
             out["correct_or_minor_share"] = round((counts.get("correct", 0) + counts.get("minor", 0)) / n, 2)
@@ -333,7 +333,7 @@ def figures(items: list[dict[str, Any]], judged: dict[str, dict[str, Any]], sett
     # A note's call (P3-13): "unintended" should be judged real, "deliberate" not a defect.
     called = [i for i in notes if i.get("defect_call") and finals[i["id"]]["defect"] in ("real", "not_a_defect")]
     calls_agreed = sum((i["defect_call"] == "unintended") == (finals[i["id"]]["defect"] == "real") for i in called)
-    confidence = defaultdict(Counter)
+    confidence: defaultdict[str, Counter[str]] = defaultdict(Counter)
     for i in recommended:
         confidence[i["confidence"] or "none"][finals[i["id"]]["verdict"]] += 1
     evidence = {lab: dict(Counter((judged[lab]["answers"].get(i["id"]) or {}).get("evidence") for i in recommended)) for lab in labels}

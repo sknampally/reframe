@@ -90,7 +90,7 @@ def missing_evidence(evidence: list[str], legacy: Path) -> list[str]:
     for cite in evidence:
         m = CITE.match(str(cite).strip())
         target = (legacy / m["path"]).resolve() if m else None
-        if not m or not target.is_relative_to(root) or not target.is_file():
+        if not m or target is None or not target.is_relative_to(root) or not target.is_file():
             bad.append(cite)
             continue
         count = len(target.read_text(errors="replace").splitlines())
@@ -131,7 +131,8 @@ def problems(unit: dict[str, Any], answer: dict[str, Any] | None, legacy: Path) 
     bad = missing_evidence(evidence, legacy)
     if bad:
         found.append(f"evidence that does not exist in the snapshot: {', '.join(map(str, bad))}")
-    defect = answer.get("defect") if isinstance(answer.get("defect"), dict) else {"text": str(answer.get("defect") or "")}
+    raw_defect = answer.get("defect")
+    defect: dict[str, Any] = raw_defect if isinstance(raw_defect, dict) else {"text": str(raw_defect or "")}
     if str(defect.get("text") or "").strip():
         if defect.get("call") not in CALLS:
             found.append(f'a possible defect needs its call: {" or ".join(CALLS)}')

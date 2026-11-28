@@ -212,10 +212,10 @@ def chat_question(message: dict[str, Any], awaiting: bool = False) -> Question |
     clashes = name_clashes(text)
     if clashes:
         bare = BARE_WORD.search(plain(text)) and len(clashes) == 1
-        replies = ("domain", "function") if bare else tuple(", ".join(f"{reading} {name}" for name in clashes) for reading in ("domain", "function"))
+        choices = ("domain", "function") if bare else tuple(", ".join(f"{reading} {name}" for name in clashes) for reading in ("domain", "function"))
         listed = ", ".join(f'"{name}"' for name in clashes)
         return Question(message_id, "clash", text, (f"The business domain {listed}: every business function in it",
-                                                    f"The business function {listed} only"), replies)
+                                                    f"The business function {listed} only"), choices)
     if closing in PLAN_MENU:
         numbered = menu_options(text)
         return Question(message_id, "plan", text, tuple(label for _, label in numbered),
@@ -335,8 +335,8 @@ def catalog_form_content(task: dict[str, Any], source_uri: str | None) -> dict[s
     return dict(template)
 
 
-def fits_schema(schema: dict[str, Any], value: Any) -> bool:
-    types = {"string": str, "boolean": bool, "array": list, "object": dict, "integer": int, "number": (int, float)}
+def fits_schema(schema: Any, value: Any) -> bool:
+    types: dict[str, type | tuple[type, ...]] = {"string": str, "boolean": bool, "array": list, "object": dict, "integer": int, "number": (int, float)}
     if not isinstance(schema, dict):
         return True
     if "enum" in schema and value not in schema["enum"]:

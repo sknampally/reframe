@@ -79,6 +79,7 @@ def graph(ctx: Context, model: dict[str, Any], generated: dict[str, Any]) -> dic
         return update(ctx, graph={"skipped": iso(), "reason": reason, "file": "outputs/claude/graph.nq"})["graph"]
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     fn = loader(ctx, create=True)
+    assert fn is not None  # with create, loader returns the loader or stops
     outputs = ctx.changes.receipt("terraform-project-apply-graph-loader")["outputs"]
     bucket, key = outputs["bucket"], KEY.format(run=run)
 

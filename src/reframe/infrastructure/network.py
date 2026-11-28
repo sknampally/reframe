@@ -11,6 +11,7 @@ against its own service; only one that still exists counts as left over.
 
 from __future__ import annotations
 
+import functools
 import time
 from typing import Any
 
@@ -31,7 +32,7 @@ def delete_interfaces(aws: Aws, changes: Changes, vpc_id: str) -> list[str]:
     deleted = []
     for interface in transform_interfaces(aws, vpc_id):
         changes.apply(f"teardown-eni-{interface['id']}", "ec2 delete-network-interface", {"interface": interface["id"], "vpc": vpc_id},
-                      lambda i=interface: aws.write("ec2", "delete-network-interface", "--network-interface-id", i["id"]))
+                      functools.partial(aws.write, "ec2", "delete-network-interface", "--network-interface-id", interface["id"]))
         deleted.append(interface["id"])
     return deleted
 
@@ -117,7 +118,7 @@ def still_exists(aws: Aws, arn: str) -> bool | None:
 
 
 def leftovers(aws: Aws, run: str, project: str) -> dict[str, list[str]]:
-    found = {"exists": [], "stale_index": [], "unchecked": []}
+    found: dict[str, list[str]] = {"exists": [], "stale_index": [], "unchecked": []}
     for arn in tagged(aws, run, project):
         state = still_exists(aws, arn)
         found["exists" if state else "stale_index" if state is False else "unchecked"].append(arn)

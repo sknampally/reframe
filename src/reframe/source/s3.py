@@ -43,8 +43,10 @@ def upload(aws: Aws, folder: RunFolder, changes: Changes, bucket: Bucket, data: 
     key = f"source/{digest_hex[:16]}.zip"
 
     def matches(found: dict[str, Any] | None) -> bool:
-        return bool(found) and (found.get("ChecksumSHA256") == _b64(digest_hex)
-                                or (found.get("Metadata") or {}).get("reframe-sha256") == digest_hex)
+        if not found:
+            return False
+        return (found.get("ChecksumSHA256") == _b64(digest_hex)
+                or (found.get("Metadata") or {}).get("reframe-sha256") == digest_hex)
 
     def settle():
         found = head(aws, bucket, key)

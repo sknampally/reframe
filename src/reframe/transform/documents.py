@@ -113,7 +113,9 @@ def parse(text: str) -> dict[str, Any]:
                 document["capabilities"].append(capability)
             else:
                 capability = None
-                heading = NOTE_SECTION.match(line).group(1)
+                section = NOTE_SECTION.match(line)
+                assert section is not None  # the line starts with "## ", which NOTE_SECTION always matches
+                heading = section.group(1)
                 note = {"heading": heading, "markdown": [], "technical": heading.casefold() in TECHNICAL_NOTES}
                 document["notes"].append(note)
             continue
@@ -144,8 +146,11 @@ def parse(text: str) -> dict[str, Any]:
         question = QUESTION.match(line)
         bullet = BULLET.match(line) if "question" in part else None
         if question or bullet:
-            body = question.group(2) if question else bullet.group(1)
-            code = question.group(1) if question else f"Q-{len(capability['questions']) + 1:03d}"
+            if question:
+                body, code = question.group(2), question.group(1)
+            else:
+                assert bullet is not None
+                body, code = bullet.group(1), f"Q-{len(capability['questions']) + 1:03d}"
             item = {"code": code, "text": body.strip(), "owner": "", "unverified": False}
             capability["questions"].append(item)
             continue

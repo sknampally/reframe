@@ -255,16 +255,16 @@ def place_kept(caps: list[dict[str, Any]], kept_reqs: list[dict[str, Any]]) -> l
         home = homes.setdefault(x["title"], {"title": x["title"], "story": x["story"], "requirements": [], "questions": [],
                                              "tables": list(x.get("tables") or []), "touches": list(x.get("touches") or [])})
         home["requirements"].append(x["requirement"])
-    rest = []
+    rest: list[dict[str, Any]] = []
     for cap in caps:
-        home = homes.get(cap["title"])
-        if home is None:
+        target = homes.get(cap["title"])
+        if target is None:
             rest.append(cap)
             continue
-        home["requirements"] += cap["requirements"]
-        home["questions"] += cap["questions"]
-        home["tables"] = home["tables"] or cap.get("tables") or []
-        home["touches"] = sorted(set(home["touches"]) | set(cap.get("touches") or []))
+        target["requirements"] += cap["requirements"]
+        target["questions"] += cap["questions"]
+        target["tables"] = target["tables"] or cap.get("tables") or []
+        target["touches"] = sorted(set(target["touches"]) | set(cap.get("touches") or []))
     return list(homes.values()) + rest
 
 
@@ -345,7 +345,9 @@ def build(folder: RunFolder, claude, gathered: dict[str, Any], found: list[dict[
     saved = previous_doc.get("functions") or {}
     marks = (gathered.get("context") or {}).get("marks") or {}
     log = folder.load("reconcile/requirements-steps.json", []) or []
-    lock, stopped, written = threading.Lock(), [], {}
+    lock = threading.Lock()
+    stopped: list[Any] = []
+    written: dict[str, Any] = {}
     todo = []
     for fid in sorted(set(by_function) | set(open_by_function)):
         members = sorted(by_function.get(fid, []), key=lambda r: (r["program"], r["key"]))
@@ -376,6 +378,7 @@ def build(folder: RunFolder, claude, gathered: dict[str, Any], found: list[dict[
             if stop is not None:
                 stopped.append(stop)
                 return
+            assert value is not None  # a step that did not stop has a value
             written[fid] = {"hash": digest, "dropped": value["dropped"], "raw": value["capabilities"],
                             "reviewed": [{k: m[k] for k in ("key", "mark", "comment")} for m in marked]}
             folder.save("outputs/reconcile/requirements.json", {"label": label(folder), "complete": False, "functions": {**saved, **written}})
@@ -390,7 +393,7 @@ def build(folder: RunFolder, claude, gathered: dict[str, Any], found: list[dict[
     open_of = {w["unit"]: w for w in waiting}
     functions = {}
     for fid in sorted(written, key=lambda f: (f == "", f)):
-        counters = Counter()
+        counters: Counter[str] = Counter()
         kept_codes = {r["code"] for c in written[fid]["raw"] for r in c["requirements"] if r.get("code")}
         caps = []
         for c_index, cap in enumerate(written[fid]["raw"], 1):

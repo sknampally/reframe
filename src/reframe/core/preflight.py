@@ -53,6 +53,8 @@ def check(*, aws: Aws, terraform: str, source: str, ref: str | None, transform_r
             report.problems.append(f"{tool} is not on PATH: {fix}")
     try:
         report.account = aws.identity().get("Account")
+        if not report.account:
+            report.problems.append(f"the AWS sign-in did not say which account it is in: run {login}")
     except SigninExpired:
         report.signin_expired = True
         report.problems.append(f"the AWS sign-in has expired or is missing: run {login}")

@@ -74,7 +74,7 @@ def domains_of_screens(screens: dict[str, Any], rules: list[dict[str, Any]], req
         by_program[str(r.get("program", "")).upper()][r.get("function", "")] += 1
     found: dict[str, list[str]] = defaultdict(list)
     for s in screens["screens"]:
-        counts = Counter()
+        counts: Counter[str] = Counter()
         for p in s["programs"]:
             counts.update(by_program.get(p["name"].upper(), Counter()))
         function = counts.most_common(1)[0][0] if counts else None
@@ -201,7 +201,8 @@ def run(folder, claude, context: Path | None = None, more=None, plan_only: bool 
     log = saved.get("log") or []
     folder_in = places["analysis"] / "reframe" / "design"
     folder_in.mkdir(parents=True, exist_ok=True)
-    lock, stopped = threading.Lock(), []
+    lock = threading.Lock()
+    stopped: list[Any] = []
     todo, why = [], []
     for key, mine in sorted(by_domain.items()):
         data = domain_input(domains.get(key) or {"name": key, "functions": []}, screens, mine, flow, requirements, personas)

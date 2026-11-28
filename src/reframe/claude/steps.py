@@ -101,7 +101,12 @@ def run_step(folder: RunFolder, claude: ClaudeCode, analysis: Path, step: str, p
     folder.event("claude_step", step=step, attempt=attempt, resume=bool(resume), follow_up=follow_up)
     _save(folder, step, {"ok": False, "attempt": attempt, "started_at": iso(), "session_id": (done or {}).get("session_id"),
                          "follow_ups": (done or {}).get("follow_ups", 0) + (1 if follow_up else 0)})
-    text = follow_up_prompt(system) if follow_up else resume_prompt if resume else prompt
+    if follow_up and system:  # follow_up needs system
+        text = follow_up_prompt(system)
+    elif resume and resume_prompt:  # resume needs resume_prompt
+        text = resume_prompt
+    else:
+        text = prompt
     result = claude.run(f"{step}-{attempt}", text, timeout=STEP_HOURS.get(step, 2) * 3600, resume=None if follow_up else resume)
     expected = analysis / EXPECTED[step]
     if result.ok and not expected.exists():

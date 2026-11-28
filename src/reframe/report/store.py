@@ -53,6 +53,7 @@ class Store:
         self.aws, self.folder = aws, folder or store_folder()
         self.changes = Changes(self.folder, f"{getpass.getuser()} (reframe)")
         self.binary = terraform_binary(terraform)
+        self._found: str | None = None  # the bucket found by its tags, once looked up
 
     def terraform(self):
         from reframe.infrastructure.terraform_runner import Terraform
@@ -69,7 +70,7 @@ class Store:
         by the records alone."""
         if self.bucket:
             return self.bucket
-        if getattr(self, "_found", None):
+        if self._found:
             return self._found
         found = self.discover()
         if not found:
@@ -133,8 +134,11 @@ class Store:
         tf.install()
         tf.variables(ROOT, {"region": self.aws.region, "bucket_name": name})
         tf.apply(ROOT, self.changes)
+        bucket = self.bucket
+        if not bucket:
+            raise Stop(Outcome.FAILED, "the reports store's Terraform root did not report its bucket")
         self.folder.event("reports_store_ready")
-        return self.bucket
+        return bucket
 
     def upload(self, copy: Path, project: str, run: str, folder: RunFolder | None = None) -> str:
         """The cleaned copy to <project>/<run>/reports/, and, given the run folder, its source and the tools' results."""
@@ -151,6 +155,7 @@ class Store:
             with tempfile.TemporaryDirectory() as scratch:
                 for key, source in pieces:
                     cp(source, prefix + key, *(("--recursive",) if source.is_dir() else ()))
+                    assert folder is not None  # pieces come from the run folder
                     sent[key] = source.resolve().relative_to(folder.root.resolve()).as_posix()
                 if folder and folder.exists("snapshot.json"):
                     note = Path(scratch) / "source.json"

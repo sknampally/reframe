@@ -49,6 +49,12 @@ class PreflightTest(unittest.TestCase):
             preflight.require(report)
         self.assertEqual(stop.exception.outcome, Outcome.REFUSED)
 
+    def test_a_signin_that_names_no_account_is_refused(self):
+        report = run(runner(sts=(0, {}, "")))
+        self.assertTrue(any("did not say which account" in p for p in report.problems), report.problems)
+        with self.assertRaises(Stop):
+            preflight.require(report)
+
     def test_transform_not_ready(self):
         def ready():
             raise RuntimeError("No Transform profile found for this account")

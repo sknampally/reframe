@@ -83,10 +83,10 @@ def data_items(text: str, file: str) -> list[Item]:
         val = value.group(1) if value else None
         if val and val[0] in "'\"":
             val = val[1:-1].replace("''", "'")
-        items.append(Item(int(m.group(1)), (m.group(2) or "FILLER").upper(), (re.search(r"\bPIC(?:TURE)?\s+(?:IS\s+)?(\S+)", rest, re.I) or [None, ""])[1],
-                          val, ((re.search(rf"\bREDEFINES\s+({NAME})", rest, re.I) or [None, ""])[1]).upper(),
-                          int((re.search(r"\bOCCURS\s+(\d+)", rest, re.I) or [None, 0])[1]), line, file,
-                          ((re.search(r"\b(COMP(?:UTATIONAL)?(?:-[1-5])?|BINARY|PACKED-DECIMAL|DISPLAY)\b", rest, re.I) or [None, ""])[1]).upper()))
+        items.append(Item(int(m.group(1)), (m.group(2) or "FILLER").upper(), _first(r"\bPIC(?:TURE)?\s+(?:IS\s+)?(\S+)", rest),
+                          val, _first(rf"\bREDEFINES\s+({NAME})", rest).upper(),
+                          int(_first(r"\bOCCURS\s+(\d+)", rest, "0")), line, file,
+                          _first(r"\b(COMP(?:UTATIONAL)?(?:-[1-5])?|BINARY|PACKED-DECIMAL|DISPLAY)\b", rest).upper()))
     return items
 
 
@@ -129,6 +129,12 @@ class Program:
     paragraphs: dict[str, tuple[int, int]]  # name -> (first line, last line)
 
 
+def _first(pattern: str, text: str, default: str = "") -> str:
+    """Group 1 of the pattern's first match in the text, ignoring case, or the default when it does not match."""
+    m = re.search(pattern, text, re.I)
+    return m.group(1) if m else default
+
+
 def _copybooks(legacy: Path) -> dict[str, Path]:
     return {p.stem.upper(): p for p in legacy.rglob("*") if p.is_file() and p.suffix.lower() in (".cpy", "")
             and p.parent.name.lower().startswith("cpy")}
@@ -144,7 +150,8 @@ def read_program(path: Path, legacy: Path, copybooks: dict[str, Path]) -> Progra
             items += data_items(book.read_text(errors="replace"), book.relative_to(legacy).as_posix())
     constants = {x.name: (str(x.value), x.file, x.line) for x in items if x.value is not None and x.name != "FILLER"}
     body = lines_of(text)
-    paragraphs, start, name = {}, None, None
+    paragraphs: dict[str, tuple[int, int]] = {}
+    start, name = 0, None  # start is set with name
     procedure = next((i for i, b in enumerate(body) if re.search(r"\bPROCEDURE\s+DIVISION\b", b, re.I)), len(body))
     for i in range(procedure + 1, len(body)):
         m = re.match(rf"^({NAME})\.\s*$", body[i][:4].strip() and body[i] or "", re.I)  # a paragraph name, starting in area A
@@ -208,9 +215,9 @@ def resolve(program: Program, expr: str, depth: int = 0) -> list[dict[str, Any]]
         return [{"value": value.strip(), "how": "constant", "lines": [f"{file}:{line}"]}] if value.strip() else []
     for source, line in moves_into(program, name):
         values = resolve(program, source, depth + 1)
-        if depth == 0 and REF.match(source) and values and all(v["value"].upper() == program.name for v in values):
+        if depth == 0 and (ref := REF.match(source)) and values and all(v["value"].upper() == program.name for v in values):
             # a variable the program only ever sets to itself, before transferring away: whoever comes next sends it back
-            found.append({"value": program.name, "how": "caller", "lines": [f"{program.file}:{line}"], "via": REF.match(source).group(1).upper()})
+            found.append({"value": program.name, "how": "caller", "lines": [f"{program.file}:{line}"], "via": ref.group(1).upper()})
             continue
         for v in values:
             found.append({**v, "how": v["how"] if v["how"] != "literal" else "moved", "lines": v["lines"] + [f"{program.file}:{line}"]})
@@ -247,7 +254,7 @@ def _branch(program: Program, line: int) -> tuple[int, int]:
     end, depth, started = line, 0, False
     for i in range(line, min(len(program.lines), line + 80)):
         body = program.lines[i].strip()
-        word = (re.match(r"^([A-Z-]+)", body, re.I) or [None, ""])[1].upper()
+        word = _first(r"^([A-Z-]+)", body).upper()
         if not started and depth == 0 and (word in ("WHEN", "AND", "OR", "") or body.startswith("(")):
             end = i + 1  # more of the condition, or a WHEN stacked on this one: they share the statements that follow
             continue
@@ -268,7 +275,7 @@ def flow(legacy: Path, screens: dict[str, Any]) -> dict[str, Any]:
     copybooks = _copybooks(legacy)
     programs = {p.stem.upper(): read_program(p, legacy, copybooks) for p in sorted(legacy.rglob("*"))
                 if p.is_file() and p.suffix.lower() in (".cbl", ".cob")}
-    by_tran = {}
+    by_tran: dict[str, dict[str, Any]] = {}
     trans = transactions(legacy)
     for t in trans:
         by_tran.setdefault(t["transaction"], t)
@@ -308,9 +315,10 @@ def flow(legacy: Path, screens: dict[str, Any]) -> dict[str, Any]:
     keys = []
     for s in screens.get("screens") or []:
         for k in s["keys"]["handled"]:
-            prog = programs.get(k["program"])
-            if not prog:
+            handler = programs.get(k["program"])
+            if not handler:
                 continue
+            prog = handler
             first, last = _branch(prog, k["line"])
             targets = []
             for var in transfer_vars.get(prog.name, set()):

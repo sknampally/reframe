@@ -45,12 +45,13 @@ def _literal(value: Any) -> str:
 
 class Quads:
     def __init__(self, run: str) -> None:
-        self.run, self.graph, self.lines = run, graph_iri(run), []
+        self.run, self.graph = run, graph_iri(run)
+        self.lines: list[str] = []
 
     def iri(self, kind: str, ident: str) -> str:
         return f"urn:reframe:claude:{self.run}:{kind}:{_local(ident)}"
 
-    def add(self, subject: str, predicate: str, obj: str, literal: bool = True) -> None:
+    def add(self, subject: str, predicate: str, obj: Any, literal: bool = True) -> None:
         if obj is None or obj == "":
             return
         o = _literal(obj) if literal else f"<{obj}>"

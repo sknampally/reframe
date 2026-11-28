@@ -237,6 +237,15 @@ class StoreTest(unittest.TestCase):
         self.store.upload(copy, "demo", "abc123", run)
         self.assertEqual([c for c in self.aws.calls if c[:2] == ("s3", "cp")], before)
 
+    def test_a_store_whose_terraform_reports_no_bucket_stops(self):
+        class NoBucket(FakeTerraform):
+            def apply(self, root, changes, backend=None):
+                return changes.apply("terraform-reports-apply", "terraform apply", {}, lambda: {"created": [], "outputs": {}})
+        self.store.terraform = lambda: NoBucket(self.store)
+        with self.assertRaises(Stop) as stop:
+            self.store.ensure()
+        self.assertIn("did not report its bucket", stop.exception.message)
+
     def test_reports_published_before_the_three_folders_still_open(self):
         self.store.ensure()
         self.aws.objects.update({"demo/old111/index.html": b"<h1>old</h1>", "demo/old111/report.zip": b"zip",

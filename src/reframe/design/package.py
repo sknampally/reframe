@@ -665,7 +665,7 @@ def run(folder, context: Path | None = None, notes: str = "") -> dict[str, Any]:
         problems = check(root, specs, ts)
         made = manifest(specs, ts, stack)
         same = latest is not None and (latest / "manifest.json").is_file() and json.loads((latest / "manifest.json").read_text()).get("digest") == digest(root)
-        if same:
+        if same and latest is not None:  # same already needs latest
             version, target = have[-1], latest
         else:
             version = (have[-1] + 1) if have else 1
